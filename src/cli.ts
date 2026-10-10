@@ -40,27 +40,11 @@ async function main(): Promise<void> {
     await stop(1);
     return;
   }
-  // Drain upstream immediately so EOF is visible during child initialization.
-  // Buffer the handshake until the downstream catalogue is ready; cap memory.
+  // Process the upstream handshake immediately; catalogue requests wait for
+  // child initialization inside the gateway. Observe EOF throughout startup.
   const input = new PassThrough();
-  const pending: Buffer[] = [];
-  let pendingBytes = 0;
-  let ready = false;
   gateway.onclose = () => { void stop(); };
-  process.stdin.on('data', (chunk: Buffer) => {
-    if (stopping) return;
-    if (ready) {
-      input.write(chunk);
-      return;
-    }
-    pendingBytes += chunk.length;
-    if (pendingBytes > 1024 * 1024) {
-      writeDiagnostic('Gateway startup input exceeds 1 MiB\n');
-      void stop(1);
-      return;
-    }
-    pending.push(chunk);
-  });
+  process.stdin.pipe(input);
   process.once('SIGINT', () => { void stop(); });
   process.once('SIGTERM', () => { void stop(); });
   process.stdin.once('end', () => { void stop(); });
@@ -68,10 +52,6 @@ async function main(): Promise<void> {
   process.stdout.once('error', () => { void stop(1); });
   try {
     await gateway.start(input);
-    if (stopping) return;
-    ready = true;
-    for (const chunk of pending) input.write(chunk);
-    pending.length = 0;
   } catch (error) {
     if (stopping) return; // Upstream EOF/signal may cancel initialization normally.
     writeDiagnostic(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);

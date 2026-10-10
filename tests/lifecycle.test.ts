@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -58,7 +59,8 @@ test('startup failure and closed upstream streams await child teardown', { timeo
           if (match) childPid = Number(match[1]);
         });
         try {
-          await transport.start();
+          const client = new Client({ name: 'lifecycle-test', version: '1' });
+          await client.connect(transport);
           while (childPid === undefined) {
             await once(transport.stderr!, 'data', { signal: AbortSignal.timeout(5000) });
           }
@@ -77,6 +79,8 @@ test('startup failure and closed upstream streams await child teardown', { timeo
         cwd: root,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
+      gateway.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'lifecycle-test', version: '1' } } }) + '\n');
+      gateway.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
       const closed = once(gateway, 'close', { signal: AbortSignal.timeout(9000) });
       // Attach rejection handling immediately while waiting for the PID marker.
       void closed.catch(() => {});

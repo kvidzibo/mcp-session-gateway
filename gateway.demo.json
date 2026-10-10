@@ -1,0 +1,9 @@
+{
+  "timeoutMs": 30000,
+  "servers": {
+    "demo": {
+      "command": "node",
+      "args": ["/absolute/path/to/local-stdio-mcp-gateway/dist/examples/demo-service.js"]
+    }
+  }
+}
