@@ -26,6 +26,7 @@ export class NativeUI {
   private dirty = new Set<string>();
   private ephemeralId = randomUUID();
   private contexts = new Map<string, string>();
+  private savedContexts = new Set<string>();
   private retained = new Set<string>();
   private operations = new Map<string, Promise<unknown>>();
   private blocked = new Set<string>();
@@ -33,6 +34,11 @@ export class NativeUI {
   private changed = () => {};
 
   constructor(private pi: ExtensionAPI, private client: () => Client, private options: () => { signal: AbortSignal; timeout: number }, private interact: (run: () => Promise<boolean>) => Promise<boolean> = (run) => run()) {}
+
+  current(): () => boolean {
+    const epoch = this.epoch;
+    return () => epoch === this.epoch;
+  }
 
   transfer(target?: string): void {
     if (!target) return;
@@ -44,7 +50,7 @@ export class NativeUI {
     return { scope: this.scope, service, state: this.states.get(service) ?? {}, contextId: this.contexts.get(service), retainOnNew: this.retained.has(service) };
   }
 
-  private save(service: string): void { this.pi.appendEntry(entryType, this.entry(service)); }
+  private save(service: string): void { this.pi.appendEntry(entryType, this.entry(service)); this.savedContexts.add(service); }
 
   private async serial<T>(service: string, run: () => Promise<T>): Promise<T> {
     const epoch = this.epoch;
@@ -81,13 +87,13 @@ export class NativeUI {
 
   async start(ctx: ExtensionContext, scope: string, reason?: string): Promise<void> {
     await this.stop();
-    this.ctx = ctx; this.scope = scope; this.states.clear(); this.contexts.clear(); this.retained.clear();
+    this.ctx = ctx; this.scope = scope; this.states.clear(); this.contexts.clear(); this.savedContexts.clear(); this.retained.clear();
     for (const entry of ctx.sessionManager?.getBranch() ?? []) {
       if (entry.type !== 'custom' || entry.customType !== entryType) continue;
       const data = entry.data as Entry;
       if (data?.scope === scope && typeof data.service === 'string' && StateSchema.safeParse(data.state).success) {
         this.states.set(data.service, data.state);
-        if (typeof data.contextId === 'string') this.contexts.set(data.service, data.contextId);
+        if (typeof data.contextId === 'string') { this.contexts.set(data.service, data.contextId); this.savedContexts.add(data.service); }
         if (data.retainOnNew) this.retained.add(data.service); else this.retained.delete(data.service);
       }
     }
@@ -148,7 +154,7 @@ export class NativeUI {
 
   private apply(uri: string, view: NativeView): void {
     const service = serviceOf(uri);
-    const changed = JSON.stringify(this.states.get(service)) !== JSON.stringify(view.state) || this.retained.has(service) !== Boolean(view.retainOnNew);
+    const changed = !this.savedContexts.has(service) || JSON.stringify(this.states.get(service)) !== JSON.stringify(view.state) || this.retained.has(service) !== Boolean(view.retainOnNew);
     this.states.set(service, view.state);
     if (view.retainOnNew) this.retained.add(service); else this.retained.delete(service);
     if (changed) this.save(service);

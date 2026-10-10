@@ -276,14 +276,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   });
 
   async function invokeTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, readOnly = false) {
-    const current = connection(), active = lifetime;
+    const current = connection(), active = lifetime, sameContext = native.current();
     const tool = (await tools(signal)).find((tool) => tool.name === name);
     if (!tool || readOnly && tool.annotations?.readOnlyHint !== true) throw new Error('Unknown, app-only, or non-read-only tool');
     const ajv = new Ajv2020({ allErrors: true, strict: false });
     (addFormats as unknown as FormatsPlugin)(ajv);
     const valid = ajv.compile(tool.inputSchema);
     if (!valid(args)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
-    if (active !== lifetime || active.signal.aborted) throw new Error('Gateway context changed');
+    if (active !== lifetime || active.signal.aborted || !sameContext()) throw new Error('Gateway context changed');
     return native.callTool(name.split('__')[0], (meta) => current.callTool({ name, arguments: args, _meta: meta }, undefined,
       { signal: signal ? AbortSignal.any([signal, active.signal]) : active.signal, timeout }).then((result) => CallToolResultSchema.parse(result)));
   }

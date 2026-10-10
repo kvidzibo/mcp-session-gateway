@@ -7,7 +7,7 @@ const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 
 test('generic footer actions, tool state and /new retention stay scoped, serialized and replay-safe', async () => {
   const statuses = new Map<string, string>();
-  let entries: any[] = [], session = 'first', file = '/tmp/footer-session-first';
+  let entries: any[] = [{ type: 'custom', customType: 'gateway-native-ui-v1', data: { scope: '/config', service: 'beta', state: {} } }], session = 'first', file = '/tmp/footer-session-first';
   let busy = false, actions = 0;
   const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => entries, getSessionId: () => session, getSessionFile: () => file }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify() {}, confirm: async () => true,
@@ -33,6 +33,11 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
   const link = (service: string) => statuses.get(`gateway-ui:${service}`)!.match(/pi-gateway-action:[^\x1b]+/)![0];
   try {
     await host.start(ctx, '/config');
+    const sameContext = host.current();
+    const legacyContext = (host.meta('beta')['native-ui/context'] as any).contextId;
+    await host.start(ctx, '/config', 'reload');
+    assert.equal(sameContext(), false);
+    assert.equal((host.meta('beta')['native-ui/context'] as any).contextId, legacyContext, 'Legacy entries acquire a durable service context');
     const original = link('alpha'), beta = link('beta');
     await click(original);
     assert.equal(state('alpha').count, 1);
@@ -54,6 +59,13 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
       return { content: [], _meta: { 'native-ui/state': { count: 10 } } };
     });
     assert.equal(state('alpha').count, 10);
+    await Promise.all([
+      host.callTool('alpha', async () => ({ content: [], _meta: { 'native-ui/state': { count: 10, sequence: true } } })),
+      host.callTool('alpha', async (meta) => {
+        assert.equal((meta['native-ui/context'] as any).state.sequence, true, 'Queued tools read state after the previous result');
+        return { content: [], _meta: { 'native-ui/state': { count: 10 } } };
+      }),
+    ]);
     await assert.rejects(click(stale));
     await host.callTool('alpha', async () => ({ isError: true, content: [], _meta: { 'native-ui/state': { count: 99 } } }));
     assert.equal(state('alpha').count, 10);
