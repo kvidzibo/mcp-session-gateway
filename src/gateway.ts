@@ -18,6 +18,7 @@ import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
 import { writeDiagnostic } from './diagnostics.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
+import { ActionSchema, ActionResultSchema, ChangedSchema } from './native-ui.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -43,8 +44,8 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.3.0' },
-    { capabilities: { tools: { listChanged: true }, resources: {} } },
+    { name: 'local-stdio-mcp-gateway', version: '0.4.0' },
+    { capabilities: { tools: { listChanged: true }, resources: {}, experimental: { 'native-ui-v1': {} } } },
   );
   private readonly services: Service[] = [];
   private initialized = false;
@@ -105,6 +106,16 @@ export class Gateway {
       const { progressToken: _progress, ...meta } = request.params._meta ?? {};
       const result = await this.withService(service, extra.signal, () => service.client.readResource({ uri: parsed.uri, _meta: { ...meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } }, { timeout: this.config.timeoutMs, signal: extra.signal }));
       return { ...result, contents: result.contents.map((content) => ({ ...content, uri: this.resourceUri(parsed.service, content.uri) })) };
+    }));
+    this.server.setRequestHandler(ActionSchema, async (request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
+      const parsed = this.parseResourceUri(request.params.uri);
+      const service = this.services.find((item) => item.config.name === parsed.service && item.connected);
+      if (!service?.client.getServerCapabilities()?.experimental?.['native-ui-v1']) throw new McpError(ErrorCode.InvalidParams, 'Service does not support native UI');
+      return this.withService(service, extra.signal, () => service.client.request({
+        method: 'native-ui/action', params: { ...request.params, uri: parsed.uri,
+          _meta: { ...request.params._meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } },
+      }, ActionResultSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
     }));
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
       await this.ready;
@@ -252,7 +263,7 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.3.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.4.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
     const transport = new ServiceTransport({
       command: config.command,
       args: config.args,
@@ -285,6 +296,11 @@ export class Gateway {
       service.tools = [];
       void this.notifyToolsChanged().catch((error: Error) => this.log(error.message));
     };
+    client.setNotificationHandler(ChangedSchema, async ({ params }) => {
+      if (service.connected && this.initialized && !this.closing) {
+        await this.server.notification({ method: 'notifications/native-ui/changed', params: { uri: this.resourceUri(config.name, params.uri) } });
+      }
+    });
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       try {
         await this.queueRefresh(service);
@@ -306,7 +322,7 @@ export class Gateway {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
     const transport = new StdioServerTransport(input);
-    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read']);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', 'native-ui/action']);
     await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;

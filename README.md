@@ -7,7 +7,7 @@ Pi A ⇄ gateway A ⇄ child MCP processes A
 Pi B ⇄ gateway B ⇄ child MCP processes B
 ```
 
-No HTTP, sockets, cookies, shared daemon, subscriptions, or custom events. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
+No HTTP, sockets, cookies, shared daemon, or subscriptions. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, boolean one-shot approval prompts, and [server-driven native UI](docs/native-ui.md). Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
 
 ## Setup
 
@@ -79,6 +79,36 @@ Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entrie
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
 
+## Server-driven UI
+
+Services can supply menus, settings forms, previews, and footer text through the
+[native UI v1 protocol](docs/native-ui.md). Open `/gateway-ui [service]`; clicks and
+keyboard actions go directly to the service without a model turn. The adapter is
+generic—Pinote screens and behavior live in Pinote's MCP server, not this package.
+UI state follows the Pi conversation/branch, separately from the gateway UUID.
+
+For a checkout of Pinote with its MCP server, install its `pi/` dependencies and
+Python CLI, then register a service:
+
+```json
+{
+  "servers": {
+    "pinote": {
+      "command": "node",
+      "args": ["/absolute/path/to/pinote/pi/dist-mcp/mcp/server.js"],
+      "env": { "PINOTE_NOTE_COMMAND": "/absolute/path/to/pinote/.venv/bin/note" }
+    }
+  }
+}
+```
+
+Build the service with `npm --prefix /absolute/path/to/pinote/pi run build:mcp` (Node.js 22.19+). Pass `PI_CODING_AGENT_DIR`
+and XDG overrides explicitly in service `env` if used: the gateway does not inherit
+them into children. Do not load the old Pinote-specific Pi extension alongside
+this alternative unless you deliberately want separate selections and duplicate UI.
+Keep the existing configuration until the replacement has been tested; installation
+does not migrate it automatically.
+
 ## Identity
 
 Call `gateway__identity` to get `{ "sessionId": "<uuid>" }`.
@@ -101,7 +131,7 @@ Every forwarded tool call also receives request `_meta`:
 
 These values override caller/config attempts to replace them; tool arguments are unchanged. Other request metadata is preserved, while progress tokens are translated between connections. Child services can forward the identity to their own APIs or logs.
 
-**The identity belongs to the gateway run, not the Pi conversation.** Reconnect, restart, or reload creates a new UUID. Switching conversations inside Pi may also recreate the gateway. Persistent conversation identity would require additional Pi integration.
+**The identity belongs to the gateway run, not the Pi conversation.** Reconnect, restart, or reload creates a new UUID. Switching conversations inside Pi may also recreate the gateway. The optional native UI host supplies a separate durable conversation ID and branch-local opaque state; the gateway UUID itself remains ephemeral.
 
 Identity is a correlation label, **not authentication or a sandbox**. All configured servers execute with your OS permissions; Pi's `bash` tool has the same OS access, so this is not a security boundary. One-shot confirmations are cooperative service prompts, not general permission enforcement. Only configure trusted executables. Tool annotations are upstream hints, not security guarantees.
 
