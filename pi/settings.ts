@@ -91,7 +91,7 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
         const results = filtered.length ? list!.render(width) : [theme.fg('muted', 'No matching choices')];
         return [border, ...heading.map((s) => theme.fg('accent', s)),
           ...input.render(width - 8).map((line) => `${theme.fg('muted', 'Search: ')}${line}`),
-          ...results, '', theme.fg('muted', width < 40 ? '↑↓ Enter select Esc back' : 'Type to filter  ↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
+          ...results, '', theme.fg('muted', width < 60 ? '↑↓ Enter Esc' : 'Type to filter  ↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         const keys = getKeybindings();

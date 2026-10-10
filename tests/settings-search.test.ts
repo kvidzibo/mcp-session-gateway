@@ -21,6 +21,7 @@ test('settings search filters immediately, preserves original choice identity an
       const lines: string[] = panel.render(terminal.columns);
       assert.ok(lines.length <= terminal.rows - 2);
       assert.ok(lines.every((line) => visibleWidth(line) <= terminal.columns));
+      assert.ok(lines.some((line) => line.includes('Enter') && line.includes('Esc')), 'Selection and Back hints remain visible');
       return lines.join('\n');
     };
     try {
