@@ -81,6 +81,19 @@ Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entrie
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
 
+## Package inventory
+
+The Pi adapter's **`/gateway-manager`** shows declared installed versions and
+optional update sources without reading service configuration files. Add a
+`packages` map and optional service `package` references alongside existing
+`mcpServers` entries; see [the package contract and example](docs/packages.md).
+
+Opening the screen reads local metadata only. Press **c** to check public npm
+versions or HTTPS Git branch heads, **r** to refresh locally, and Escape to close.
+Unlinked services and local folders are externally managed. This first stage is
+**read-only**: no installation, updates, service restarts, or background checks.
+No Pinote/delegate-specific code or service UI support is required.
+
 ## Live delegate panel
 
 The optional Pi adapter automatically subscribes to resources declaring MIME type

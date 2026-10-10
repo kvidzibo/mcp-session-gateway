@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { parsePackages, type PackageConfig } from './packages.js';
 
 export interface ServiceConfig {
   name: string;
@@ -8,10 +9,12 @@ export interface ServiceConfig {
   env: Record<string, string>;
   cwd: string;
   settings?: { tokenEnv: string };
+  package?: string;
 }
 
 export interface GatewayConfig {
   services: ServiceConfig[];
+  packages: PackageConfig[];
   timeoutMs: number;
   logFile: string;
 }
@@ -47,12 +50,16 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   if (typeof logFile !== 'string' || logFile.trim() === '') {
     throw new Error('logFile must be a non-empty path string');
   }
+  const packages = parsePackages(data.packages, dirname(absolute));
   const services = Object.entries(servers).map(([name, value]): ServiceConfig => {
     if (!/^[a-z][a-z0-9-]*$/.test(name) || name === 'gateway') {
       throw new Error(`Invalid or reserved server name: ${name}`);
     }
     if (!object(value) || typeof value.command !== 'string' || value.command.trim() === '') {
       throw new Error(`Server ${name} requires an executable command`);
+    }
+    if (value.package !== undefined && (typeof value.package !== 'string' || !packages.some((pkg) => pkg.name === value.package))) {
+      throw new Error(`Server ${name}: package must reference a configured package`);
     }
     const args = value.args ?? [];
     const env = value.env ?? {};
@@ -73,6 +80,7 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     }
     return {
       name,
+      ...(value.package ? { package: value.package as string } : {}),
       ...(settings ? { settings: settings as { tokenEnv: string } } : {}),
       command: value.command,
       args: args as string[],
@@ -80,5 +88,5 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
       cwd: resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });
-  return { services, timeoutMs, logFile: resolve(dirname(absolute), logFile) };
+  return { services, packages, timeoutMs, logFile: resolve(dirname(absolute), logFile) };
 }
