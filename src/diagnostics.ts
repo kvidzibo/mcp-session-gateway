@@ -4,6 +4,10 @@ let enabled = true;
 let logFile: string | undefined;
 let onLogError: (() => void) | undefined;
 
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function openDiagnosticLog(path: string, onError: () => void): void {
   // Validate before starting children; never truncate existing logs.
   closeSync(openSync(path, 'a', 0o600));
@@ -39,7 +43,7 @@ export function writeDiagnostic(message: string | Buffer): boolean {
     } catch (error) {
       logFile = undefined;
       if (enabled && !process.stderr.destroyed) {
-        process.stderr.write(`Gateway log write failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(`Gateway log write failed: ${errorMessage(error)}\n`);
       }
       onLogError?.();
     }
