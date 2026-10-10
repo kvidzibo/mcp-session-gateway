@@ -32,7 +32,7 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
       })).catch(() => {
         if (!operation.aborted && !disposed) ctx.ui.notify('Package inspection failed', 'error');
       }).finally(() => {
-        if (!operation.aborted && !disposed) { busy = false; tui.requestRender(); }
+        if (!operation.aborted && !disposed) { busy = false; tui.requestRender(true); }
       });
     };
     const close = () => { controller.abort(); done(); };
