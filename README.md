@@ -55,7 +55,7 @@ pi --extension /absolute/path/to/local-stdio-mcp-gateway/pi/gateway.ts --gateway
 
 The extension starts one stdio gateway on `session_start`, creates no process at load time, and closes it idempotently at shutdown. The gateway inherits Pi’s environment so `${VARIABLE}` config references work; service processes still receive only their configured environment plus SDK defaults. `gateway_tools` discovers live model-callable tools, `gateway_call` validates each call against its advertised JSON Schema (2020-12), and `/gateway` opens the operator menu. The adapter registers no resource tools; panel contents are not added to the conversation. An agent can still access the same OS through other tools: this routing is not a secrecy boundary. UI-only tools are omitted and rejected; tools visible to both model and app remain callable. The standalone gateway remains usable without Pi packages.
 
-Approvals use ordinary MCP `elicitation/create`, not an agent-visible tool result. Services must request a flat form with one required boolean field; other forms are cancelled. Allow once returns `accept` with that field set to `true`; Decline and Cancel remain distinct. No UI, timeout, disconnect, or aborted calls cannot grant approval. Dialogs are serialized, and incoming confirmations are cancelled while gateway menus are open. No credentials are collected. Services must check the decision before performing the operation.
+Approvals use ordinary MCP `elicitation/create`, not an agent-visible tool result. Services must request a flat form with one required boolean field; other forms are cancelled. Allow once returns `accept` with that field set to `true`; Decline and Cancel remain distinct. No UI, timeout, disconnect, or aborted calls cannot grant approval. Dialogs are serialized, and incoming confirmations are cancelled while gateway menus are open. In TUI mode, Allow once opens a scrollable disclosure: every line must be displayed before Enter grants approval; Escape cancels and resizing resets review. Oversized disclosures are refused, never silently truncated into approval. No credentials are collected. Services must check the decision before performing the operation.
 
 Each service processes one forwarded request at a time, allowing stdio confirmations to be attributed to the active tool without custom request metadata. Separate services can run concurrently. Resource reads do not trigger approval prompts. Resource URIs are wrapped as `gateway-resource://<service>/<percent-encoded-original-uri>`; returned content URIs are wrapped too.
 
@@ -135,6 +135,28 @@ Opening inventory stays read-only. There are no automatic updates or restarts.
 Managed builds run trusted code with user permissions and require POSIX; Git
 inspection requires Git 2.45+. See [configuration, confirmations, storage,
 rollback and recovery](docs/packages.md) before enabling management.
+
+## Browser service
+
+[pi-browser 0.6.0+](https://github.com/kvidzibo/pi-browser/blob/main/docs/mcp.md)
+provides isolated Chromium as a stdio service. Use `gateway.browser.example.json`
+for managed installation after that version is available on its `main` branch,
+or launch a tested checkout with `node /absolute/path/to/pi-browser/mcp/cli.mjs`.
+Merge entries into your existing configuration; do not replace other services.
+Preparation, activation and gateway restart each remain explicit operator actions.
+
+Discover `browser__browser` through `gateway_tools` and call it through
+`gateway_call`. Cookie approval uses the existing form-elicitation route; profiles,
+manual login, cookie-site selection, display modes and logout use **`/gateway` →
+Services → browser → Open app**. No browser-specific host code or private socket
+is needed. Approvals and native UI actions are not model tool results.
+
+Set `timeoutMs` high enough for consent plus browser startup (the example uses
+180 seconds). Forward display/keyring/agent-directory environment variables only
+when needed; see the service guide. Missing UI never grants cookie access. Keep
+saved profile use exclusive to one process. Remove the old native browser extension
+from the active Pi configuration only after approving that migration, then reload;
+loading both creates independent sessions and can contend for the same profiles.
 
 ## Live delegate panel
 

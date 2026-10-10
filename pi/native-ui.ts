@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { inputSettings } from './settings.js';
+import { confirmSettings, inputSettings } from './settings.js';
 import { ActionResultSchema, clean, editorText, ContextSchema, footerText, UI_CONTEXT, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown> };
@@ -222,7 +222,11 @@ export class NativeUI {
         value = options[labels.indexOf(choice)].value;
       }
       if (epoch !== this.epoch) return;
-      if (picked.confirm && !await ctx.ui.confirm(title, clean(picked.confirm + (picked.kind === 'action' ? '' : `\n${String(value)}`)), dialogOptions)) continue;
+      if (picked.confirm) {
+        const proposed = JSON.stringify(value)?.replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+        const disclosure = clean(picked.confirm) + (picked.kind === 'action' ? '' : `\n${proposed}`);
+        if (!await confirmSettings(ctx, disclosure, { ...dialogOptions, title, actionLabel: 'confirm' })) continue;
+      }
       if (epoch !== this.epoch) return;
       try {
         // Drain in-flight notification reads before acting; never replay a failed write.
