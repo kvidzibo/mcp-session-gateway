@@ -2,7 +2,7 @@
 import { PassThrough } from 'node:stream';
 import { loadConfig } from './config.js';
 import { Gateway } from './gateway.js';
-import { openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
+import { flushDiagnostics, openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
 
 let stopForStderrError = (): void => { process.exitCode = 1; };
 process.stderr.on('error', () => {
@@ -32,6 +32,7 @@ async function main(): Promise<void> {
       writeDiagnostic(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
       exitCode = 1;
     }
+    await flushDiagnostics();
     process.exit(exitCode);
   };
   stopForStderrError = () => { void stop(1); };
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
     for (const chunk of pending) input.write(chunk);
     pending.length = 0;
   } catch (error) {
+    if (stopping) return; // Upstream EOF/signal may cancel initialization normally.
     writeDiagnostic(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
     await stop(1);
   }

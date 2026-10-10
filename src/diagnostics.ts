@@ -11,6 +11,21 @@ export function openDiagnosticLog(path: string, onError: () => void): void {
   onLogError = onError;
 }
 
+export async function flushDiagnostics(): Promise<void> {
+  if (!enabled || process.stderr.destroyed) return;
+  await new Promise<void>((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      process.stderr.off('error', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 100);
+    process.stderr.once('error', finish);
+    // This callback follows earlier writes, even below the high-water mark.
+    process.stderr.write('', finish);
+  });
+}
+
 export function silenceDiagnostics(): void {
   enabled = false;
 }

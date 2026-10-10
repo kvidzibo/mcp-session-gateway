@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
+import type { Readable } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
@@ -38,6 +39,8 @@ test('file diagnostics append across runs, preserve shutdown stderr, and fail be
         cwd: root,
         stderr: 'pipe',
       });
+      const stderrStream = transport.stderr as Readable;
+      const stderrEnd = once(stderrStream, 'end');
       let stderr = '';
       transport.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       const client = new Client({ name: 'logging-test', version: '1.0.0' });
@@ -50,11 +53,21 @@ test('file diagnostics append across runs, preserve shutdown stderr, and fail be
         assert.match(log, /child-diagnostic\n/);
         assert.match(log, /\[gateway [^\]]+\] Started with 1 service\(s\)/);
       } finally {
-        await client.close();
-        await transport.close();
+        // Briefly slow the reader while the child emits its shutdown burst.
+        stderrStream?.pause();
+        const resume = setTimeout(() => { stderrStream?.resume(); }, 25);
+        try {
+          await client.close();
+          await transport.close();
+        } finally {
+          clearTimeout(resume);
+          stderrStream?.resume();
+        }
       }
+      await stderrEnd;
       assert.match(stderr, /child-diagnostic\n/);
       assert.match(stderr, /Started with 1 service/);
+      assert.equal(stderr.match(/shutdown-diagnostic/g)?.length, 5000);
       const finalLog = await readFile(logFile ? customLog : defaultLog, 'utf8');
       const runs = finalLog.match(/Started with 1 service/g)?.length ?? 0;
       assert.equal(finalLog.match(/shutdown-diagnostic/g)?.length, runs * 5000);
