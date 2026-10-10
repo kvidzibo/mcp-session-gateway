@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -18,6 +18,7 @@ import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
 import { writeDiagnostic } from './diagnostics.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
+import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -29,6 +30,8 @@ interface Service {
   tools: Tool[];
   refresh: Promise<void>;
   connected: boolean;
+  settingsToken?: string;
+  settingsEnabled?: boolean;
   queue: Promise<void>;
   closed: AbortController;
   active?: { id: RequestId; signal: AbortSignal; tool: string };
@@ -43,7 +46,7 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.3.0' },
+    { name: 'local-stdio-mcp-gateway', version: '0.4.0' },
     { capabilities: { tools: { listChanged: true }, resources: {} } },
   );
   private readonly services: Service[] = [];
@@ -54,7 +57,29 @@ export class Gateway {
   private closing?: Promise<void>;
   private requests?: ReturnType<typeof trackRequests>;
 
-  constructor(private readonly config: GatewayConfig) {
+  constructor(private readonly config: GatewayConfig, private readonly operatorToken?: string) {
+    if (operatorToken && !validToken(operatorToken)) throw new Error('Invalid gateway operator token');
+    if (operatorToken) {
+      this.server.registerCapabilities({ experimental: { [OPERATOR_EXTENSION]: { version: 1, audience: 'operator', authorization: 'token' } } });
+      this.server.setRequestHandler(OperatorListSchema, async (request, extra) => this.withRequest(extra, async () => {
+        authorize(request.params.token, this.operatorToken);
+        await this.ready;
+        return { services: this.services.filter((s) => s.connected && s.settingsEnabled).map((s) => ({ name: s.config.name })) };
+      }));
+      this.server.setRequestHandler(OperatorGetSchema, async (request, extra) => this.withRequest(extra, async () => {
+        authorize(request.params.token, this.operatorToken);
+        await this.ready;
+        const service = this.settingsService(request.params.service);
+        return this.withService(service, extra.signal, () => service.client.request({ method: SETTINGS_GET, params: { token: service.settingsToken } }, SettingsDocumentSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
+      }));
+      this.server.setRequestHandler(OperatorUpdateSchema, async (request, extra) => this.withRequest(extra, async () => {
+        authorize(request.params.token, this.operatorToken);
+        await this.ready;
+        const service = this.settingsService(request.params.service);
+        const { revision, patch } = request.params;
+        return this.withService(service, extra.signal, () => service.client.request({ method: SETTINGS_UPDATE, params: { token: service.settingsToken, revision, patch } }, SettingsDocumentSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
+      }));
+    }
     this.server.oninitialized = () => { this.initialized = true; this.resolveInitialized?.(); };
     this.server.onclose = () => {
       this.resolveInitialized?.();
@@ -158,6 +183,12 @@ export class Gateway {
     }));
   }
 
+  private settingsService(name: string): Service {
+    const service = this.services.find((s) => s.config.name === name && s.connected && s.settingsEnabled);
+    if (!service) throw new McpError(ErrorCode.InvalidParams, 'Settings unavailable for this service');
+    return service;
+  }
+
   private log(message: string): void {
     writeDiagnostic(`[gateway ${this.sessionId}] ${message}\n`);
   }
@@ -252,18 +283,24 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.3.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.4.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const settingsToken = this.operatorToken && config.settings ? randomBytes(32).toString('base64url') : undefined;
+    const env = { ...config.env };
+    // The upstream token is never inherited by children; configured child tokens are overridden.
+    delete env.MCP_GATEWAY_SETTINGS_TOKEN;
+    if (config.settings) delete env[config.settings.tokenEnv];
+    if (settingsToken && config.settings) env[config.settings.tokenEnv] = settingsToken;
     const transport = new ServiceTransport({
       command: config.command,
       args: config.args,
       cwd: config.cwd,
       env: {
-        ...config.env,
+        ...env,
         MCP_GATEWAY_SESSION_ID: this.sessionId,
         MCP_GATEWAY_SERVICE_ID: config.name,
       },
     });
-    const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
+    const service: Service = { config, client, transport, settingsToken, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
     if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
       const active = service.active;
       if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
@@ -299,6 +336,9 @@ export class Gateway {
     await client.connect(transport, { timeout: this.config.timeoutMs });
     if (this.closing) return;
     service.connected = true;
+    const capabilities = client.getServerCapabilities();
+    const extensions = (capabilities as { extensions?: Record<string, unknown> } | undefined)?.extensions;
+    service.settingsEnabled = Boolean(settingsToken && SettingsCapabilitySchema.safeParse(extensions?.[SETTINGS_EXTENSION] ?? capabilities?.experimental?.[SETTINGS_EXTENSION]).success);
     if (client.getServerCapabilities()?.tools) await this.queueRefresh(service);
   }
 
@@ -306,7 +346,7 @@ export class Gateway {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
     const transport = new StdioServerTransport(input);
-    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read']);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE]);
     await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;

@@ -1,6 +1,6 @@
 {
   "name": "local-stdio-mcp-gateway",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "A small stdio MCP gateway with per-run service identity",
   "type": "module",
@@ -18,7 +18,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
     "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "ajv-formats": "^3.0.1",
+    "zod": "^4.6.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

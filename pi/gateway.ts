@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -9,12 +10,8 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { loadConfig } from '../src/config.js';
 import { handleElicitation } from '../src/elicitation.js';
-
-// Server data is untrusted terminal text, never terminal instructions.
-const clean = (text: string) => text
-  .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-  .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '')
-  .slice(0, 20_000);
+import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
+import { clean, editSettings } from './settings.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -30,11 +27,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let closing: Promise<void> | undefined;
   let uiBusy = false;
   let approvalQueue = Promise.resolve();
+  let operatorToken: string | undefined;
 
   async function close(): Promise<void> {
     if (closing) return closing;
     connected = false;
     lifetime.abort();
+    operatorToken = undefined;
     closing = (async () => {
       try { await client?.close(); } finally { await transport?.close(); }
     })();
@@ -81,10 +80,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
-    const current = new Client({ name: 'pi-gateway-adapter', version: '0.3.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
+    const current = new Client({ name: 'pi-gateway-adapter', version: '0.4.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); };
-    transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: 'pipe' });
+    operatorToken = ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
+    const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    delete env[OPERATOR_ENV];
+    if (operatorToken) env[OPERATOR_ENV] = operatorToken;
+    transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env, stderr: 'pipe' });
     if (ctx.hasUI) handleElicitation(current, transport, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});
@@ -118,6 +121,36 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
       if (!content.length && result.structuredContent) content.push({ type: 'text', text: JSON.stringify(result.structuredContent) });
       return { content, details: undefined, isError: Boolean(result.isError) };
+    },
+  });
+
+  pi.registerCommand('mcp-settings', {
+    description: 'Edit child-service operator settings privately, with confirmation before saving.',
+    handler: async (args, ctx) => {
+      if (!ctx.hasUI) { ctx.ui.notify('Child-server settings require an interactive UI', 'warning'); return; }
+      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
+      const current = connection();
+      const token = operatorToken;
+      if (!token) { ctx.ui.notify('Settings unavailable; reconnect the gateway', 'warning'); return; }
+      const signal = lifetime.signal;
+      uiBusy = true;
+      try {
+        const options = { signal, timeout };
+        const result = await current.request({ method: OPERATOR_LIST, params: { token } }, OperatorServicesSchema, options);
+        if (!result.services.length) { ctx.ui.notify('No child services with operator settings enabled', 'info'); return; }
+        let service = args.trim();
+        if (!service) {
+          const labels = result.services.map((s, i) => `${i + 1}. ${clean(s.name)}`);
+          const selected = await ctx.ui.select('MCP child-server settings', labels, options);
+          if (!selected || signal.aborted) return;
+          service = result.services[labels.indexOf(selected)].name;
+        }
+        if (!result.services.some((s) => s.name === service)) throw new Error('Unknown settings service');
+        const document = await current.request({ method: OPERATOR_GET, params: { token, service } }, SettingsDocumentSchema, options);
+        await editSettings(ctx, document, (revision, patch) => current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal, timeout);
+      } catch (error) {
+        if (!signal.aborted) ctx.ui.notify(clean(`Child-server settings: ${String(error)}`), 'error');
+      } finally { uiBusy = false; }
     },
   });
 

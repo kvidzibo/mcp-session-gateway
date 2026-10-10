@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { PassThrough } from 'node:stream';
 import { loadConfig } from './config.js';
+import { OPERATOR_ENV } from './settings.js';
 import { Gateway } from './gateway.js';
 import { flushDiagnostics, openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
 
@@ -19,7 +20,9 @@ async function main(): Promise<void> {
   }
   const config = await loadConfig(args[1]);
   openDiagnosticLog(config.logFile, () => { stopForStderrError(); });
-  const gateway = new Gateway(config);
+  const operatorToken = process.env[OPERATOR_ENV];
+  delete process.env[OPERATOR_ENV];
+  const gateway = new Gateway(config, operatorToken);
   let stopping = false;
   let exitCode = 0;
   const stop = async (code = 0): Promise<void> => {
