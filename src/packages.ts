@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import { devNull, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -54,11 +55,39 @@ async function git(args: string[], cwd: string, signal: AbortSignal): Promise<st
   });
   return stdout.trim();
 }
+async function hasGitFilters(directory: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    // Query all active config scopes/includes under the same isolated Git environment.
+    return Boolean(await git(['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process)$'], directory, signal));
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return false; // No matching keys.
+    throw error;
+  }
+}
 async function manifest(directory: string, signal: AbortSignal): Promise<{ name?: string; version?: string }> {
   const file = join(directory, 'package.json');
-  if ((await stat(file)).size > 256_000) throw new Error('Package manifest too large');
-  return z.object({ name: z.string().optional(), version: z.string().max(128).optional() })
-    .parse(JSON.parse(await readFile(file, { encoding: 'utf8', signal })));
+  const limit = 256_000;
+  signal.throwIfAborted();
+  const before = await lstat(file);
+  if (!before.isFile() || before.size > limit) throw new Error('Manifest must be a bounded regular file');
+  // Reject symlinks and avoid blocking on a FIFO swapped in between lstat/open.
+  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > limit) throw new Error('Manifest must be a bounded regular file');
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0;
+    while (size <= limit) {
+      signal.throwIfAborted();
+      const { bytesRead } = await handle.read(buffer, size, Math.min(64_000, buffer.length - size), size);
+      signal.throwIfAborted();
+      if (!bytesRead) break;
+      size += bytesRead;
+    }
+    if (size > limit) throw new Error('Package manifest too large');
+    return z.object({ name: z.string().optional(), version: z.string().max(128).optional() })
+      .parse(JSON.parse(buffer.subarray(0, size).toString('utf8')));
+  } finally { await handle.close(); }
 }
 async function npmVersion(name: string, tag: string, signal: AbortSignal): Promise<string> {
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, {
@@ -97,7 +126,10 @@ export async function inspectPackage(pkg: PackageConfig, checkRemote: boolean, s
         if (await realpath(root) !== await realpath(directory)) throw new Error('Not a repository root');
         result.installed = await git(['rev-parse', '--verify', 'HEAD'], directory, signal);
         if (!/^[a-f0-9]{40,64}$/.test(result.installed)) throw new Error('Invalid commit');
-        if (await git(['status', '--porcelain', '--untracked-files=normal'], directory, signal)) result.notes.push('Dirty checkout; updates would require a clean tree.');
+        if (await hasGitFilters(directory, signal)) result.notes.push('Dirty state unavailable: executable Git filters configured.');
+        else if (await git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'], directory, signal)) {
+          result.notes.push('Dirty checkout; updates would require a clean tree.');
+        }
       } else {
         try {
           const data = await manifest(directory, signal);

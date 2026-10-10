@@ -72,15 +72,20 @@ The gateway does not rewrite commands to match these paths.
 
 Npm/Git are **tracked sources**, not gateway-owned installations yet. A package
 can be non-Node: Git uses commit IDs; local folders work without `package.json`.
-No package code or lifecycle scripts run during inspection.
+No package code or lifecycle scripts run during inspection. Manifests must be
+regular files (not symlinks/devices/FIFOs), limited to 256 KB; reads enforce the
+limit even if the file grows after opening.
 
 Initial limits: public npm registry only; public HTTPS Git URLs without embedded
 credentials, query or fragment; branch tracking only (no tags/commit pins).
 No `.npmrc`, authentication setup, SSH, or private registries are consumed.
 Git must be installed for Git inspection. Git checks suppress credential helpers,
 terminal prompts, hooks, fsmonitor and optional index writes; they do not fetch,
-checkout, install, build, or change remote-tracking refs. Configuration and local
-repositories must still be trusted; these checks are not a sandbox.
+checkout, install, build, or change remote-tracking refs. Dirty-state inspection
+is skipped when clean/process filters are configured, since `git status` can run
+them. Submodule contents are not inspected. Configuration and local repositories
+must still be trusted and not adversarially changed during inspection; these checks
+are not a sandbox.
 
 ## Pi status screen
 
@@ -125,6 +130,7 @@ packages and does not modify Pi settings or load extensions.
 
 Run `npm run check`, `npm test`, and `npm run build`. The package inventory test
 uses temporary installations and mocked registry metadata, verifies local-only
-opening, version comparison, failed/unknown metadata, cancellation and rendering.
+opening, version comparison, failed/unknown metadata, cancellation and rendering,
+and rejects executable Git filters and non-regular/oversized manifests.
 For visual checks use an isolated Pi profile and project under Xvfb with private
 D-Bus; never point test launch commands at your normal task database or workers.

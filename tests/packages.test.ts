@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -74,6 +74,16 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     assert.equal(local.status, 'Externally managed');
     assert.match(local.notes.join(), /Folder exists/);
     assert.equal(requests, beforeLocal);
+    const unusualManifest = join(dir, 'local/package.json');
+    execFileSync('mkfifo', [unusualManifest]);
+    assert.match((await inspectPackage(config.packages[1], false, signal)).notes.join(), /Cannot verify/);
+    await rm(unusualManifest);
+    await symlink('/dev/zero', unusualManifest);
+    assert.match((await inspectPackage(config.packages[1], false, signal)).notes.join(), /Cannot verify/);
+    await rm(unusualManifest);
+    await writeFile(unusualManifest, ' '.repeat(256_001));
+    assert.match((await inspectPackage(config.packages[1], false, signal)).notes.join(), /Cannot verify/);
+    await rm(unusualManifest);
 
     const repo = join(dir, 'repo');
     await mkdir(repo);
@@ -90,6 +100,14 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     assert.match(gitStatus.notes.join(), /Dirty checkout/);
     assert.deepEqual(await readFile(join(repo, '.git/index')), index);
     assert.equal(await readFile(join(repo, 'file'), 'utf8'), 'dirty');
+    const marker = join(dir, 'filter-executed');
+    await writeFile(join(repo, '.gitattributes'), 'file filter=marker\n');
+    const filterCode = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'executed'); process.stdin.pipe(process.stdout)`;
+    git('config', 'filter.marker.clean', `${JSON.stringify(process.execPath)} -e ${JSON.stringify(filterCode)}`);
+    const filtered = await inspectPackage(gitPkg, false, signal);
+    assert.equal(filtered.installed, commit);
+    assert.match(filtered.notes.join(), /Dirty state unavailable: executable Git filters/);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' }, 'Inspection must never execute a repository clean filter');
     await mkdir(join(repo, 'nested'));
     assert.equal((await inspectPackage({ ...gitPkg, installedPath: join(repo, 'nested') }, false, signal)).installed, undefined);
 
