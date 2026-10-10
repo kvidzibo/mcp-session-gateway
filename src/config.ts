@@ -15,6 +15,7 @@ export interface ServiceConfig {
 export interface GatewayConfig {
   services: ServiceConfig[];
   packages: PackageConfig[];
+  packageStore: string;
   timeoutMs: number;
   logFile: string;
 }
@@ -51,6 +52,8 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     throw new Error('logFile must be a non-empty path string');
   }
   const packages = parsePackages(data.packages, dirname(absolute));
+  const packageStore = data.packageStore ?? '.gateway-packages';
+  if (typeof packageStore !== 'string' || !packageStore.trim()) throw new Error('packageStore must be a non-empty path');
   const services = Object.entries(servers).map(([name, value]): ServiceConfig => {
     if (!/^[a-z][a-z0-9-]*$/.test(name) || name === 'gateway') {
       throw new Error(`Invalid or reserved server name: ${name}`);
@@ -72,6 +75,10 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     if (value.cwd !== undefined && typeof value.cwd !== 'string') {
       throw new Error(`Server ${name}: cwd must be a string`);
     }
+    const managed = packages.find((pkg) => pkg.name === value.package)?.managed;
+    const hasRoot = [value.command, ...args, ...Object.values(env), value.cwd ?? ''].some((text) => String(text).includes('{{packageRoot}}'));
+    if (hasRoot && !managed) throw new Error(`Server ${name}: packageRoot requires a managed package`);
+    if (managed && !hasRoot) throw new Error(`Server ${name}: managed launch must reference {{packageRoot}}`);
     const settings = value.settings;
     if (settings !== undefined && (!object(settings) || Object.keys(settings).some((key) => key !== 'tokenEnv') ||
         typeof settings.tokenEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.tokenEnv) ||
@@ -85,8 +92,8 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
       command: value.command,
       args: args as string[],
       env: Object.fromEntries(Object.entries(env).map(([key, entry]) => [key, expand(entry as string)])),
-      cwd: resolve(dirname(absolute), value.cwd ?? '.'),
+      cwd: value.cwd?.includes('{{packageRoot}}') ? value.cwd : resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });
-  return { services, packages, timeoutMs, logFile: resolve(dirname(absolute), logFile) };
+  return { services, packages, packageStore: resolve(dirname(absolute), packageStore), timeoutMs, logFile: resolve(dirname(absolute), logFile) };
 }

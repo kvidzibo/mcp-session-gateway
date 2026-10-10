@@ -15,9 +15,10 @@ import { ChangedSchema, InvalidatedSchema } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
-import { clean, editSettings, selectSettingsOption } from './settings.js';
+import { clean, confirmSettings, editSettings, selectSettingsOption } from './settings.js';
 import { LiveJobs } from './live-jobs.js';
 import { openManager } from './manager.js';
+import { managePackages } from './package-actions.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -32,7 +33,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
   let uiBusy = false;
+  let shuttingDown = false;
   let managerController: AbortController | undefined;
+  let managerWork: Promise<void> | undefined;
+  let launchedServices: string[] | undefined;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
@@ -47,8 +51,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     lifetime.abort();
     operatorToken = undefined;
     native.stop();
+    const pendingManager = managerWork;
     closing = (async () => {
-      try { await client?.close(); } finally { await transport?.close(); }
+      const results = await Promise.allSettled([
+        pendingManager,
+        (async () => { try { await client?.close(); } finally { await transport?.close(); } })(),
+      ]);
+      // Aborted package operations report through their own UI, but cleanup must finish.
+      if (results[1].status === 'rejected') throw results[1].reason;
     })();
     return closing;
   }
@@ -86,16 +96,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     finally { if (acquired) uiBusy = false; release(); }
   }
 
-  pi.on('session_start', async (_event, ctx) => {
+  async function start(ctx: ExtensionContext): Promise<void> {
+    if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
     if (connected) { await native.start(ctx, resolve(configPath)); return; }
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
+    if (shuttingDown) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { connected = false; liveJobs?.disconnect(); lifetime.abort(); native.stop(); };
+    current.onclose = () => { if (client === current) { connected = false; liveJobs?.disconnect(); lifetime.abort(); native.stop(); } };
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     current.setNotificationHandler(InvalidatedSchema, ({ params }) => { native.invalidate(params.service); });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
@@ -108,6 +120,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     transport.stderr?.on('data', () => {});
     try {
       await current.connect(transport, { timeout, signal: lifetime.signal });
+      const inventory = current.getServerCapabilities()?.experimental?.['gateway-services-v1'] as { names?: unknown } | undefined;
+      launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
       await native.start(ctx, resolve(configPath));
@@ -116,13 +130,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         await liveJobs.start();
       }
     } catch (error) { await close(); throw error; }
-  });
-  pi.on('session_shutdown', close);
+  }
+  pi.on('session_start', async (_event, ctx) => { shuttingDown = false; await start(ctx); });
+  pi.on('session_shutdown', async () => { shuttingDown = true; await close(); });
   pi.on('session_tree', async (_event, ctx) => {
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
   pi.registerCommand('gateway-manager', {
-    description: 'Inspect package versions privately; remote checks are explicit and read-only.',
+    description: 'Inspect packages; explicitly confirm preparation, activation, rollback and gateway restarts.',
     handler: async (_args, ctx) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway manager requires TUI mode', 'warning'); return; }
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
@@ -130,8 +145,30 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       if (typeof configPath !== 'string' || !configPath) { ctx.ui.notify('Use --gateway-config <file> to select a configuration', 'warning'); return; }
       uiBusy = true;
       managerController = new AbortController();
-      try { await openManager(ctx, await loadConfig(configPath), managerController.signal); }
-      catch { ctx.ui.notify('Cannot open manager; check the gateway configuration', 'error'); }
+      try {
+        const signal = managerController.signal;
+        while (!signal.aborted) {
+          const config = await loadConfig(configPath);
+          const action = await openManager(ctx, config, signal);
+          if (!action || signal.aborted) break;
+          if (action === 'manage') {
+            const work = managePackages(ctx, config, signal);
+            managerWork = work;
+            try { await work; } finally { if (managerWork === work) managerWork = undefined; }
+            continue;
+          }
+          if (!launchedServices) { ctx.ui.notify('Runtime service inventory unavailable; build/reload the matching gateway before using managed restart', 'warning'); continue; }
+          if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before restarting', 'warning'); continue; }
+          const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${launchedServices.map((name) => `- ${name}`).join('\n') || '(none)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
+          if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
+          if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
+          managerController = undefined;
+          await close();
+          if (!shuttingDown) { await start(ctx); ctx.ui.notify('Gateway services restarted', 'info'); }
+          break;
+        }
+      }
+      catch (error) { if (!shuttingDown) ctx.ui.notify(clean(`Gateway manager: ${String(error)}`), 'error'); }
       finally { managerController = undefined; uiBusy = false; }
     },
   });

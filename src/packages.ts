@@ -21,11 +21,25 @@ const httpsURL = z.string().max(2048).refine((value) => {
   .transform((value) => new URL(value).href);
 const sourceSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('npm'), name: z.string().max(214).regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/), tag: z.string().max(100).regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/).default('latest') }).strict(),
-  z.object({ type: z.literal('git'), url: httpsURL, branch: branchSchema }).strict(),
+  z.object({ type: z.literal('git'), url: httpsURL, branch: branchSchema.default('main') }).strict(),
   z.object({ type: z.literal('local'), path: pathSchema }).strict(),
 ]);
-const packageSchema = z.object({ source: sourceSchema, installedPath: pathSchema.optional() }).strict()
-  .refine((value) => value.source.type !== 'local' || value.installedPath === undefined, 'Local sources use source.path, not installedPath');
+const stepSchema = z.object({
+  command: pathSchema,
+  args: z.array(z.string().max(8192)).max(100).default([]),
+  cwd: pathSchema.default('.'),
+}).strict();
+const packageSchema = z.object({
+  source: sourceSchema,
+  installedPath: pathSchema.optional(),
+  managed: z.object({
+    build: z.array(stepSchema).max(20).default([]),
+    validate: z.array(stepSchema).min(1).max(20),
+    timeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
+  }).strict().optional(),
+}).strict()
+  .refine((value) => value.source.type !== 'local' || value.installedPath === undefined, 'Local sources use source.path, not installedPath')
+  .refine((value) => !value.managed || (value.source.type !== 'local' && !value.installedPath), 'Managed sources must be npm/Git without installedPath');
 export type PackageConfig = z.infer<typeof packageSchema> & { name: string };
 
 export function parsePackages(value: unknown, directory: string): PackageConfig[] {
@@ -48,25 +62,26 @@ export interface PackageStatus {
   checkedAt?: string;
 }
 const exec = promisify(execFile);
-async function git(args: string[], cwd: string, signal: AbortSignal): Promise<string> {
-  // Metadata only: no fetch, index refresh, hooks, prompts, or credential helpers.
+// The CLI flag fails closed on older Git; unknown environment variables would not.
+export const safeGitArgs = ['--no-lazy-fetch', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${devNull}`,
+  '-c', 'core.askPass=', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always'];
+export function gitEnvironment(): NodeJS.ProcessEnv {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-  // The CLI flag fails closed on older Git; an unknown environment variable would not.
-  const { stdout } = await exec('git', ['--no-lazy-fetch', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${devNull}`,
-    '-c', 'core.askPass=', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', ...args], {
-    cwd, signal, timeout: 10_000, maxBuffer: 256_000,
-    env: {
-      ...env,
-      // libcurl reads netrc independently of Git credential helpers/askpass.
-      // A non-directory home also prevents fallback to the user's home files.
-      HOME: devNull, USERPROFILE: devNull, CURL_HOME: devNull, NETRC: devNull,
-      GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '',
-      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull,
-    },
+  return {
+    ...env,
+    // libcurl reads netrc independently of Git credential helpers/askpass.
+    HOME: devNull, USERPROFILE: devNull, CURL_HOME: devNull, NETRC: devNull,
+    GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull,
+  };
+}
+export async function git(args: string[], cwd: string, signal: AbortSignal): Promise<string> {
+  const { stdout } = await exec('git', [...safeGitArgs, ...args], {
+    cwd, signal, timeout: 10_000, maxBuffer: 256_000, env: gitEnvironment(),
   });
   return stdout.trim();
 }
-async function hasGitFilters(directory: string, signal: AbortSignal): Promise<boolean> {
+export async function hasGitFilters(directory: string, signal: AbortSignal): Promise<boolean> {
   try {
     // Query all active config scopes/includes under the same isolated Git environment.
     return Boolean(await git(['config', '--null', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process)$'], directory, signal));
@@ -75,8 +90,7 @@ async function hasGitFilters(directory: string, signal: AbortSignal): Promise<bo
     throw error;
   }
 }
-async function manifest(directory: string, signal: AbortSignal): Promise<{ name?: string; version?: string }> {
-  const file = join(directory, 'package.json');
+export async function readMetadata(file: string, signal: AbortSignal): Promise<unknown> {
   const limit = 256_000;
   signal.throwIfAborted();
   const before = await lstat(file);
@@ -96,9 +110,12 @@ async function manifest(directory: string, signal: AbortSignal): Promise<{ name?
       size += bytesRead;
     }
     if (size > limit) throw new Error('Package manifest too large');
-    return z.object({ name: z.string().optional(), version: z.string().max(128).optional() })
-      .parse(JSON.parse(buffer.subarray(0, size).toString('utf8')));
+    return JSON.parse(buffer.subarray(0, size).toString('utf8'));
   } finally { await handle.close(); }
+}
+async function manifest(directory: string, signal: AbortSignal): Promise<{ name?: string; version?: string }> {
+  return z.object({ name: z.string().optional(), version: z.string().max(128).optional() })
+    .parse(await readMetadata(join(directory, 'package.json'), signal));
 }
 async function npmVersion(name: string, tag: string, signal: AbortSignal): Promise<string> {
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${encodeURIComponent(tag)}`, {

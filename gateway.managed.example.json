@@ -1,0 +1,27 @@
+{
+  "packageStore": ".gateway-packages",
+  "packages": {
+    "example": {
+      "source": {
+        "type": "git",
+        "url": "https://github.com/vendor/example-mcp.git",
+        "branch": "main"
+      },
+      "managed": {
+        "build": [
+          { "command": "npm", "args": ["ci"] },
+          { "command": "npm", "args": ["run", "build"] }
+        ],
+        "validate": [{ "command": "npm", "args": ["test"] }]
+      }
+    }
+  },
+  "mcpServers": {
+    "example": {
+      "package": "example",
+      "command": "node",
+      "args": ["{{packageRoot}}/dist/server.js"],
+      "cwd": "{{packageRoot}}"
+    }
+  }
+}
