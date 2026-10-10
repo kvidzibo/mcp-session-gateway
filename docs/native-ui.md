@@ -7,7 +7,8 @@ code or running a model turn. The gateway remains service-agnostic.
 Use `/gateway-ui` to choose an app, or `/gateway-ui pinote`. Use arrows/Enter to
 navigate, Ctrl+R to refresh, and Escape to close. Controls have labels and optional
 icons/descriptions. Forms save only when their action succeeds; confirmation
-prompts show the proposed value. Footer text and HTTP(S) links use Pi's ordinary
+prompts show the proposed value. Text/number inputs use JSON values (quote strings;
+use `\n` for line breaks), preserving tabs and boundary whitespace exactly. Footer text and HTTP(S) links use Pi's ordinary
 status area. Footer actions are accessed through the app menu, not clickable icons.
 
 ## Service contract
@@ -32,7 +33,7 @@ resource per service with MIME type `application/vnd.mcp-native-ui+json`.
 ```
 
 Control kinds: `action`, `text`, `number`, `toggle`, `select`. Text can specify
-`multiline: true`; selects supply `options: [{label, value}]`. Optional `icon` and
+`multiline: true` as a hint (this host still uses escaped JSON input); selects supply `options: [{label, value}]`. Optional `icon` and
 `description` provide presentation hints. Values are string, number, boolean, or
 null. IDs must be unique. The exact schemas and limits live in
 [`src/native-ui.ts`](../src/native-ui.ts): 256 controls, 20,000-character strings,

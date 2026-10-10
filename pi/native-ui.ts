@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { inputSettings } from './settings.js';
 import { ActionResultSchema, clean, editorText, ContextSchema, footerText, UI_CONTEXT, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown> };
@@ -191,12 +192,16 @@ export class NativeUI {
       let value = picked.value;
       const title = oneLine(picked.label);
       if (picked.kind === 'text' || picked.kind === 'number') {
-        let entered: string | undefined;
-        try { entered = await ctx.ui.editor(title, editorText(String(value ?? ''))); }
-        catch (error) { ctx.ui.notify(clean(String(error)), 'error'); continue; }
+        // Pi's multiline editor trims and expands tabs. JSON input preserves
+        // exact strings while making whitespace and terminal controls explicit.
+        const encoded = JSON.stringify(value ?? (picked.kind === 'number' ? 0 : '')).replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+        const entered = await inputSettings(ctx, title, encoded, this.options());
         if (entered === undefined) continue;
-        value = picked.kind === 'number' ? Number(entered) : entered;
-        if (typeof value === 'number' && (!entered.trim() || !Number.isFinite(value))) { ctx.ui.notify('Enter a finite number', 'error'); continue; }
+        try { value = JSON.parse(entered); }
+        catch { ctx.ui.notify('Enter a JSON value (quote strings)', 'error'); continue; }
+        if (picked.kind === 'number' ? typeof value !== 'number' || !Number.isFinite(value) : typeof value !== 'string') {
+          ctx.ui.notify('Enter a JSON string or finite number matching this field', 'error'); continue;
+        }
       } else if (picked.kind === 'toggle') value = !value;
       else if (picked.kind === 'select') {
         const options = picked.options ?? [];
@@ -221,6 +226,10 @@ export class NativeUI {
         await this.pending.get(uri);
         if (epoch !== this.epoch || this.resources.get(service) !== uri) return;
         this.apply(uri, result.view);
+        // Notification reads may be newer than the action snapshot, but used
+        // its previous selection. Reread with the returned state before display.
+        await this.refresh(uri);
+        if (epoch !== this.epoch || !this.views.has(uri)) return;
         if (result.preview) await this.preview(result.preview, ctx);
         if (result.draft && await ctx.ui.confirm('Insert draft?', clean(result.draft), this.options()) && epoch === this.epoch) {
           if (ctx.ui.getEditorText().trim()) ctx.ui.notify('Draft preserved; clear the editor before inserting a server draft', 'warning');

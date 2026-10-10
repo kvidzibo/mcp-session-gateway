@@ -41,15 +41,26 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   const entries: any[] = [];
   const statuses = new Map();
   let rounds = 0, confirms = 0;
+  const updated = ' \tUpdated\n ';
+  let inputValue: string | undefined = JSON.stringify(updated);
+  let onInput = () => {};
   const ctx: any = { mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'conversation', getBranch: () => entries }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify: (message: string) => assert.fail(message),
-    editor: async (_title: string, prefill: string) => { assert.equal(prefill, 'Original'); return 'Updated'; }, confirm: async () => { confirms++; return true; },
+    confirm: async () => { confirms++; return true; },
     custom: async (factory: Function) => {
       let result;
       const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: unknown) => { result = value; });
-      assert.match(component.render(80).join('\n'), /Remote settings/);
-      assert.ok(component.render(8).every((line: string) => [...clean(line)].length <= 8));
-      component.handleInput(rounds++ === 0 ? '\r' : '\x1b'); component.dispose();
+      const rendered = component.render(80).join('\n');
+      if (rendered.includes('JSON value')) {
+        onInput();
+        if (inputValue !== undefined) { component.handleInput('\x01'); component.handleInput('\x0b'); component.handleInput(inputValue); }
+        component.handleInput('\r');
+      } else {
+        assert.match(rendered, /Remote settings/);
+        assert.ok(component.render(8).every((line: string) => [...clean(line)].length <= 8));
+        component.handleInput(rounds++ === 0 ? '\r' : '\x1b');
+      }
+      component.dispose();
       return result;
     },
   } };
@@ -60,11 +71,29 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ['gateway__identity']);
     await host.start(ctx, config);
     assert.equal(statuses.get('gateway-ui:demo'), 'Remote footer');
+    const wireRequest = client.request.bind(client), wireRead = client.readResource.bind(client);
+    let newer = false;
+    client.readResource = async (...args) => {
+      const result = await wireRead(...args);
+      const item = result.contents[0];
+      if (newer && 'text' in item) item.text = JSON.stringify({ ...JSON.parse(item.text), footer: [{ text: 'Newest task data' }] });
+      return result;
+    };
+    client.request = (async (request: any, ...args: any[]) => {
+      const result = await (wireRequest as any)(request, ...args);
+      if (request.method === 'native-ui/action') { newer = true; await host.refresh('gateway-resource://demo/test%3A%2F%2Froot'); }
+      return result;
+    }) as typeof client.request;
     await host.open('demo', ctx);
     assert.equal(confirms, 1);
-    assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, 'Updated');
+    assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, updated);
+    assert.equal(statuses.get('gateway-ui:demo'), 'Newest task data', 'Action snapshot must not overwrite a newer notification read');
+    client.request = wireRequest; client.readResource = wireRead;
+    rounds = 0; inputValue = undefined;
+    await host.open('demo', ctx);
+    assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, updated, 'No-op edit through real Input preserves tabs and boundary whitespace');
     host.stop(); await host.start(ctx, config);
-    assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, 'Updated');
+    assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, updated);
     const uri = 'gateway-resource://demo/test%3A%2F%2Froot';
     const originalRead = client.readResource.bind(client);
     let release!: () => void, started!: () => void, reads = 0;
@@ -89,7 +118,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     const originalRequest = client.request.bind(client);
     let actions = 0;
     client.request = ((request: any, ...args: any[]) => { if (request.method === 'native-ui/action') actions++; return (originalRequest as any)(request, ...args); }) as typeof client.request;
-    ctx.ui.editor = async () => { host.invalidate('demo'); return 'Must not save'; };
+    onInput = () => { host.invalidate('demo'); };
     ctx.ui.notify = () => {};
     await host.open('demo', ctx);
     assert.equal(actions, 0, 'Invalidation during input must prevent dispatch');
