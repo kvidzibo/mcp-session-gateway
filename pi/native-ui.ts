@@ -64,7 +64,8 @@ export class NativeUI {
     this.changed();
   }
 
-  has(service: string): boolean { return this.resources.has(service) && this.views.has(this.resources.get(service)!); }
+  // An advertised app can be reopened after a transient view-read failure.
+  has(service: string): boolean { return this.resources.has(service); }
 
   meta(service: string): Record<string, unknown> {
     return { [UI_CONTEXT]: ContextSchema.parse({

@@ -97,5 +97,5 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
       invalidate() {},
       dispose() { disposed = true; controller.abort(); signal.removeEventListener('abort', cancel); },
     };
-  }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
+  }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
 }

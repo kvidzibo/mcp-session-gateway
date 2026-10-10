@@ -7,7 +7,7 @@ import { PackageManager } from '../src/package-manager.js';
 import { clean, confirmSettings } from './settings.js';
 import { GatewayMenu } from './menu.js';
 
-const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 1 } };
+const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 0 } };
 const literal = (value: unknown) => JSON.stringify(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 async function progress(ctx: ExtensionContext, title: string, signal: AbortSignal,

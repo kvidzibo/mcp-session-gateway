@@ -19,7 +19,8 @@ export class GatewayMenu {
     const picked = await this.ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
       const signal = this.signal;
       let list: SelectList | undefined, geometry = '', usable = false;
-      let selected = Math.max(0, choices.findIndex((item) => item.id === this.selected.get(key)));
+      const remembered = choices.findIndex((item) => item.id === this.selected.get(key));
+      let selected = remembered >= 0 ? remembered : choices.findIndex((item) => !item.disabled);
       const cancel = () => done(undefined);
       this.signal.addEventListener('abort', cancel, { once: true });
       return {
@@ -59,7 +60,7 @@ export class GatewayMenu {
         invalidate() { list?.invalidate(); },
         dispose: () => this.signal.removeEventListener('abort', cancel),
       };
-    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
+    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
     return picked === '__back' ? undefined : picked;
   }
 
@@ -91,7 +92,7 @@ export class GatewayMenu {
         invalidate() {},
         dispose: () => this.signal.removeEventListener('abort', cancel),
       };
-    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
+    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
   }
 }
 

@@ -114,7 +114,15 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     await Promise.all([pending, changed]);
     assert.equal(reads, 2, 'An update arriving after a snapshot needs another read');
     assert.equal(statuses.get('gateway-ui:demo'), 'Read 2');
+    const notify = ctx.ui.notify;
+    ctx.ui.notify = () => {};
+    client.readResource = async () => { throw new Error('Temporary view read failure'); };
+    await host.refresh(uri);
+    assert.equal(host.has('demo'), true, 'An advertised app stays selectable so a failed view can be retried');
     client.readResource = originalRead;
+    await host.open('demo', ctx);
+    assert.equal(statuses.get('gateway-ui:demo'), 'Remote footer');
+    ctx.ui.notify = notify;
     rounds = 0;
     const originalRequest = client.request.bind(client);
     let actions = 0;
@@ -123,6 +131,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     ctx.ui.notify = () => {};
     await host.open('demo', ctx);
     assert.equal(actions, 0, 'Invalidation during input must prevent dispatch');
+    assert.equal(host.has('demo'), false, 'Disconnected app is no longer advertised');
     assert.equal(statuses.get('gateway-ui:demo'), undefined);
     await host.start(ctx, config);
     let invalidated!: () => void;

@@ -50,7 +50,7 @@ function supported(schema: ObjectValue): boolean {
   return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
 }
 type DialogOptions = { signal: AbortSignal; timeout?: number; title?: string; actionLabel?: string };
-const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 1 } };
+const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 0 } };
 
 // Isolated overlays own their full height: editor widgets/footers cannot hide
 // controls. Native SelectList keeps options on single rows and follows selection.
@@ -117,7 +117,7 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
         complete = seen.size === lines.length;
         const border = theme.fg('accent', '─'.repeat(width));
         return [border, theme.fg('accent', clean(options.title ?? 'Save child-server settings?')), '', ...lines.slice(offset, offset + page), '',
-          theme.fg(complete ? 'success' : 'warning', complete ? `Enter ${options.actionLabel ?? 'save'}  Esc cancel` : '↑/↓ PgUp/PgDn review ALL changes before Enter confirms'), border].map((line) => truncateToWidth(line, width));
+          theme.fg(complete ? 'success' : 'warning', complete ? `Enter ${options.actionLabel ?? 'save'}  Esc cancel` : width < 60 ? '↑↓/PgUp/PgDn review · Esc cancel' : '↑/↓ PgUp/PgDn review ALL changes before Enter confirms'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();

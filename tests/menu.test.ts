@@ -26,6 +26,8 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     try {
       render();
       if (visit++ === 0) {
+        assert.ok(render().includes('→ Service 1'), 'Default focus starts on an available action');
+        panel.handleInput('\x1b[A');
         panel.handleInput('\r');
         assert.equal(finished, false, 'Disabled actions explain availability but cannot run');
         for (let i = 0; i < 21; i++) { panel.handleInput(down); render(); }
