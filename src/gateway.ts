@@ -21,7 +21,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
-import { writeDiagnostic } from './diagnostics.js';
+import { errorMessage, writeDiagnostic } from './diagnostics.js';
+import { gatewayIdentity } from './identity.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
 import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
 
@@ -32,7 +33,7 @@ interface Service {
   config: ServiceConfig;
   client: Client;
   transport: ServiceTransport;
-  tools: Tool[];
+  tools: Map<string, { originalName: string; definition: Tool }>;
   refresh: Promise<void>;
   connected: boolean;
   settingsToken?: string;
@@ -52,7 +53,7 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.5.0' },
+    gatewayIdentity,
     { capabilities: { tools: { listChanged: true }, resources: { subscribe: true, listChanged: true } } },
   );
   private readonly services: Service[] = [];
@@ -90,7 +91,7 @@ export class Gateway {
     this.server.onclose = () => {
       this.resolveInitialized?.();
       if (!this.closing) this.onclose?.();
-      void this.close().catch((error: Error) => this.log(error.message));
+      void this.close().catch((error: unknown) => this.log(errorMessage(error)));
     };
     this.server.onerror = (error) => this.log(error.message);
     this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
@@ -103,10 +104,7 @@ export class Gateway {
           annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         },
         ...this.services.filter((service) => service.connected).flatMap((service) =>
-          service.tools.filter(modelVisible).map((tool) => {
-            const { execution: _execution, ...definition } = tool;
-            return { ...definition, name: this.toolName(service.config.name, tool.name) };
-          }),
+          Array.from(service.tools.values(), (tool) => tool.definition),
         ),
       ] };
     }));
@@ -173,9 +171,7 @@ export class Gateway {
       if (request.params.task) throw new McpError(ErrorCode.InvalidParams, 'Task execution is not supported');
       for (const service of this.services) {
         if (!service.connected) continue;
-        const tool = service.tools.find((candidate) =>
-          this.toolName(service.config.name, candidate.name) === request.params.name && modelVisible(candidate),
-        );
+        const tool = service.tools.get(request.params.name);
         if (!tool) continue;
         const { progressToken, ...meta } = request.params._meta ?? {};
         return this.withService(service, extra.signal, async () => {
@@ -184,7 +180,7 @@ export class Gateway {
           service.active = { id: extra.requestId, signal, tool: request.params.name };
           try {
             return await service.client.callTool({
-              name: tool.name,
+              name: tool.originalName,
               arguments: request.params.arguments,
               _meta: {
                 ...meta,
@@ -199,7 +195,7 @@ export class Gateway {
                   void extra.sendNotification({
                     method: 'notifications/progress',
                     params: { ...progress, progressToken },
-                  }).catch((error: Error) => this.log(error.message));
+                  }).catch((error: unknown) => this.log(errorMessage(error)));
                 },
               } : {}),
             });
@@ -270,7 +266,7 @@ export class Gateway {
       if (started && (signal?.aborted || (error instanceof McpError && error.code === ErrorCode.RequestTimeout))) {
         service.connected = false;
         service.closed.abort();
-        service.tools = [];
+        service.tools.clear();
         try { await service.client.close(); } finally { await service.transport.close(); }
       }
       throw error;
@@ -306,7 +302,7 @@ export class Gateway {
   }
 
   private async refreshTools(service: Service): Promise<void> {
-    const tools: Tool[] = [];
+    const tools: Service['tools'] = new Map();
     const names = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
@@ -315,11 +311,13 @@ export class Gateway {
       if (++pages > 1000) throw new Error(`Too many tool pages from ${service.config.name}`);
       const page = await this.withService(service, undefined, () => service.client.listTools(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs }));
       for (const tool of page.tools) {
-        this.toolName(service.config.name, tool.name);
+        const name = this.toolName(service.config.name, tool.name);
         if (names.has(tool.name)) throw new Error(`Server ${service.config.name} returned duplicate tools`);
         if (tool.execution?.taskSupport === 'required') continue;
         names.add(tool.name);
-        tools.push(tool);
+        if (!modelVisible(tool)) continue;
+        const { execution: _execution, ...definition } = tool;
+        tools.set(name, { originalName: tool.name, definition: { ...definition, name } });
       }
       cursor = page.nextCursor;
       if (cursor !== undefined) {
@@ -337,7 +335,7 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.5.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const client = new Client(gatewayIdentity, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
     const settingsToken = this.operatorToken && config.settings ? randomBytes(32).toString('base64url') : undefined;
     const env = { ...config.env };
     // The upstream token is never inherited by children; configured child tokens are overridden.
@@ -354,7 +352,7 @@ export class Gateway {
         MCP_GATEWAY_SERVICE_ID: config.name,
       },
     });
-    const service: Service = { config, client, transport, settingsToken, tools: [], subscriptions: new Set(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
+    const service: Service = { config, client, transport, settingsToken, tools: new Map(), subscriptions: new Set(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
     if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
       const active = service.active;
       if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
@@ -373,10 +371,10 @@ export class Gateway {
     client.onclose = () => {
       service.connected = false;
       service.closed.abort();
-      service.tools = [];
+      service.tools.clear();
       service.subscriptions.clear();
-      void this.notifyToolsChanged().catch((error: Error) => this.log(error.message));
-      void this.notifyResourcesChanged().catch((error: Error) => this.log(error.message));
+      void this.notifyToolsChanged().catch((error: unknown) => this.log(errorMessage(error)));
+      void this.notifyResourcesChanged().catch((error: unknown) => this.log(errorMessage(error)));
     };
     client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (notification) => {
       if (!service.connected || !service.subscriptions.has(notification.params.uri) || this.closing) return;
@@ -389,8 +387,8 @@ export class Gateway {
         await this.notifyToolsChanged();
       } catch (error) {
         // A failed update cannot leave a stale catalogue of callable tools.
-        service.tools = [];
-        this.log(`Server ${config.name}: tool refresh failed`);
+        service.tools.clear();
+        this.log(`Server ${config.name}: tool refresh failed: ${errorMessage(error)}`);
         await this.notifyToolsChanged();
       }
     });

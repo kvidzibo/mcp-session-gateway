@@ -24,7 +24,7 @@ Edit `gateway.json` with actual MCP server commands:
 ```json
 {
   "timeoutMs": 30000,
-  "servers": {
+  "mcpServers": {
     "files": {
       "command": "node",
       "args": ["/absolute/path/to/files-mcp.js"],
@@ -38,6 +38,8 @@ Edit `gateway.json` with actual MCP server commands:
   }
 }
 ```
+
+`mcpServers` is the preferred child-server map. Legacy `servers` is still accepted; specifying both is an error. This naming matches common MCP client configuration, but only the gateway options documented here are supported.
 
 Commands are executables, not shell expressions. `cwd` defaults to the config directory; relative `cwd` values resolve there. Arguments are passed literally. Server names use lowercase letters, digits, and hyphens, starting with a letter; `gateway` is reserved.
 
@@ -88,7 +90,7 @@ adapter/config setup above, with a delegate service:
 
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "delegate": {
       "command": "pi-delegate-mcp",
       "args": ["--workspace", "/absolute/path/to/project"]
@@ -141,7 +143,7 @@ Enable only services implementing the [operator settings contract](docs/settings
 
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "delegate": {
       "command": "pi-delegate-mcp",
       "args": ["--workspace", "/absolute/path/to/project"],

@@ -8,6 +8,7 @@ import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { gatewayIdentity } from '../src/identity.js';
 import { loadConfig } from '../src/config.js';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
@@ -84,7 +85,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
-    const current = new Client({ name: 'pi-gateway-adapter', version: '0.5.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
+    const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; liveJobs?.disconnect(); lifetime.abort(); };
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;

@@ -100,7 +100,7 @@ test('subscriptions route by service and live Pi widget follows jobs without tra
     });
     await server.connect(new StdioServerTransport());
   `;
-  await writeFile(config, JSON.stringify({ timeoutMs: 1000, servers: Object.fromEntries(['alpha', 'beta', 'gamma'].map(name => [name, {
+  await writeFile(config, JSON.stringify({ timeoutMs: 1000, mcpServers: Object.fromEntries(['alpha', 'beta', 'gamma'].map(name => [name, {
     command: process.execPath, args: ['--input-type=module', '-e', service], cwd: root,
   }])) }));
   const client = new Client({ name: 'live-test', version: '1' });
