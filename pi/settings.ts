@@ -1,7 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
 
@@ -39,7 +39,7 @@ function put(value: ObjectValue, path: string[], next: unknown): void {
   parent[path[path.length - 1]] = next;
 }
 const display = (value: unknown) => (JSON.stringify(value) ?? '(unset)')
-  .replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  .replace(/[\s\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const pathLabel = (path: string[]) => display(path.map((key) => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')).slice(1, -1);
 
 const primitive = (value: unknown) => ['string', 'number', 'boolean'].includes(typeof value);
@@ -69,7 +69,7 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
         const height = Math.max(1, tui.terminal.rows - 2);
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
-        const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 3);
+        const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 7));
         const selected = Number(list?.getSelectedItem()?.value ?? 0);
         list = new SelectList(choices.map((label, i) => ({ value: String(i), label: label.replace(/\n/g, ' ') })), Math.max(1, height - heading.length - 6), {
           selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
@@ -131,6 +131,41 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
         tui.requestRender();
       },
       invalidate() {},
+      dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
+    };
+  }, overlay);
+}
+
+export async function inputSettings(ctx: ExtensionContext, title: string, value: string, options: DialogOptions): Promise<string | undefined> {
+  if (options.signal.aborted) return undefined;
+  return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+    const input = new Input();
+    input.setValue(value);
+    let geometry = '', usable = false;
+    const cancel = () => done(undefined);
+    input.onEscape = cancel;
+    input.onSubmit = (text) => { if (usable && !options.signal.aborted) done(text); };
+    const timer = setTimeout(cancel, options.timeout);
+    options.signal.addEventListener('abort', cancel, { once: true });
+    return {
+      get focused() { return input.focused; },
+      set focused(value: boolean) { input.focused = value; },
+      render(width: number) {
+        geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
+        const height = Math.max(1, tui.terminal.rows - 2);
+        usable = height >= 8 && width >= 20;
+        if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
+        const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);
+        const border = theme.fg('accent', '─'.repeat(width));
+        return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...input.render(width), '',
+          truncateToWidth(theme.fg('muted', 'JSON value  Enter stage  Esc back'), width), border];
+      },
+      handleInput(data: string) {
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+        else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) input.handleInput(data);
+        tui.requestRender();
+      },
+      invalidate() { input.invalidate(); },
       dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
     };
   }, overlay);
@@ -198,10 +233,12 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
         if (!selected || signal.aborted) continue;
         next = choices[labels.indexOf(selected)].value;
       } else {
-        const text = await ctx.ui.input(title, String(at(draft, field.path) ?? ''), options);
+        const text = await inputSettings(ctx, title, display(at(draft, field.path) ?? (field.schema.type === 'string' ? '' : 0)), options);
         if (text === undefined || signal.aborted) continue;
-        next = field.schema.type === 'string' ? text : text.trim() ? Number(text) : NaN;
-        if (typeof next === 'number' && !Number.isFinite(next)) { ctx.ui.notify('Enter a finite number', 'error'); continue; }
+        try { next = JSON.parse(text); } catch { ctx.ui.notify('Enter a valid JSON value (quote strings)', 'error'); continue; }
+        if (field.schema.type === 'string' ? typeof next !== 'string' : typeof next !== 'number' || !Number.isFinite(next)) {
+          ctx.ui.notify('Enter a JSON string or finite number matching this field', 'error'); continue;
+        }
       }
       // Model changes must stage supported reasoning in the same confirmed patch.
       if (key === 'model' && document.models && next !== siblingModel) {

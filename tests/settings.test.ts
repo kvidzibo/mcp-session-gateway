@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { randomBytes } from 'node:crypto';
-import { confirmSettings, editSettings, selectSettingsOption } from '../pi/settings.js';
+import { confirmSettings, editSettings, inputSettings, selectSettingsOption } from '../pi/settings.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 
@@ -107,7 +107,10 @@ test('operator settings stay private, route by service, and require confirmed sc
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => { result = value; });
         try {
           const lines: string[] = panel.render(98);
-          if (lines[1] === 'Save child-server settings?') {
+          if (lines.some((line) => line.includes('JSON value'))) {
+            const text = await ctx.ui.input();
+            panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(text); panel.handleInput('\r');
+          } else if (lines[1] === 'Save child-server settings?') {
             const approved = await ctx.ui.confirm(lines[1], lines.slice(3, -3).join('\n'));
             panel.handleInput(approved ? '\r' : '\u001b');
           } else {
@@ -139,6 +142,8 @@ test('operator settings stay private, route by service, and require confirmed sc
       try {
         for (let i=0;i<20;i++) { assert.ok(panel.render(78).length <= terminal.rows-2); panel.handleInput('\u001b[B'); }
         assert.ok(panel.render(78).some((line: string) => line.includes('service-20')));
+        terminal.rows=10;
+        assert.ok(panel.render(78).length <= 8, 'Tiny selectors fit their entire chrome');
         panel.handleInput('\r'); return answer;
       } finally {panel.dispose();}
     }}} as unknown as ExtensionContext, 'Many services', Array.from({length:35}, (_, i) => `service-${i} ${'wrapped label '.repeat(30)}`), dialog);
@@ -160,6 +165,20 @@ test('operator settings stay private, route by service, and require confirmed sc
       } finally {panel.dispose();}
     }}} as unknown as ExtensionContext, Array.from({length:24}, (_,i) => `field-${i}: old → new`).join('\n'), dialog);
     assert.equal(approved, true);
+    const inputValue = await inputSettings({ui:{custom: async (factory: Function, options: {overlay:boolean}) => {
+      assert.equal(options.overlay,true);
+      let answer: unknown;
+      const terminal = {rows:10,columns:80};
+      const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
+      try {
+        panel.focused=true;
+        assert.equal(panel.focused,true);
+        assert.ok(panel.render(78).length <= 8, 'Input fits independently of footer/widgets');
+        panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput('"edited"'); panel.handleInput('\r');
+        return answer;
+      } finally {panel.dispose();}
+    }}} as unknown as ExtensionContext, 'Primitive string', '"original"', dialog);
+    assert.equal(inputValue, '"edited"');
     {
       let selection = 0, updates = 0;
       const choiceContext = { ui: {
@@ -169,7 +188,8 @@ test('operator settings stay private, route by service, and require confirmed sc
             case 1: return choices.find((s) => s.includes('large'));
             case 2: return choices.find((s) => s.includes('active:'));
             case 3: return choices.find((s) => s.endsWith('true'));
-            case 4: return choices.find((s) => s.startsWith('Save changes'));
+            case 4: return choices.find((s) => s.includes('note:'));
+            case 5: return choices.find((s) => s.startsWith('Save changes'));
             default: return 'Back';
           }
         },
@@ -178,7 +198,7 @@ test('operator settings stay private, route by service, and require confirmed sc
         notify: (text: string) => assert.fail(text),
       } };
       const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
-        schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]}}},values:{size:'small',active:false}});
+        schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]},note:{type:'string'}}},values:{size:'small',active:false,note:'old'}});
       // Reuse the overlay driver with this editor's scripted choice callbacks.
       choiceContext.ui.custom = async (factory: Function, options: {overlay:boolean}) => {
         let result: unknown;
@@ -186,7 +206,17 @@ test('operator settings stay private, route by service, and require confirmed sc
         try {
           assert.equal(options.overlay,true);
           const lines: string[] = panel.render(98);
-          if(lines[1] === 'Save child-server settings?') panel.handleInput('\r');
+          if(lines[1] === 'Save child-server settings?') {
+            let preview = '';
+            for(let i=0;i<8;i++) {
+              preview += panel.render(98).slice(3,-3).join('');
+              panel.handleInput('\u001b[6~');
+            }
+            assert.ok(preview.includes('\\u0020'.repeat(80)), 'Significant spaces survive wrapping');
+            panel.handleInput('\r');
+          } else if (lines.some((line) => line.includes('JSON value'))) {
+            panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(JSON.stringify('a'+' '.repeat(80)+'b')); panel.handleInput('\r');
+          }
           else {
             const choices=lines.filter((line)=>/^(→ |  )/.test(line)).map((line)=>line.slice(2));
             const picked = await choiceContext.ui.select(lines[1], choices);
@@ -197,8 +227,8 @@ test('operator settings stay private, route by service, and require confirmed sc
         } finally {panel.dispose();}
       };
       await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
-        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true}); updates++;
-        return {...doc,revision:'two',values:{size:'large',active:true}};
+        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b'}); updates++;
+        return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b'}};
       }, new AbortController().signal, 1000);
       assert.equal(updates, 1);
     }

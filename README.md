@@ -110,7 +110,9 @@ tokens in config or prompts. Only opted-in, connected services advertising contr
 version 1 appear. Services without settings continue to work normally.
 
 The editor supports nested objects with string, number, integer, boolean, enum and
-constant-choice fields, plus read-only hints. Unsupported controls (arrays, references,
+constant-choice fields, plus read-only hints. Free-form strings/numbers use JSON
+value input (quote strings); significant whitespace is escaped in save previews.
+Unsupported controls (arrays, references,
 complex unions, secrets) are not editable. JSON Schema constraints are checked before
 saving; the child remains responsible for validation, atomic persistence and revisions.
 Optional model/reasoning catalogues follow pi-delegate's contract: unavailable models
