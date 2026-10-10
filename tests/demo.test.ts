@@ -154,6 +154,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     let waitForCancel = false;
     let promptReady: (() => void) | undefined;
     let promptCancelled: (() => void) | undefined;
+    const navigation = ['Services', 'demo', 'Resources', 'Demo counter'];
     const ctx = {
       cwd: root, mode: 'tui', hasUI: true,
       ui: {
@@ -168,7 +169,19 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
         custom: async (factory: Function) => {
           let renderChanged!: () => void;
           let changed = new Promise<void>((resolve) => { renderChanged = resolve; });
-          const panel = factory({ terminal: { rows: 24 }, requestRender: () => renderChanged() }, { fg: (_color: string, text: string) => text }, {}, () => {});
+          let answer: unknown;
+          const panel = factory({ terminal: { rows: 24, columns: 80 }, requestRender: () => renderChanged() }, { fg: (_color: string, text: string) => text }, {}, (value: unknown) => { answer = value; });
+          if (panel.render(78)[1]?.startsWith('Gateway')) {
+            const target = navigation.shift();
+            if (!target) panel.handleInput('\u001b');
+            else {
+              for (let i = 0; i < 20 && !panel.render(78).includes(`→ ${target}`); i++) panel.handleInput('\u001b[B');
+              assert.ok(panel.render(78).includes(`→ ${target}`));
+              panel.handleInput('\r');
+            }
+            panel.dispose();
+            return answer;
+          }
           await changed;
           // The initial render starts loading; let the async read finish.
           while (panel.render(50).some((line: string) => line.includes('Loading'))) {
@@ -225,7 +238,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
       await assert.rejects(tool.execute('app', { name: 'checks__app', arguments: {} }, undefined, undefined, ctx), /app-only/);
       for (choice of ['Decline', 'Cancel']) assert.equal((await invoke()).isError, true);
       await assert.rejects(tool.execute('test', { name: 'demo__increment', arguments: { extra: 1 } }, undefined, undefined, ctx), /Invalid arguments/);
-      await ext.commands.get('gateway-panel').handler(uri, ctx);
+      await ext.commands.get('gateway').handler('', ctx);
       waitForCancel = true;
       const ready = new Promise<void>((resolve) => { promptReady = resolve; });
       const controller = new AbortController();

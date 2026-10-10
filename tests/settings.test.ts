@@ -11,7 +11,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 
 const root = resolve(import.meta.dirname, '..');
-test('operator settings stay private, route by service, and require confirmed schema-valid revisioned saves', { timeout: 30_000 }, async () => {
+test('operator settings stay private, route by service, and require confirmed schema-valid revisioned saves', { timeout: 30_000 }, async (t) => {
   const dir = await mkdtemp('/tmp/gateway-settings-');
   const config = join(dir, 'gateway.json');
   const service = `
@@ -72,13 +72,13 @@ test('operator settings stay private, route by service, and require confirmed sc
     loaded.runtime.flagValues.set('gateway-config', config);
     const ext = loaded.extensions[0];
     assert.deepEqual([...ext.tools.keys()].sort(), ['gateway_call', 'gateway_tools']);
-    let step = 0;
+    let step = 1;
+    const navigation = ['Services', 'alpha', 'Settings'];
     let confirmations = 0;
     const notices: string[] = [];
     const ctx = { cwd: root, hasUI: true, mode: 'tui', ui: {
       select: async (title: string, choices: string[]) => {
         switch (step++) {
-          case 0: assert.equal(title, 'MCP child-server settings'); return choices.find((s) => s.includes('alpha'));
           case 1: return choices.find((s) => s.includes('worker/model'));
           case 2: assert.ok(!choices.some((s) => s.includes('Missing'))); return choices.find((s) => s.includes('New model'));
           case 3: assert.deepEqual(choices, ['off']); return 'off';
@@ -107,7 +107,15 @@ test('operator settings stay private, route by service, and require confirmed sc
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => { result = value; });
         try {
           const lines: string[] = panel.render(98);
-          if (lines.some((line) => line.includes('JSON value'))) {
+          if (lines[1]?.startsWith('Gateway')) {
+            const target = navigation.shift();
+            if (!target) panel.handleInput('\u001b');
+            else {
+              for (let i = 0; i < 20 && !panel.render(98).includes(`→ ${target}`); i++) panel.handleInput('\u001b[B');
+              assert.ok(panel.render(98).includes(`→ ${target}`));
+              panel.handleInput('\r');
+            }
+          } else if (lines.some((line) => line.includes('JSON value'))) {
             const text = await ctx.ui.input();
             panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(text); panel.handleInput('\r');
           } else if (lines[1] === 'Save child-server settings?') {
@@ -126,7 +134,7 @@ test('operator settings stay private, route by service, and require confirmed sc
     const dispatch = async (event: string) => { for (const handler of ext.handlers.get(event) ?? []) await handler({ type: event }, ctx); };
     try {
       await dispatch('session_start');
-      await ext.commands.get('mcp-settings').handler('', ctx);
+      await ext.commands.get('gateway').handler('', ctx);
       assert.equal(confirmations, 2);
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
       // Close/reload creates new fixture state, so inspect the returned menu above for saved feedback.
@@ -201,11 +209,13 @@ test('operator settings stay private, route by service, and require confirmed sc
         schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]},note:{type:'string'}}},values:{size:'small',active:false,note:'old'}});
       // Reuse the overlay driver with this editor's scripted choice callbacks.
       choiceContext.ui.custom = async (factory: Function, options: {overlay:boolean}) => {
-        let result: unknown;
-        const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;});
+        let result: unknown, completed = false;
+        const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;completed=true;});
         try {
           assert.equal(options.overlay,true);
           const lines: string[] = panel.render(98);
+          t.mock.timers.tick(30_001);
+          assert.equal(completed, false, 'Taking time to review settings must not discard the draft');
           if(lines[1] === 'Save child-server settings?') {
             let preview = '';
             for(let i=0;i<8;i++) {
@@ -227,10 +237,13 @@ test('operator settings stay private, route by service, and require confirmed sc
           return result;
         } finally {panel.dispose();}
       };
-      await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
-        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}); updates++;
-        return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}};
-      }, new AbortController().signal, 1000);
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      try {
+        await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
+          assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}); updates++;
+          return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}};
+        }, new AbortController().signal, 1000);
+      } finally { t.mock.timers.reset(); }
       assert.equal(updates, 1);
     }
     // A client without the private operator environment gets no settings API.

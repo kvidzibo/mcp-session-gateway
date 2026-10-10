@@ -4,8 +4,8 @@ The gateway separates **package sources/installations**, **MCP service launch
 configuration**, and **service-owned settings/UI**. It never scans package folders
 for service configuration or imports package-specific management code.
 
-The Pi adapter's `/gateway-manager` handles inventory and explicitly confirmed
-preparation, activation, rollback and restart. These are operator actions, not
+The Pi adapter's `/gateway` menu groups inventory, preparation, activation and
+rollback under **Packages**, and restart under **Connection**. These are operator actions, not
 model tools or messages. No automatic updates, builds, activation or restart occur.
 
 ## Git main: managed configuration
@@ -74,9 +74,10 @@ can create a project-local Python environment.
 
 ## Workflow
 
-1. Open **`/gateway-manager`**. Inventory reads local metadata only; **c** checks
-   public sources, **r** refreshes locally. Arrow/Page keys scroll, Escape closes.
-2. Press **p**, select a managed package, then **Check source and prepare
+1. Open **`/gateway` → Packages**. **Installed versions** reads local metadata;
+   **Check for updates** contacts public sources. In the version view, **r** reads
+   locally, Arrow/Page keys scroll, and Escape goes back.
+2. Choose **Manage releases**, select a package, then **Check source and prepare
    install/update**. Approve the exact pinned target and command list.
 3. The manager downloads into a new release directory, builds, and runs every
    validation command. It publishes the prepared release only on success. Git
@@ -86,8 +87,8 @@ can create a project-local Python environment.
 4. Separately choose **Activate prepared version** and confirm. This atomically
    changes the version used by **future launches in all sessions sharing the
    store**. Existing processes continue using their old directories.
-5. To apply it to this session, return to inventory, press **s**, and confirm
-   **Restart gateway services**. It restarts **all children of this gateway**,
+5. To apply it to this session, return to **Gateway → Connection** and choose
+   **Restart gateway services…**, then confirm. It restarts **all children of this gateway**,
    not a selected child. Other Pi sessions are not restarted. Parent agent turns
    must be idle; background job count is unknown. The explicit warning states that
    active/queued jobs will be cancelled—finish them first or decline.
@@ -95,8 +96,8 @@ can create a project-local Python environment.
 Restart previews the old gateway's launch-snapshot service names separately from
 newly configured launches, so editing/removing a config entry cannot hide a child
 that will be stopped. The gateway advertises that snapshot in its private
-`gateway-services-v1` experimental capability; without it managed restart is
-unavailable. Restart uses the configuration and active versions at startup, which
+`gateway-services-v1` experimental capability; without it restarting a connected gateway is
+unavailable. A disconnected gateway can still be explicitly started for recovery. Restart uses the configuration and active versions at startup, which
 another session may have changed. The gateway run UUID changes; saved native UI
 conversation/branch selection is restored. Restart failure leaves the connection
 stopped: rollback and restart again explicitly, with no automatic retries/fallback.

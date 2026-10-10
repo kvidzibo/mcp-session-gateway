@@ -49,8 +49,8 @@ function supported(schema: ObjectValue): boolean {
   if (Array.isArray(schema.oneOf)) return schema.oneOf.length > 0 && schema.oneOf.every((entry) => object(entry) && primitive(entry.const));
   return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
 }
-type DialogOptions = { signal: AbortSignal; timeout: number; title?: string; actionLabel?: string };
-const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 1 } };
+type DialogOptions = { signal: AbortSignal; timeout?: number; title?: string; actionLabel?: string };
+const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 0 } };
 
 // Isolated overlays own their full height: editor widgets/footers cannot hide
 // controls. Native SelectList keeps options on single rows and follows selection.
@@ -61,7 +61,7 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
     let geometry = '';
     let usable = false;
     const cancel = () => done(undefined);
-    const timer = setTimeout(cancel, options.timeout);
+    const timer = options.timeout === undefined ? undefined : setTimeout(cancel, options.timeout);
     options.signal.addEventListener('abort', cancel, { once: true });
     return {
       render(width: number) {
@@ -99,7 +99,7 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
     let geometry = '', usable = false, complete = false;
     let seen = new Set<number>();
     const cancel = () => done(false);
-    const timer = setTimeout(cancel, options.timeout);
+    const timer = options.timeout === undefined ? undefined : setTimeout(cancel, options.timeout);
     options.signal.addEventListener('abort', cancel, { once: true });
     return {
       render(width: number) {
@@ -117,7 +117,7 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
         complete = seen.size === lines.length;
         const border = theme.fg('accent', '─'.repeat(width));
         return [border, theme.fg('accent', clean(options.title ?? 'Save child-server settings?')), '', ...lines.slice(offset, offset + page), '',
-          theme.fg(complete ? 'success' : 'warning', complete ? `Enter ${options.actionLabel ?? 'save'}  Esc cancel` : '↑/↓ PgUp/PgDn review ALL changes before Enter confirms'), border].map((line) => truncateToWidth(line, width));
+          theme.fg(complete ? 'success' : 'warning', complete ? `Enter ${options.actionLabel ?? 'save'}  Esc cancel` : width < 60 ? '↑↓/PgUp/PgDn review · Esc cancel' : '↑/↓ PgUp/PgDn review ALL changes before Enter confirms'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
@@ -175,7 +175,8 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
 export async function editSettings(ctx: ExtensionContext, initial: SettingsDocument,
   update: (revision: string, patch: ObjectValue) => Promise<SettingsDocument>, signal: AbortSignal, timeout: number): Promise<void> {
   let document = initial;
-  const options = { signal, timeout };
+  // Human navigation has no RPC deadline; shutdown still cancels the draft.
+  const options = { signal };
   let feedback = '';
   while (!signal.aborted) {
     const leaves = fields(document.schema);
@@ -208,7 +209,7 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
           break;
         } catch {
           // Uncertain writes and conflicts require a fresh get, never an automatic replay.
-          ctx.ui.notify('Settings save failed or conflicted. Reopen /mcp-settings to read current values; do not replay blindly.', 'error');
+          ctx.ui.notify('Settings save failed or conflicted. Reopen /gateway → Services → Settings to read current values; do not replay blindly.', 'error');
           return;
         }
       }

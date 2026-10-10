@@ -64,6 +64,9 @@ export class NativeUI {
     this.changed();
   }
 
+  // An advertised app can be reopened after a transient view-read failure.
+  has(service: string): boolean { return this.resources.has(service); }
+
   meta(service: string): Record<string, unknown> {
     return { [UI_CONTEXT]: ContextSchema.parse({
       conversationId: this.ctx?.sessionManager?.getSessionId() ?? this.ephemeralId,

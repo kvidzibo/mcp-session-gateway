@@ -53,9 +53,9 @@ Use the optional extension instead of adding the gateway to `mcp.json`; never re
 pi --extension /absolute/path/to/local-stdio-mcp-gateway/pi/gateway.ts --gateway-config /absolute/path/to/gateway.json
 ```
 
-The extension starts one stdio gateway on `session_start`, creates no process at load time, and closes it idempotently at shutdown. The gateway inherits Pi’s environment so `${VARIABLE}` config references work; service processes still receive only their configured environment plus SDK defaults. `gateway_tools` discovers live model-callable tools, `gateway_call` validates each call against its advertised JSON Schema (2020-12), and `/gateway-panel [gateway-resource-uri]` manually lists or reads resources. The adapter registers no resource tools; panel contents are not added to the conversation. An agent can still access the same OS through other tools: this routing is not a secrecy boundary. UI-only tools are omitted and rejected; tools visible to both model and app remain callable. The standalone gateway remains usable without Pi packages.
+The extension starts one stdio gateway on `session_start`, creates no process at load time, and closes it idempotently at shutdown. The gateway inherits Pi’s environment so `${VARIABLE}` config references work; service processes still receive only their configured environment plus SDK defaults. `gateway_tools` discovers live model-callable tools, `gateway_call` validates each call against its advertised JSON Schema (2020-12), and `/gateway` opens the operator menu. The adapter registers no resource tools; panel contents are not added to the conversation. An agent can still access the same OS through other tools: this routing is not a secrecy boundary. UI-only tools are omitted and rejected; tools visible to both model and app remain callable. The standalone gateway remains usable without Pi packages.
 
-Approvals use ordinary MCP `elicitation/create`, not an agent-visible tool result. Services must request a flat form with one required boolean field; other forms are cancelled. Allow once returns `accept` with that field set to `true`; Decline and Cancel remain distinct. No UI, timeout, disconnect, or aborted calls cannot grant approval. Dialogs are serialized, and incoming confirmations are cancelled while the panel is open. No credentials are collected. Services must check the decision before performing the operation.
+Approvals use ordinary MCP `elicitation/create`, not an agent-visible tool result. Services must request a flat form with one required boolean field; other forms are cancelled. Allow once returns `accept` with that field set to `true`; Decline and Cancel remain distinct. No UI, timeout, disconnect, or aborted calls cannot grant approval. Dialogs are serialized, and incoming confirmations are cancelled while gateway menus are open. No credentials are collected. Services must check the decision before performing the operation.
 
 Each service processes one forwarded request at a time, allowing stdio confirmations to be attributed to the active tool without custom request metadata. Separate services can run concurrently. Resource reads do not trigger approval prompts. Resource URIs are wrapped as `gateway-resource://<service>/<percent-encoded-original-uri>`; returned content URIs are wrapped too.
 
@@ -81,18 +81,50 @@ Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entrie
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
 
+## Operator menu
+
+The adapter registers **one command: `/gateway`**. It opens a private menu without
+starting a model turn:
+
+```text
+Gateway
+├─ Services → service
+│  ├─ Open app
+│  ├─ Settings
+│  └─ Resources → resource
+├─ Packages
+│  ├─ Installed versions
+│  ├─ Check for updates
+│  └─ Manage releases → package → prepare / activate / roll back / log
+└─ Connection
+   ├─ Connection details
+   └─ Restart gateway services…
+```
+
+Use **↑/↓** and **Enter**; **Escape** returns one level, closing only at the root.
+Menus remember your selection while open. Unavailable service features remain
+visible with an explanation. Service names come from configuration and the last
+launch, not a health check. Package/recovery menus remain usable when disconnected.
+Human navigation has no inactivity deadline; shutdown still cancels dialogs.
+
+The former `/gateway-manager`, `/gateway-ui`, `/mcp-settings`, and
+`/gateway-panel` commands have been removed; all actions are in these submenus.
+The model-facing `gateway_tools` and `gateway_call` tools are unchanged.
+
 ## Package manager
 
-The Pi adapter's **`/gateway-manager`** separates package installation/update
+**`/gateway` → Packages** separates package installation/update
 sources from service launch configuration and service-owned settings. Add a
 `packages` map and optional service `package` references alongside existing
 `mcpServers`; no Pinote/delegate-specific code or service UI support is required.
 
-- **c** checks public npm versions or HTTPS Git branch heads; **r** reads locally.
-- **p** prepares a new managed release, runs declared build/validation commands,
-  and offers separately confirmed activation or rollback for future launches.
-- **s** separately confirms restarting **all services in this gateway**, warning
-  that active/queued background jobs will be cancelled. Other sessions keep running.
+- **Installed versions** reads local metadata; **Check for updates** explicitly
+  checks public npm versions or HTTPS Git branch heads. Neither installs anything.
+- **Manage releases** selects a package to prepare/build/validate, activate, roll
+  back, or inspect its last preparation log. Writes require separate confirmation.
+- **Connection → Restart gateway services…** separately confirms restarting
+  **all services in this gateway**, warning that active/queued background jobs
+  will be cancelled. Other sessions keep running.
 
 Git sources default to **main**. Use `gateway.managed.example.json` as a template
 with your actual URL, commands and entry point. Managed services use
@@ -126,8 +158,8 @@ Queued/running jobs appear automatically **above the editor**, independent of
 parent activity. Cards show role, model/reasoning, task preview, elapsed/queue time,
 job ID and current/recent tool activity. Completed jobs remain for eight seconds;
 finished means **unverified**, not successful. Disconnects retain a stale warning
-and freeze the last-known clock instead of claiming completion. `/gateway-panel`
-opens the full resource JSON; the compact widget shows overflow counts on small
+and freeze the last-known clock instead of claiming completion. **`/gateway` →
+Services → service → Resources** opens the full resource JSON; the compact widget shows overflow counts on small
 terminals. Settings and approval dialogs remain usable while the widget is visible.
 
 The adapter owns one gateway connection for both tools and UI. It does not load
@@ -153,8 +185,7 @@ interpret delegate JSON. The adapter validates the declared format and caps it a
 
 ## Child-server settings
 
-With the optional Pi adapter, use **`/mcp-settings`** to select a child service, or
-**`/mcp-settings delegate`** to open one directly. Settings are discovered from the
+With the optional Pi adapter, use **`/gateway` → Services → service → Settings**. Settings are discovered from the
 child's schema, not hardcoded service names or the parent Pi model catalogue.
 Edits stay in a local draft until **Save changes** shows the exact changes and you
 confirm. Escape/Back discards the draft; declining a save leaves it editable.
@@ -198,7 +229,7 @@ Manual external changes may require collecting/cancelling work before restarting
 child. `/reload` restarts the gateway and its children—do not use it to save settings.
 
 Settings use authenticated custom RPC on the existing connections, never tools,
-resources or model messages. Pi's built-in MCP alternative has no `/mcp-settings`.
+resources or model messages. Pi's built-in MCP alternative has no gateway settings menu.
 The adapter creates no settings route outside TUI mode. This is routing isolation, **not
 a sandbox**: trusted services and agents with OS access can still inspect files/processes.
 See [the reusable protocol](docs/settings.md) for other clients and service authors.
@@ -206,7 +237,7 @@ See [the reusable protocol](docs/settings.md) for other clients and service auth
 ## Server-driven UI
 
 Services can supply menus, settings forms, previews, and footer text through the
-[native UI v1 protocol](docs/native-ui.md). Open `/gateway-ui [service]`; clicks and
+[native UI v1 protocol](docs/native-ui.md). Open **`/gateway` → Services → service → Open app**; clicks and
 keyboard actions go directly to the service without a model turn. The adapter is
 generic—Pinote screens and behavior live in Pinote's MCP server, not this package.
 UI state follows the Pi conversation/branch, separately from the gateway UUID.
@@ -301,4 +332,4 @@ npm run build
 pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.demo.json"
 ```
 
-Ask the model to discover `gateway_tools` and call `demo__increment`; approve or decline the one-shot prompt. Then run `/gateway-panel` and select **Demo counter**, or provide `gateway-resource://demo/demo%3A%2F%2Fcounter`; press `r` to refresh and Escape to close. The demo only increments an in-memory counter.
+Ask the model to discover `gateway_tools` and call `demo__increment`; approve or decline the one-shot prompt. Then open **`/gateway` → Services → demo → Resources → Demo counter**; press `r` to refresh and Escape to go back. The demo only increments an in-memory counter.

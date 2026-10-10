@@ -19,7 +19,7 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     const { loadExtensions } = await import(pathToFileURL(join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
     const loaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(loaded.errors, []);
-    assert.ok(loaded.extensions[0].commands.has('gateway-manager'));
+    assert.deepEqual([...loaded.extensions[0].commands.keys()], ['gateway']);
     assert.deepEqual([...loaded.extensions[0].tools.keys()], ['gateway_tools', 'gateway_call']);
     await mkdir(join(dir, 'installed'));
     await mkdir(join(dir, 'local'));
@@ -123,37 +123,36 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
 
     // Actual renderer/input loop; no service is launched and no model API exists.
     const uiRequests = requests;
-    const uiController = new AbortController();
-    await openManager({ ui: { custom: async (factory: Function) => {
-      let component: any, finished = false;
-      let ready: (() => void) | undefined;
-      let condition: (() => boolean) | undefined;
-      const terminal = { rows: 30, columns: 80 };
-      const rendered = () => component.render(terminal.columns).join('\n');
-      const idleWith = (text: string) => rendered().includes(text) && rendered().includes('c check sources');
-      const requestRender = () => queueMicrotask(() => { if (component && condition?.()) { const resolve = ready; condition = undefined; ready = undefined; resolve?.(); } });
-      const wait = (predicate: () => boolean) => new Promise<void>((resolve) => { ready = resolve; condition = predicate; requestRender(); });
-      component = factory({ terminal, requestRender }, { fg: (_: string, value: string) => value }, {}, () => { finished = true; });
-      try {
-        await wait(() => idleWith('service — Not checked'));
-        assert.equal(requests, uiRequests, 'Opening must not contact remote sources');
-        assert.match(rendered(), /external — Externally managed/);
-        for (const width of [1, 29, 30, 48, 80]) {
-          terminal.columns = width;
-          assert.ok(component.render(width).every((line: string) => visibleWidth(line) <= width));
-          assert.ok(component.render(width).length <= terminal.rows - 2);
-        }
-        terminal.columns = 80;
-        component.handleInput('c');
-        await wait(() => idleWith('service — Matches source'));
-        assert.equal(requests, uiRequests + 1);
-        component.handleInput('r');
-        await wait(() => idleWith('service — Not checked'));
-        assert.equal(requests, uiRequests + 1, 'Local refresh must not contact remote sources');
-        uiController.abort();
-        assert.equal(finished, true, 'Session shutdown must close the screen');
-      } finally { component.dispose(); }
-    }, notify: (message: string) => assert.fail(message) } } as any, config, uiController.signal);
+    for (const remote of [false, true]) {
+      const uiController = new AbortController();
+      await openManager({ ui: { custom: async (factory: Function) => {
+        let component: any, finished = false;
+        let ready: (() => void) | undefined;
+        let condition: (() => boolean) | undefined;
+        const terminal = { rows: 30, columns: 80 };
+        const rendered = () => component.render(terminal.columns).join('\n');
+        const idleWith = (text: string) => rendered().includes(text) && rendered().includes('r refresh locally');
+        const requestRender = () => queueMicrotask(() => { if (component && condition?.()) { const resolve = ready; condition = undefined; ready = undefined; resolve?.(); } });
+        const wait = (predicate: () => boolean) => new Promise<void>((resolve) => { ready = resolve; condition = predicate; requestRender(); });
+        component = factory({ terminal, requestRender }, { fg: (_: string, value: string) => value }, {}, () => { finished = true; });
+        try {
+          await wait(() => idleWith(remote ? 'service — Matches source' : 'service — Not checked'));
+          assert.equal(requests, uiRequests + Number(remote), 'Only the explicit source-check menu contacts remote sources');
+          assert.match(rendered(), /external — Externally managed/);
+          for (const width of [1, 29, 30, 48, 80]) {
+            terminal.columns = width;
+            assert.ok(component.render(width).every((line: string) => visibleWidth(line) <= width));
+            assert.ok(component.render(width).length <= terminal.rows - 2);
+          }
+          terminal.columns = 80;
+          component.handleInput('r');
+          await wait(() => idleWith('service — Not checked'));
+          assert.equal(requests, uiRequests + Number(remote), 'Local refresh must not contact remote sources');
+          uiController.abort();
+          assert.equal(finished, true, 'Session shutdown must close the screen');
+        } finally { component.dispose(); }
+      }, notify: (message: string) => assert.fail(message) } } as any, config, uiController.signal, remote);
+    }
     const pendingController = new AbortController();
     let started!: () => void;
     const startedRequest = new Promise<void>((resolve) => { started = resolve; });
