@@ -81,18 +81,28 @@ Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entrie
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
 
-## Package inventory
+## Package manager
 
-The Pi adapter's **`/gateway-manager`** shows declared installed versions and
-optional update sources without reading service configuration files. Add a
+The Pi adapter's **`/gateway-manager`** separates package installation/update
+sources from service launch configuration and service-owned settings. Add a
 `packages` map and optional service `package` references alongside existing
-`mcpServers` entries; see [the package contract and example](docs/packages.md).
+`mcpServers`; no Pinote/delegate-specific code or service UI support is required.
 
-Opening the screen reads local metadata only. Press **c** to check public npm
-versions or HTTPS Git branch heads, **r** to refresh locally, and Escape to close.
-Unlinked services and local folders are externally managed. This first stage is
-**read-only**: no installation, updates, service restarts, or background checks.
-No Pinote/delegate-specific code or service UI support is required.
+- **c** checks public npm versions or HTTPS Git branch heads; **r** reads locally.
+- **p** prepares a new managed release, runs declared build/validation commands,
+  and offers separately confirmed activation or rollback for future launches.
+- **s** separately confirms restarting **all services in this gateway**, warning
+  that active/queued background jobs will be cancelled. Other sessions keep running.
+
+Git sources default to **main**. Use `gateway.managed.example.json` as a template
+with your actual URL, commands and entry point. Managed services use
+`{{packageRoot}}`; before first activation they stay stopped. Existing folders
+remain externally managed and are never silently adopted or overwritten.
+
+Opening inventory stays read-only. There are no automatic updates or restarts.
+Managed builds run trusted code with user permissions and require POSIX; Git
+inspection requires Git 2.45+. See [configuration, confirmations, storage,
+rollback and recovery](docs/packages.md) before enabling management.
 
 ## Live delegate panel
 
@@ -271,7 +281,7 @@ An unwritable log prevents startup; a later write failure reports to stderr and 
 
 ## Lifecycle and validation
 
-All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. The upstream handshake happens first so child clients only advertise form elicitation when the harness supports it. Tool and resource requests wait for child startup; upstream EOF is observed throughout. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed. Cancelling or timing out a started service request (including resource reads) retires that service connection and removes its tools/resources until gateway restart (`/reload` in the adapter). MCP cancellation has no completion acknowledgement; retiring prevents late confirmations being attributed to another call. Other services stay connected.
+All launched servers must initialize successfully. Managed services without an active release stay stopped until preparation, activation and a separately confirmed restart. Startup fails and awaits child cleanup if any launched server fails. The upstream handshake happens first so child clients only advertise form elicitation when the harness supports it. Tool and resource requests wait for child startup; upstream EOF is observed throughout. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed. Cancelling or timing out a started service request (including resource reads) retires that service connection and removes its tools/resources until gateway restart (`/reload` in the adapter). MCP cancellation has no completion acknowledgement; retiring prevents late confirmations being attributed to another call. Other services stay connected.
 
 Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). Final bounded drains allow up to 100 ms each for remaining child diagnostics and buffered gateway stderr. This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and child diagnostics use stderr and the log file; stdout is reserved for MCP messages. A failed gateway stderr stream triggers cleanup and suppresses further stderr output; file logging remains available during cleanup.
 

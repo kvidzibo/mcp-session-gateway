@@ -3,11 +3,13 @@ import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-wo
 import type { GatewayConfig } from '../src/config.js';
 import { inspectPackage, type PackageStatus } from '../src/packages.js';
 import { clean } from './settings.js';
+import { PackageManager } from '../src/package-manager.js';
 
 /** Operator-only local inventory. Opening/refreshing never contacts update sources. */
-export async function openManager(ctx: ExtensionContext, config: GatewayConfig, signal: AbortSignal): Promise<void> {
+export async function openManager(ctx: ExtensionContext, config: GatewayConfig, signal: AbortSignal): Promise<'manage' | 'restart' | undefined> {
   if (signal.aborted) return;
-  await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+  const manager = new PackageManager(config.packageStore);
+  return ctx.ui.custom<'manage' | 'restart' | undefined>((tui, theme, _keys, done) => {
     let controller = new AbortController();
     let statuses = new Map<string, PackageStatus>();
     let busy = false, disposed = false, offset = 0, maxOffset = 0, page = 1;
@@ -24,7 +26,15 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
         while (!operation.aborted) {
           const pkg = config.packages[next++];
           if (!pkg) return;
-          const status = await inspectPackage(pkg, remote, operation);
+          let status: PackageStatus;
+          try {
+            status = await inspectPackage(await manager.installed(pkg, operation), remote, operation);
+            if (pkg.managed) {
+              const state = await manager.state(pkg, operation);
+              status.notes = status.notes.filter((note) => !note.startsWith('No installedPath'));
+              status.notes.push(`Managed · active: ${state.active?.version ?? 'None'} · prepared: ${state.prepared?.version ?? 'None'}`);
+            }
+          } catch (error) { status = { name: pkg.name, status: 'Unavailable', notes: [String(error)] }; }
           if (operation.aborted || disposed) return;
           statuses.set(pkg.name, status);
           tui.requestRender();
@@ -35,14 +45,15 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
         if (!operation.aborted && !disposed) { busy = false; tui.requestRender(true); }
       });
     };
-    const close = () => { controller.abort(); done(); };
-    signal.addEventListener('abort', close, { once: true });
+    const close = (action?: 'manage' | 'restart') => { controller.abort(); done(action); };
+    const cancel = () => close();
+    signal.addEventListener('abort', cancel, { once: true });
     refresh(false);
     return {
       render(width: number) {
         width = Math.max(1, width);
         const height = Math.max(1, tui.terminal.rows - 2);
-        if (height < 10 || width < 30) return [truncateToWidth('Enlarge terminal; Esc closes', width)];
+        if (height < 12 || width < 30) return [truncateToWidth('Enlarge terminal; Esc closes', width)];
         const lines: string[] = [];
         for (const pkg of config.packages) {
           const status = statuses.get(pkg.name);
@@ -63,19 +74,22 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
         }
         if (!config.packages.length) lines.unshift('No package sources configured. See docs/packages.md.', '');
         const body = lines.flatMap((line) => wrapTextWithAnsi(clean(line).replace(/\n/g, ' '), width));
-        page = height - 8;
+        page = height - 9;
         maxOffset = Math.max(0, body.length - page);
         offset = Math.min(offset, maxOffset);
         const border = theme.fg('accent', '─'.repeat(width));
-        return [border, theme.fg('accent', 'Gateway manager · read-only'),
+        return [border, theme.fg('accent', 'Gateway manager · package status'),
           theme.fg('muted', 'Declared installs, not running versions.'), '',
           ...body.slice(offset, offset + page), '',
           theme.fg('muted', busy ? 'Reading…  r restart local read' : 'c check sources  r local read'),
+          theme.fg('muted', 'p manage  s restart services'),
           theme.fg('muted', '↑↓/PgUp/PgDn scroll  Esc close'),
           border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) close();
+        else if (data === 'p') close('manage');
+        else if (data === 's') close('restart');
         else if (data === 'c' && !busy) refresh(true);
         else if (data === 'r') refresh(false);
         else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
@@ -85,7 +99,7 @@ export async function openManager(ctx: ExtensionContext, config: GatewayConfig, 
         tui.requestRender();
       },
       invalidate() {},
-      dispose() { disposed = true; controller.abort(); signal.removeEventListener('abort', close); },
+      dispose() { disposed = true; controller.abort(); signal.removeEventListener('abort', cancel); },
     };
   }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
 }

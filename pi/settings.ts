@@ -49,7 +49,7 @@ function supported(schema: ObjectValue): boolean {
   if (Array.isArray(schema.oneOf)) return schema.oneOf.length > 0 && schema.oneOf.every((entry) => object(entry) && primitive(entry.const));
   return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
 }
-type DialogOptions = { signal: AbortSignal; timeout: number };
+type DialogOptions = { signal: AbortSignal; timeout: number; title?: string; actionLabel?: string };
 const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 1 } };
 
 // Isolated overlays own their full height: editor widgets/footers cannot hide
@@ -116,8 +116,8 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
         for (let i = offset; i < Math.min(lines.length, offset + page); i++) seen.add(i);
         complete = seen.size === lines.length;
         const border = theme.fg('accent', '─'.repeat(width));
-        return [border, theme.fg('accent', 'Save child-server settings?'), '', ...lines.slice(offset, offset + page), '',
-          theme.fg(complete ? 'success' : 'warning', complete ? 'Enter save  Esc cancel' : '↑/↓ PgUp/PgDn review ALL changes before Enter saves'), border].map((line) => truncateToWidth(line, width));
+        return [border, theme.fg('accent', clean(options.title ?? 'Save child-server settings?')), '', ...lines.slice(offset, offset + page), '',
+          theme.fg(complete ? 'success' : 'warning', complete ? `Enter ${options.actionLabel ?? 'save'}  Esc cancel` : '↑/↓ PgUp/PgDn review ALL changes before Enter confirms'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();

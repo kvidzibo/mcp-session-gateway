@@ -1,144 +1,212 @@
-# Package inventory and management contract
+# Generic package management
 
-The gateway separates three concerns:
+The gateway separates **package sources/installations**, **MCP service launch
+configuration**, and **service-owned settings/UI**. It never scans package folders
+for service configuration or imports package-specific management code.
 
-- **Packages:** installation identity and update source, independent of MCP.
-- **Services:** existing `mcpServers` commands, arguments, environment and cwd.
-- **Service settings/UI:** discovered from a running service through the
-  [settings](settings.md) and [native UI](native-ui.md) protocols. The manager
-  never searches package folders for service configuration files.
+The Pi adapter's `/gateway-manager` handles inventory and explicitly confirmed
+preparation, activation, rollback and restart. These are operator actions, not
+model tools or messages. No automatic updates, builds, activation or restart occur.
 
-Version 0.8 adds **read-only inventory**, not an installer. No service changes,
-package updates, restarts, startup network checks, or automatic notifications occur.
-No package manifest specific to this gateway is required. Standard MCP servers
-need not implement either UI protocol to appear in the inventory.
+## Git main: managed configuration
 
-## Configuration
-
-Keep existing launch entries; optionally add `packages` and link services with
-`package`. Several services can reference one package; unlinked packages can also
-be inspected. Existing configurations work unchanged.
+Use a Git source tracking `main` (also the default). The manager clones its own
+copies; it never adopts, pulls into, or rewrites an existing development checkout.
 
 ```json
 {
+  "packageStore": ".gateway-packages",
   "packages": {
     "example": {
-      "source": { "type": "npm", "name": "@vendor/example-mcp", "tag": "latest" },
-      "installedPath": "/opt/services/node_modules/@vendor/example-mcp"
-    },
-    "worker": {
       "source": {
         "type": "git",
-        "url": "https://github.com/vendor/worker.git",
+        "url": "https://github.com/vendor/example-mcp.git",
         "branch": "main"
       },
-      "installedPath": "/opt/services/worker"
-    },
-    "development": {
-      "source": { "type": "local", "path": "./development-service" }
+      "managed": {
+        "build": [
+          { "command": "npm", "args": ["ci"] },
+          { "command": "npm", "args": ["run", "build"] }
+        ],
+        "validate": [{ "command": "npm", "args": ["test"] }],
+        "timeoutMs": 300000
+      }
     }
   },
   "mcpServers": {
     "example": {
       "package": "example",
       "command": "node",
-      "args": ["/opt/services/node_modules/@vendor/example-mcp/server.js"]
-    },
-    "other": { "command": "other-mcp" }
+      "args": ["{{packageRoot}}/dist/server.js"],
+      "cwd": "{{packageRoot}}"
+    }
   }
 }
 ```
 
-Package IDs use lowercase letters, digits and hyphens, starting with a letter.
-At most 128 packages are allowed. Source and package objects reject unknown keys;
-service package references must exist. Paths resolve relative to the gateway
-configuration file; use absolute paths when sharing it. Local sources use
-`source.path`, not `installedPath`.
+Replace the URL, build/validation commands and entry point with the service's
+actual instructions. `gateway.managed.example.json` is a starting template, not
+an automatically installable demo. No gateway-specific package manifest is needed.
+Non-Node Git packages work too: for example a declared `uv sync --locked` step
+can create a project-local Python environment.
 
-`installedPath` is optional for npm/Git. Omitting it means **installed version
-unknown**, not "not installed". It is an explicitly declared installation, not
-proof that the service command launches that copy. No PATH lookup, global npm
-scan, `--version` execution, service-config inspection, or installation happens.
-The gateway does not rewrite commands to match these paths.
+- `packageStore` defaults to `.gateway-packages` beside the configuration. Relative
+  paths resolve there, not against Pi's cwd. Keep it out of Git. Multiple sessions
+  using the same store share activation state and per-package write locks.
+- `managed` opts into gateway-owned copies. It cannot accompany `installedPath`
+  or a local source. No automatic migration from existing folders occurs.
+- `build` is optional; `validate` requires at least one command. Commands are
+  executables plus literal arguments, **not shell strings**. `cwd` defaults to
+  the package root; a subdirectory such as `pi` must resolve inside that root.
+  Each command has the package's timeout (default five minutes, maximum one hour).
+- The complete source, pinned version, commands, store and effects are previewed
+  before preparation. Every preview line must be reviewed before Enter confirms.
+  Downloaded code and build/validation commands are trusted executable code with
+  your OS permissions, **not sandboxed**. Only configure trusted packages/commands.
+- Builds get a private home/cache and a minimal environment with PATH/locale,
+  not service credentials or the parent agent's API keys. Declare required setup
+  in the commands; private package registries and credential setup are not supported.
+- `{{packageRoot}}` is replaced in linked service commands, arguments, cwd and env
+  at gateway startup. Managed launches must reference it. It is not a shell
+  expression. `packageRoot` placeholders are rejected on external services.
+- Before first activation a managed service stays stopped, so the manager remains
+  usable to install it. An invalid state/missing active directory fails closed.
 
-### Source adapters
+## Workflow
 
-| Source | Local inspection | Explicit remote check |
-|---|---|---|
-| `npm` | `installedPath/package.json`; name must match and version must be valid semver | Public `registry.npmjs.org`, specified dist-tag (default `latest`) |
-| `git` | Repository-root HEAD and dirty state, including untracked files | Public HTTPS repository, exact configured branch via `git ls-remote` |
-| `local` | Folder existence; optional `package.json` version | None; externally managed |
-| Service without `package` | None | None; externally managed |
+1. Open **`/gateway-manager`**. Inventory reads local metadata only; **c** checks
+   public sources, **r** refreshes locally. Arrow/Page keys scroll, Escape closes.
+2. Press **p**, select a managed package, then **Check source and prepare
+   install/update**. Approve the exact pinned target and command list.
+3. The manager downloads into a new release directory, builds, and runs every
+   validation command. It publishes the prepared release only on success. Git
+   requires a clean active checkout and a fast-forward ancestry relationship;
+   changed HEAD, divergence and an upstream branch moving since preview all fail
+   closed. Build output must be ignored by Git, not dirty tracked/untracked source.
+4. Separately choose **Activate prepared version** and confirm. This atomically
+   changes the version used by **future launches in all sessions sharing the
+   store**. Existing processes continue using their old directories.
+5. To apply it to this session, return to inventory, press **s**, and confirm
+   **Restart gateway services**. It restarts **all children of this gateway**,
+   not a selected child. Other Pi sessions are not restarted. Parent agent turns
+   must be idle; background job count is unknown. The explicit warning states that
+   active/queued jobs will be cancelled—finish them first or decline.
 
-Npm/Git are **tracked sources**, not gateway-owned installations yet. A package
-can be non-Node: Git uses commit IDs; local folders work without `package.json`.
-No package code or lifecycle scripts run during inspection. Manifests must be
-regular files (not symlinks/devices/FIFOs), limited to 256 KB; reads enforce the
-limit even if the file grows after opening.
+Restart uses the configuration and active versions at startup, which another
+session may have changed. The gateway run UUID changes; saved native UI
+conversation/branch selection is restored. Restart failure leaves the connection
+stopped: rollback and restart again explicitly, with no automatic retries/fallback.
 
-Initial limits: public npm registry only; public HTTPS Git URLs without embedded
-credentials, query or fragment; branch tracking only (no tags/commit pins).
-URLs containing backslashes, whitespace or control characters are rejected;
-Git receives the validated canonical URL to avoid parser differences.
-No `.npmrc`, authentication setup, SSH, or private registries are consumed.
-Git **2.45+** is required for Git inspection. Every Git command uses
-`--no-lazy-fetch`: partial-clone metadata cannot silently fetch missing objects,
-and older Git fails closed rather than ignoring an unfamiliar environment flag.
-Git checks suppress credential helpers, askpass programs, terminal prompts, hooks,
-fsmonitor and optional index writes. Git subprocess home-directory and netrc
-lookups point to the null device, not your personal authentication files.
-They do not fetch,
-checkout, install, build, or change remote-tracking refs. Dirty-state inspection
-is skipped when clean/process filters are configured, since `git status` can run
-them. Submodule contents are not inspected. Configuration and local repositories
-must still be trusted and not adversarially changed during inspection; these checks
-are not a sandbox.
+**Rollback** separately confirms switching future launches to the previous active
+release. It does not restart processes, rebuild code, or roll back external data
+migrations. Old release directories are retained, so existing processes and
+previous versions remain usable. Commands must keep persistent application data
+outside release directories. Absolute paths in virtual environments remain valid:
+release directories are built in their final location, never renamed after build.
 
-## Pi status screen
+## npm and external sources
 
-Load the normal Pi gateway adapter with `--gateway-config`, then open
-**`/gateway-manager`**. This operator screen is not a model tool, sends no model
-messages, and needs no service-specific extension. It can inspect configuration
-even if a child service failed to start.
+For managed npm packages, replace `source` with:
 
-- Opening the screen or **r** reads local metadata only. Reopen to reread config.
-- **c** explicitly checks all configured npm/Git sources (up to four concurrent).
-  This contacts the registry/repositories in your configuration. Each remote
-  operation has a ten-second timeout and bounded output.
-- **↑/↓**, **PgUp/PgDn** scroll; **Escape** closes and cancels pending checks.
-- Results are session-local to the open screen, not persisted or polled. Refresh
-  clears previous results; successful checks display a UTC timestamp. Shutdown
-  and `/reload` close the screen and cancel pending checks.
+```json
+{ "type": "npm", "name": "@vendor/example-mcp", "tag": "latest" }
+```
 
-The display reports declared installed versions, **not running service versions**.
-A newer npm target is "Update available"; a lower target is "Installed newer than
-target", never a suggested upgrade. Git shows "Remote differs (ancestry unknown)"
-because a changed hash is not proof of a safe fast-forward. Dirty checkouts are
-flagged separately. Unknown local versions and failed remote checks remain explicit;
-one package failure does not prevent other results.
+The tag defaults to `latest`. Preparation pins the resolved semver and runs
+`npm install --ignore-scripts` in a new private prefix. Automatic dependency
+lifecycle scripts are disabled. If required, explicitly declare trusted build
+commands such as `npm rebuild`. `packageRoot` is the installed package directory,
+not the prefix. Validation must suit the published package (development/test files
+may not be published). Lower npm targets are refused for preparation; switching
+back uses the separately approved previous-release rollback action.
 
-## Next management stage (not implemented)
+Without `managed`, existing read-only inventory remains unchanged:
 
-Approved updates should use source-specific adapters, not service-specific code:
-show exact changes, stage/build/validate separately, reject dirty or divergent Git
-updates, and retain the previous runnable installation where possible. Installation
-ownership, locks across Pi sessions, build commands, and activation/rollback need
-an explicit contract before write actions are introduced. Treat build commands as
-trusted executable code, not harmless metadata.
+```json
+{
+  "packages": {
+    "tracked": {
+      "source": { "type": "npm", "name": "@vendor/example-mcp" },
+      "installedPath": "/opt/services/node_modules/@vendor/example-mcp"
+    },
+    "development": { "source": { "type": "local", "path": "./development-service" } }
+  },
+  "mcpServers": { "other": { "command": "other-mcp" } }
+}
+```
 
-**Updating an installation and restarting a service are separate approvals.**
-A shared installation can affect future launches in several sessions; a running
-worker must not be silently interrupted. Adding/removing/enabling services and
-opening their settings/UI from this menu are also follow-up work. Pi's own
-extension-package manager remains separate; this contract tracks MCP service
-packages and does not modify Pi settings or load extensions.
+Existing npm/Git installations may declare `installedPath`; omission means the
+installed version is unknown, not necessarily absent. Local sources use
+`source.path`. No PATH/global-npm scan, `--version` execution or service-settings
+inspection occurs. Unlinked services/local folders remain externally managed.
+A `package` reference links inventory but does not prove an external command
+launches that installation. Several services may link to one package.
+
+Package IDs use lowercase letters, digits and hyphens, starting with a letter;
+at most 128 are allowed. Source/package objects reject unknown keys and service
+references must exist. All unchanged `mcpServers`/legacy `servers` entries continue
+to work. Pi's own extension-package manager is separate; this manager does not
+edit Pi settings, load extensions, register new services or enable/disable entries.
+Edit configuration explicitly and reload to change that wiring.
+
+## Checks and safety limits
+
+- Public npm registry only; public HTTPS Git branch sources only. No SSH, private
+  registries, embedded URL credentials, tags or commit-pin source declarations.
+  URLs reject whitespace, backslashes and control characters; Git receives the
+  canonical validated URL. No service UI protocol is needed for package management.
+- Git **2.45+** is required. Metadata commands use `--no-lazy-fetch`; older Git
+  fails closed. No implicit partial-clone fetches, credential helpers, askpass,
+  personal netrc lookup, hooks, fsmonitor or optional index writes. Metadata
+  checks never fetch, checkout or build. Confirmed preparation is the separate
+  code-download/build path.
+- Read-only dirty inspection is unavailable when clean/process filters are
+  configured; lifecycle actions reject those checkouts rather than execute filters.
+  Submodule contents are not inspected or initialized automatically. Repositories
+  and config must be trusted and not adversarially changed during an operation.
+- Metadata manifests must be regular files, not symlinks/FIFOs/devices; reads
+  verify the opened handle and enforce a 256 KB cap. Source checks are bounded,
+  cancellable and limited to four concurrent operations. Each remote metadata
+  request has a ten-second timeout.
+- Versions describe declared installations, not running processes. npm distinguishes
+  newer/older targets. Git inventory reports differing hashes as **ancestry unknown**;
+  preparation performs the actual ancestry check in the new clone.
+- Managed builds currently require **POSIX** for process-group termination.
+  Escape/shutdown cancels pending work, terminates the command group, and waits
+  for cleanup before finishing. Detached/unmanaged descendants are unsupported;
+  trusted scripts must not daemonize or detach workers.
+- State uses revisions, per-package exclusive lock files and atomic replacement.
+  A stale preview never overwrites another session's activation. No operation is
+  replayed automatically after an uncertain failure: reread state first.
+
+## Store, logs and recovery
+
+The store contains a format marker, package `state.json`, `releases/<UUID>` and
+`logs/<UUID>.log`. Managed paths and state are not a secret boundary. Downloaded
+code has ordinary user permissions and can access the rest of the system.
+
+Preparation logs combine stdout/stderr, are owner-only and capped at 8 MB. They
+may contain sensitive application diagnostics. **View last preparation log**
+shows a bounded recent tail privately, including failed/cancelled attempts.
+Failed preparations remove only their new staging release; active/prepared
+versions are preserved. An interrupted process may leave an orphan release or
+`.lock`; this never authorizes automatic activation or retry.
+
+There is no garbage collection or automatic stale-lock deletion. After verifying
+that the recorded PID and its command group have stopped, an operator can remove
+that package's stale `.lock` manually. Never remove a live lock. Preserve all
+releases referenced by state or still used by any running session; shut services
+down before manually reclaiming unreferenced directories. Store source identity
+cannot be silently changed—use a new package ID for an unrelated source/branch.
 
 ## Validation
 
-Run `npm run check`, `npm test`, and `npm run build`. The package inventory test
-uses temporary installations and mocked registry metadata, verifies local-only
-opening, version comparison, failed/unknown metadata, cancellation and rendering,
-rejects executable Git filters and non-regular/oversized manifests, and verifies
-Git lazy-fetch/askpass/netrc guards and fail-closed behavior with older Git.
-For visual checks use an isolated Pi profile and project under Xvfb with private
-D-Bus; never point test launch commands at your normal task database or workers.
+Run `npm run check`, `npm test`, and `npm run build`. The inventory case covers
+read-only checks and Git/manifest guards. One focused lifecycle case exercises
+real temporary Git repositories and MCP services, npm subprocess wiring, prepare/
+activate/rollback isolation, stale revisions, dirty/divergent checkouts, validation
+failure/log retention, lock contention, process-group cancellation and operator
+confirmation/decline. It does not install into personal directories.
+
+Visual checks use Xvfb, private D-Bus and temporary Pi HOME/profile/project/store.
+Never use production task databases/workers as test fixtures.
