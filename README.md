@@ -189,6 +189,8 @@ With the optional Pi adapter, use **`/gateway` → Services → service → Sett
 child's schema, not hardcoded service names or the parent Pi model catalogue.
 Edits stay in a local draft until **Save changes** shows the exact changes and you
 confirm. Escape/Back discards the draft; declining a save leaves it editable.
+Type in settings or choice lists to filter immediately by case-insensitive words
+(including model names/providers); Backspace edits the search, and Escape goes back.
 Scrollable overlay dialogs keep controls visible even with editor widgets/custom
 footers. Review every preview line before Enter can save; resizing resets that
 review. Settings require TUI mode and cannot overlap one-shot approval prompts.

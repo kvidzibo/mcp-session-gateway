@@ -57,36 +57,60 @@ const overlay = { overlay: true, overlayOptions: { width: '100%' as const, ancho
 export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: DialogOptions): Promise<string | undefined> {
   if (options.signal.aborted || !choices.length) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+    const input = new Input();
+    const items = choices.map((label, i) => ({ value: String(i), label: label.replace(/\n/g, ' ') }));
+    let filtered = items;
+    let query = '', capacity = 1;
     let list: SelectList | undefined;
     let geometry = '';
     let usable = false;
+    const rebuild = (preserve = false) => {
+      const selected = preserve ? list?.getSelectedItem()?.value : undefined;
+      list = new SelectList(filtered, capacity, {
+        selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
+        description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => s,
+      });
+      list.setSelectedIndex(Math.max(0, filtered.findIndex((item) => item.value === selected)));
+      list.onSelect = (item) => { if (!options.signal.aborted) done(choices[Number(item.value)]); };
+    };
     const cancel = () => done(undefined);
     const timer = options.timeout === undefined ? undefined : setTimeout(cancel, options.timeout);
     options.signal.addEventListener('abort', cancel, { once: true });
     return {
+      get focused() { return input.focused; },
+      set focused(value: boolean) { input.focused = value; },
       render(width: number) {
         geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
         const height = Math.max(1, tui.terminal.rows - 2);
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 7));
-        const selected = Number(list?.getSelectedItem()?.value ?? 0);
-        list = new SelectList(choices.map((label, i) => ({ value: String(i), label: label.replace(/\n/g, ' ') })), Math.max(1, height - heading.length - 6), {
-          selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
-          description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => s,
-        });
-        list.setSelectedIndex(selected);
-        list.onSelect = (item) => { if (!options.signal.aborted) done(choices[Number(item.value)]); };
-        list.onCancel = cancel;
+        const nextCapacity = Math.max(1, height - heading.length - 6);
+        if (!list || capacity !== nextCapacity) { capacity = nextCapacity; rebuild(true); }
         const border = theme.fg('accent', '─'.repeat(width));
-        return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...list.render(width), '', theme.fg('muted', '↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
+        const results = filtered.length ? list!.render(width) : [theme.fg('muted', 'No matching choices')];
+        return [border, ...heading.map((s) => theme.fg('accent', s)),
+          ...input.render(width - 8).map((line) => `${theme.fg('muted', 'Search: ')}${line}`),
+          ...results, '', theme.fg('muted', width < 40 ? '↑↓ Enter select Esc back' : 'Type to filter  ↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
-        else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) list?.handleInput(data);
+        else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) {
+          if (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.enter) ||
+              matchesKey(data, Key.ctrl('p')) || matchesKey(data, Key.ctrl('n'))) list?.handleInput(data);
+          else {
+            input.handleInput(data);
+            if (query !== input.getValue()) {
+              query = input.getValue();
+              const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+              filtered = items.filter((item) => terms.every((term) => item.label.toLowerCase().includes(term)));
+              rebuild();
+            }
+          }
+        }
         tui.requestRender();
       },
-      invalidate() {},
+      invalidate() { input.invalidate(); list?.invalidate(); },
       dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
     };
   }, overlay);
@@ -171,6 +195,26 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
   }, overlay);
 }
 
+/** Compact pure, distinct constant alternatives without changing validation semantics.
+ * Keep the original schema for titles/UI; constrained or duplicate branches stay oneOf.
+ */
+export function settingsValidationSchema(schema: ObjectValue): ObjectValue {
+  // A reference may target a oneOf branch by JSON Pointer: never remove its path.
+  if (/"\$(?:ref|dynamicRef)":/.test(JSON.stringify(schema))) return schema;
+  const copy = structuredClone(schema);
+  for (const { schema: leaf } of fields(copy)) {
+    if (Object.hasOwn(leaf, 'enum') || !Array.isArray(leaf.oneOf) || !leaf.oneOf.length) continue;
+    if (!leaf.oneOf.every((entry) => object(entry) && primitive(entry.const) &&
+      Object.keys(entry).every((key) => key === 'const' ||
+        (['title', 'description'].includes(key) && typeof entry[key] === 'string')))) continue;
+    const values = leaf.oneOf.map((entry) => (entry as ObjectValue).const);
+    if (new Set(values).size !== values.length) continue;
+    leaf.enum = values;
+    delete leaf.oneOf;
+  }
+  return copy;
+}
+
 /** Schema-driven operator editor; no parent model catalogue, tool calls or model messages. */
 export async function editSettings(ctx: ExtensionContext, initial: SettingsDocument,
   update: (revision: string, patch: ObjectValue) => Promise<SettingsDocument>, signal: AbortSignal, timeout: number): Promise<void> {
@@ -182,9 +226,8 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
     const leaves = fields(document.schema);
     if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
     const draft = structuredClone(document.values);
-    const ajv = new Ajv2020({ allErrors: true, strict: false });
-    (addFormats as unknown as FormatsPlugin)(ajv);
-    const valid = ajv.compile(document.schema);
+    // Browsing/cancelling must not compile a potentially huge service schema.
+    let validation: { ajv: Ajv2020; valid: ReturnType<Ajv2020['compile']> } | undefined;
     // Only inline primitive controls are editable. Full schema validation still applies on save.
     const editable = (field: Field) => document.writable && !document.conflict && !field.readonly &&
       supported(field.schema);
@@ -197,7 +240,12 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
       if (!choice || choice === 'Back' || signal.aborted) return;
       if (choice === save) {
         if (!changes.length || !document.writable || document.conflict) continue;
-        if (!valid(draft)) { ctx.ui.notify(clean(ajv.errorsText(valid.errors)), 'error'); continue; }
+        if (!validation) {
+          const ajv = new Ajv2020({ allErrors: true, strict: false });
+          (addFormats as unknown as FormatsPlugin)(ajv);
+          validation = { ajv, valid: ajv.compile(settingsValidationSchema(document.schema)) };
+        }
+        if (!validation.valid(draft)) { ctx.ui.notify(clean(validation.ajv.errorsText(validation.valid.errors)), 'error'); continue; }
         const patch: ObjectValue = {};
         for (const field of changes) put(patch, field.path, at(draft, field.path));
         const preview = changes.map((f) => `${pathLabel(f.path)}: ${display(at(document.values, f.path))} → ${display(at(draft, f.path))}`).join('\n');
