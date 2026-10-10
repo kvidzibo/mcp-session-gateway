@@ -12,10 +12,13 @@ const branchSchema = z.string().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._/
   .refine((value) => !value.includes('..') && value.split('/').every((part) => part && !part.startsWith('.') && !part.endsWith('.') && !part.endsWith('.lock')));
 const httpsURL = z.string().max(2048).refine((value) => {
   try {
+    // WHATWG and Git/libcurl disagree about backslashes and stripped whitespace.
+    if (value.includes('\\') || /[\s\u0000-\u001f\u007f-\u009f]/u.test(value)) return false;
     const url = new URL(value);
     return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password && !url.search && !url.hash;
   } catch { return false; }
-}, 'Use an HTTPS repository URL without credentials, query or fragment');
+}, 'Use an HTTPS repository URL without credentials, whitespace, backslashes, query or fragment')
+  .transform((value) => new URL(value).href);
 const sourceSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('npm'), name: z.string().max(214).regex(/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/), tag: z.string().max(100).regex(/^[a-zA-Z][a-zA-Z0-9._-]*$/).default('latest') }).strict(),
   z.object({ type: z.literal('git'), url: httpsURL, branch: branchSchema }).strict(),

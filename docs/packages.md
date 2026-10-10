@@ -78,6 +78,8 @@ limit even if the file grows after opening.
 
 Initial limits: public npm registry only; public HTTPS Git URLs without embedded
 credentials, query or fragment; branch tracking only (no tags/commit pins).
+URLs containing backslashes, whitespace or control characters are rejected;
+Git receives the validated canonical URL to avoid parser differences.
 No `.npmrc`, authentication setup, SSH, or private registries are consumed.
 Git **2.45+** is required for Git inspection. Every Git command uses
 `--no-lazy-fetch`: partial-clone metadata cannot silently fetch missing objects,

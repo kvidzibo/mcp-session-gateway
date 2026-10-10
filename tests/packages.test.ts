@@ -39,6 +39,11 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
       { type: 'git', url: 'ext::command', branch: 'main' }, { type: 'git', url: 'https://example.com/repo', branch: '../main' }]) {
       assert.throws(() => parsePackages({ bad: { source } }, dir));
     }
+    for (const url of ['https://public.example\\user:secret@private.example/repo.git', 'https://public.example\t/repo', ' https://public.example/repo']) {
+      assert.throws(() => parsePackages({ bad: { source: { type: 'git', url, branch: 'main' } } }, dir));
+    }
+    assert.deepEqual(parsePackages({ canonical: { source: { type: 'git', url: 'https://EXAMPLE.com/repo.git', branch: 'main' } } }, dir)[0].source,
+      { type: 'git', url: 'https://example.com/repo.git', branch: 'main' });
     assert.throws(() => parsePackages({ bad: { source: { type: 'local', path: '.' }, installedPath: '.' } }, dir));
     assert.throws(() => parsePackages({ bad: { source: { type: 'npm', name: 'valid' }, unexpected: true } }, dir));
     let requests = 0, version = '1.3.0', fail = false;
