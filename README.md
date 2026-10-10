@@ -7,7 +7,7 @@ Pi A ⇄ gateway A ⇄ child MCP processes A
 Pi B ⇄ gateway B ⇄ child MCP processes B
 ```
 
-No HTTP, sockets, cookies, shared daemon, subscriptions, or custom events. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
+No HTTP, sockets, cookies, shared daemon, subscriptions, or custom events. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, reusable child-server settings, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
 
 ## Setup
 
@@ -79,6 +79,58 @@ Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entrie
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
 
+## Child-server settings
+
+With the optional Pi adapter, use **`/mcp-settings`** to select a child service, or
+**`/mcp-settings delegate`** to open one directly. Settings are discovered from the
+child's schema, not hardcoded service names or the parent Pi model catalogue.
+Edits stay in a local draft until **Save changes** shows the exact changes and you
+confirm. Escape/Back discards the draft; declining a save leaves it editable.
+Scrollable overlay dialogs keep controls visible even with editor widgets/custom
+footers. Review every preview line before Enter can save; resizing resets that
+review. Settings require TUI mode and cannot overlap one-shot approval prompts.
+
+Enable only services implementing the [operator settings contract](docs/settings.md):
+
+```json
+{
+  "servers": {
+    "delegate": {
+      "command": "pi-delegate-mcp",
+      "args": ["--workspace", "/absolute/path/to/project"],
+      "settings": { "tokenEnv": "PI_DELEGATE_SETTINGS_TOKEN" }
+    }
+  }
+}
+```
+
+The same configuration works for another service by selecting its documented token
+environment variable. The gateway generates private per-service tokens; never put
+tokens in config or prompts. Only opted-in, connected services advertising contract
+version 1 appear. Services without settings continue to work normally.
+
+The editor supports nested objects with string, number, integer, boolean, enum and
+constant-choice fields, plus read-only hints. Free-form strings/numbers use JSON
+value input (quote strings); significant whitespace is escaped in save previews.
+Unsupported controls (arrays, references,
+complex unions, secrets) are not editable. JSON Schema constraints are checked before
+saving; the child remains responsible for validation, atomic persistence and revisions.
+Optional model/reasoning catalogues follow pi-delegate's contract: unavailable models
+cannot be selected, and model changes select supported reasoning in the same save.
+No automatic fallback is chosen. Current unavailable values remain visible.
+
+pi-delegate applies changes to **future jobs**; running/queued jobs retain their
+settings. Other services report their own apply policy. Conflicts/uncertain writes
+require reopening the menu to read current state; saves are never replayed automatically.
+Manual external changes may require collecting/cancelling work before restarting the
+child. `/reload` restarts the gateway and its children—do not use it to save settings.
+
+Settings use authenticated custom RPC on the existing connections, never tools,
+resources or model messages. Pi's built-in MCP alternative has no `/mcp-settings`.
+The adapter creates no settings route outside TUI mode. This is routing isolation, **not
+a sandbox**: trusted services and agents with OS access can still inspect files/processes.
+See [the reusable protocol](docs/settings.md) for other clients and service authors.
+
 ## Identity
 
 Call `gateway__identity` to get `{ "sessionId": "<uuid>" }`.
@@ -137,7 +189,7 @@ npm test
 npm run build
 ```
 
-The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, approval/decline/cancellation and no-UI behavior, private panel refresh through Pi’s extension loader, unknown-tool rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
+The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, approval/decline/cancellation and no-UI behavior, private panel refresh through Pi’s extension loader, unknown-tool rejection, private authenticated settings routing, confirmed schema-valid saves and stale revision rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
 
 ## Try the demo
 

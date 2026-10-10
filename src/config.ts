@@ -7,6 +7,7 @@ export interface ServiceConfig {
   args: string[];
   env: Record<string, string>;
   cwd: string;
+  settings?: { tokenEnv: string };
 }
 
 export interface GatewayConfig {
@@ -59,8 +60,15 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     if (value.cwd !== undefined && typeof value.cwd !== 'string') {
       throw new Error(`Server ${name}: cwd must be a string`);
     }
+    const settings = value.settings;
+    if (settings !== undefined && (!object(settings) || Object.keys(settings).some((key) => key !== 'tokenEnv') ||
+        typeof settings.tokenEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.tokenEnv) ||
+        ['MCP_GATEWAY_SETTINGS_TOKEN', 'MCP_GATEWAY_SESSION_ID', 'MCP_GATEWAY_SERVICE_ID'].includes(settings.tokenEnv))) {
+      throw new Error(`Server ${name}: settings requires a non-reserved tokenEnv variable name`);
+    }
     return {
       name,
+      ...(settings ? { settings: settings as { tokenEnv: string } } : {}),
       command: value.command,
       args: args as string[],
       env: Object.fromEntries(Object.entries(env).map(([key, entry]) => [key, expand(entry as string)])),
