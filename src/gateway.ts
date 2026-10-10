@@ -13,6 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
+import { writeDiagnostic } from './diagnostics.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -103,7 +104,7 @@ export class Gateway {
   }
 
   private log(message: string): void {
-    process.stderr.write(`[gateway ${this.sessionId}] ${message}\n`);
+    writeDiagnostic(`[gateway ${this.sessionId}] ${message}\n`);
   }
 
   private toolName(service: string, tool: string): string {

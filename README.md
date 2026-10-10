@@ -97,7 +97,7 @@ Identity is a correlation label, **not authentication or a sandbox**. All config
 
 All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. Upstream EOF is observed during startup; incoming initialization messages are buffered up to 1 MiB until services are ready. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed.
 
-Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and inherited child diagnostics use stderr; stdout is reserved for MCP messages.
+Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and inherited child diagnostics use stderr; stdout is reserved for MCP messages. A failed gateway diagnostic stream triggers cleanup and suppresses further diagnostics.
 
 ```bash
 npm run check
@@ -105,4 +105,4 @@ npm test
 npm run build
 ```
 
-The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, unknown-tool rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, or SDK-managed shutdown.
+The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, unknown-tool rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.

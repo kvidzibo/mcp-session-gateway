@@ -2,11 +2,18 @@
 import { PassThrough } from 'node:stream';
 import { loadConfig } from './config.js';
 import { Gateway } from './gateway.js';
+import { silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
+
+let stopForStderrError = (): void => { process.exitCode = 1; };
+process.stderr.on('error', () => {
+  silenceDiagnostics();
+  stopForStderrError();
+});
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.length !== 2 || args[0] !== '--config') {
-    process.stderr.write('Usage: local-mcp-gateway --config /path/to/gateway.json\n');
+    writeDiagnostic('Usage: local-mcp-gateway --config /path/to/gateway.json\n');
     process.exitCode = args.length === 1 && args[0] === '--help' ? 0 : 1;
     return;
   }
@@ -18,11 +25,16 @@ async function main(): Promise<void> {
     try {
       await gateway.close();
     } catch (error) {
-      process.stderr.write(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      writeDiagnostic(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
       code = 1;
     }
     process.exit(code);
   };
+  stopForStderrError = () => { void stop(1); };
+  if (process.stderr.destroyed) {
+    await stop(1);
+    return;
+  }
   // Drain upstream immediately so EOF is visible during child initialization.
   // Buffer the handshake until the downstream catalogue is ready; cap memory.
   const input = new PassThrough();
@@ -38,7 +50,7 @@ async function main(): Promise<void> {
     }
     pendingBytes += chunk.length;
     if (pendingBytes > 1024 * 1024) {
-      process.stderr.write('Gateway startup input exceeds 1 MiB\n');
+      writeDiagnostic('Gateway startup input exceeds 1 MiB\n');
       void stop(1);
       return;
     }
@@ -56,12 +68,12 @@ async function main(): Promise<void> {
     for (const chunk of pending) input.write(chunk);
     pending.length = 0;
   } catch (error) {
-    process.stderr.write(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    writeDiagnostic(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
     await stop(1);
   }
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`Gateway failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  writeDiagnostic(`Gateway failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
 });
