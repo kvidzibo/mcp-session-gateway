@@ -136,7 +136,7 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
   }, overlay);
 }
 
-export async function inputSettings(ctx: ExtensionContext, title: string, value: string, options: DialogOptions): Promise<string | undefined> {
+export async function inputSettings(ctx: ExtensionContext, title: string, value: string, options: { signal: AbortSignal; timeout?: number }): Promise<string | undefined> {
   if (options.signal.aborted) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
     const input = new Input();
@@ -145,7 +145,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
     const cancel = () => done(undefined);
     input.onEscape = cancel;
     input.onSubmit = (text) => { if (usable && !options.signal.aborted) done(text); };
-    const timer = setTimeout(cancel, options.timeout);
+    const timer = options.timeout === undefined ? undefined : setTimeout(cancel, options.timeout);
     options.signal.addEventListener('abort', cancel, { once: true });
     return {
       get focused() { return input.focused; },
