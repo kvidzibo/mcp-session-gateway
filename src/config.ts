@@ -31,8 +31,13 @@ function expand(value: string): string {
 export async function loadConfig(path: string): Promise<GatewayConfig> {
   const absolute = resolve(path);
   const data: unknown = JSON.parse(await readFile(absolute, 'utf8'));
-  if (!object(data) || !object(data.servers) || Object.keys(data.servers).length === 0) {
-    throw new Error('Config must contain a non-empty "servers" object');
+  if (!object(data)) throw new Error('Config must be an object');
+  if ('mcpServers' in data && 'servers' in data) {
+    throw new Error('Use "mcpServers" or legacy "servers", not both');
+  }
+  const servers = 'mcpServers' in data ? data.mcpServers : data.servers;
+  if (!object(servers) || Object.keys(servers).length === 0) {
+    throw new Error('Config must contain a non-empty "mcpServers" object (legacy "servers" is also accepted)');
   }
   const timeoutMs = data.timeoutMs ?? 30_000;
   if (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300_000) {
@@ -42,7 +47,7 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   if (typeof logFile !== 'string' || logFile.trim() === '') {
     throw new Error('logFile must be a non-empty path string');
   }
-  const services = Object.entries(data.servers).map(([name, value]): ServiceConfig => {
+  const services = Object.entries(servers).map(([name, value]): ServiceConfig => {
     if (!/^[a-z][a-z0-9-]*$/.test(name) || name === 'gateway') {
       throw new Error(`Invalid or reserved server name: ${name}`);
     }
