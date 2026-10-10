@@ -17,7 +17,7 @@ function fields(schema: ObjectValue, path: string[] = [], readonly = false): Fie
   readonly ||= schema.readOnly === true || schema.writeOnly === true || schema.format === 'password' ||
     ['$ref', 'allOf', 'anyOf', 'if'].some((key) => Object.hasOwn(schema, key)) ||
     (Array.isArray(schema.oneOf) && !schema.oneOf.every((entry) => object(entry) && Object.hasOwn(entry, 'const')));
-  if (schema.type === 'object' && object(schema.properties)) {
+  if ((schema.type === 'object' || schema.type === undefined) && object(schema.properties)) {
     return Object.entries(schema.properties).flatMap(([key, child]) => {
       if (!safeKey(key) || !object(child)) throw new Error('Unsupported settings schema property');
       return fields(child, [...path, key], readonly);
@@ -42,6 +42,44 @@ const display = (value: unknown) => (JSON.stringify(value) ?? '(unset)')
   .replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const pathLabel = (path: string[]) => display(path.map((key) => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')).slice(1, -1);
 
+const primitive = (value: unknown) => ['string', 'number', 'boolean'].includes(typeof value);
+function supported(schema: ObjectValue): boolean {
+  if (Object.hasOwn(schema, 'const')) return false;
+  if (Array.isArray(schema.enum)) return schema.enum.length > 0 && schema.enum.every(primitive);
+  if (Array.isArray(schema.oneOf)) return schema.oneOf.length > 0 && schema.oneOf.every((entry) => object(entry) && primitive(entry.const));
+  return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
+}
+const dimensions = () => ({ rows: process.stdout.rows || 24, columns: process.stdout.columns || 80 });
+function previewFits(text: string): boolean {
+  const { rows, columns } = dimensions();
+  return text.length <= 10_000 && text.split('\n').reduce((sum, line) => sum + wrapTextWithAnsi(line, Math.max(1, columns - 6)).length, 0) <= Math.max(0, rows - 12);
+}
+
+// Pi 1.1.0's native selector has no selection-following scrolling. Page long lists,
+// and reject selections made after a resize until the new page has been displayed.
+export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: { signal: AbortSignal; timeout: number }): Promise<string | undefined> {
+  let offset = 0;
+  while (!options.signal.aborted) {
+    const size = dimensions();
+    const titleLines = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, Math.max(1, size.columns - 6)));
+    const heading = titleLines.slice(0, 3).join('\n') + (titleLines.length > 3 ? '…' : '');
+    const limit = Math.max(1, Math.min(10, size.rows - Math.min(3, titleLines.length) - 12));
+    offset = Math.min(offset, Math.max(0, choices.length - 1));
+    const page = choices.slice(offset, offset + limit);
+    let previous = '← Previous page', next = 'Next page →';
+    while (choices.includes(previous)) previous += ' ←';
+    while (choices.includes(next)) next += ' →';
+    const result = await ctx.ui.select(`${heading}${choices.length > limit ? `\n${offset + 1}–${offset + page.length} of ${choices.length}` : ''}`,
+      [...page, ...(offset ? [previous] : []), ...(offset + limit < choices.length ? [next] : [])], options);
+    if (!result || options.signal.aborted) return undefined;
+    if (dimensions().rows !== size.rows || dimensions().columns !== size.columns) continue;
+    if (result === previous) offset = Math.max(0, offset - limit);
+    else if (result === next) offset += limit;
+    else if (page.includes(result)) return result;
+  }
+  return undefined;
+}
+
 /** Schema-driven operator editor; no parent model catalogue, tool calls or model messages. */
 export async function editSettings(ctx: ExtensionContext, initial: SettingsDocument,
   update: (revision: string, patch: ObjectValue) => Promise<SettingsDocument>, signal: AbortSignal, timeout: number): Promise<void> {
@@ -57,12 +95,12 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
     const valid = ajv.compile(document.schema);
     // Only inline primitive controls are editable. Full schema validation still applies on save.
     const editable = (field: Field) => document.writable && !document.conflict && !field.readonly &&
-      !Object.hasOwn(field.schema, 'const') && ['string', 'number', 'integer', 'boolean'].includes(String(field.schema.type));
+      supported(field.schema);
     while (!signal.aborted) {
       const changes = leaves.filter((f) => JSON.stringify(at(draft, f.path)) !== JSON.stringify(at(document.values, f.path)));
       const labels = leaves.map((f, i) => `${i + 1}. ${pathLabel(f.path)}: ${clean(display(at(draft, f.path)))}${editable(f) ? '' : ' [read-only]'}`);
       const save = `Save changes (${changes.length})`;
-      const choice = await ctx.ui.select(clean([document.title, feedback, document.warning,
+      const choice = await selectSettingsOption(ctx, clean([document.title, feedback, document.warning,
         document.applyTo ? `Applies to: ${document.applyTo}` : '', !document.writable ? 'Read-only' : ''].filter(Boolean).join('\n')), [...labels, save, 'Back'], options);
       if (!choice || choice === 'Back' || signal.aborted) return;
       if (choice === save) {
@@ -73,14 +111,15 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
         const preview = changes.map((f) => `${pathLabel(f.path)}: ${display(at(document.values, f.path))} → ${display(at(draft, f.path))}`).join('\n');
         // Native confirmations cannot scroll; never approve a truncated/hidden diff.
         const confirmation = `${preview}\n\nApplies to: ${clean(document.applyTo ?? 'server-defined')}`;
-        const maxRows = Math.max(1, (process.stdout.rows || 24) - 12);
-        const columns = Math.max(20, (process.stdout.columns || 80) - 6);
-        const rows = confirmation.split('\n').reduce((sum, line) => sum + wrapTextWithAnsi(line, columns).length, 0);
-        if (confirmation.length > 10_000 || rows > maxRows) {
+        if (!previewFits(confirmation)) {
           ctx.ui.notify('Change preview is too large for this dialog. Save fewer/smaller changes or enlarge the terminal.', 'warning');
           continue;
         }
         if (!await ctx.ui.confirm('Save child-server settings?', confirmation, options) || signal.aborted) continue;
+        if (!previewFits(confirmation)) {
+          ctx.ui.notify('Terminal resized: reopen a fully visible confirmation before saving.', 'warning');
+          continue;
+        }
         try {
           document = await update(document.revision, patch);
           feedback = 'Settings saved';
@@ -108,7 +147,7 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
       if (choices) {
         if (!choices.length) { ctx.ui.notify('No available choices for this field', 'warning'); continue; }
         const labels = choices.map((c, i) => `${i + 1}. ${clean(c.label)}`);
-        const selected = await ctx.ui.select(title, labels, options);
+        const selected = await selectSettingsOption(ctx, title, labels, options);
         if (!selected || signal.aborted) continue;
         next = choices[labels.indexOf(selected)].value;
       } else {
@@ -124,7 +163,7 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
         if (thinkingField && editable(thinkingField)) {
           const levels = document.models.find((m) => m.id === next)?.thinking ?? [];
           if (!levels.length) continue;
-          const thinking = await ctx.ui.select('Reasoning for selected model', levels.map(clean), options);
+          const thinking = await selectSettingsOption(ctx, 'Reasoning for selected model', levels.map(clean), options);
           if (!thinking || signal.aborted) continue;
           put(draft, thinkingPath, levels[levels.map(clean).indexOf(thinking)]);
         }

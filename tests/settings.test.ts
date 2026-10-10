@@ -6,6 +6,8 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { randomBytes } from 'node:crypto';
+import { editSettings, selectSettingsOption } from '../pi/settings.js';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 
 const root = resolve(import.meta.dirname, '..');
@@ -108,6 +110,46 @@ test('operator settings stay private, route by service, and require confirmed sc
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
       // Close/reload creates new fixture state, so inspect the returned menu above for saved feedback.
     } finally { await dispatch('session_shutdown'); }
+    // Exercise large lists and valid choice schemas without explicit types, plus
+    // a resize after approval; none may create an unseen or premature write.
+    const rows = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+    const resize = (height: number) => Object.defineProperty(process.stdout, 'rows', { configurable: true, value: height });
+    try {
+      resize(30);
+      Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 100 });
+      let page = 0;
+      const paged = await selectSettingsOption({ ui: { select: async (_title: string, choices: string[]) => {
+        assert.ok(choices.length <= 12);
+        return page++ < 2 ? 'Next page →' : choices[0];
+      } } } as unknown as ExtensionContext, 'Many services', Array.from({ length: 35 }, (_, i) => `service-${i}`), { signal: new AbortController().signal, timeout: 1000 });
+      assert.equal(paged, 'service-20');
+      let selection = 0, confirmed = 0, updates = 0;
+      const choiceContext = { ui: {
+        select: async (_title: string, choices: string[]) => {
+          switch (selection++) {
+            case 0: return choices.find((s) => s.includes('size:'));
+            case 1: return choices.find((s) => s.includes('large'));
+            case 2: return choices.find((s) => s.includes('active:'));
+            case 3: return choices.find((s) => s.endsWith('true'));
+            case 4: case 5: return choices.find((s) => s.startsWith('Save changes'));
+            default: return 'Back';
+          }
+        },
+        confirm: async () => { if (++confirmed === 1) resize(12); return true; },
+        notify: (text: string) => { assert.match(text, /Terminal resized/); assert.equal(updates, 0); resize(30); },
+      } } as unknown as ExtensionContext;
+      const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
+        schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]}}},values:{size:'small',active:false}});
+      await editSettings(choiceContext, doc, async (revision, patch) => {
+        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true}); updates++;
+        return {...doc,revision:'two',values:{size:'large',active:true}};
+      }, new AbortController().signal, 1000);
+      assert.equal(confirmed, 2); assert.equal(updates, 1);
+    } finally {
+      if (rows) Object.defineProperty(process.stdout, 'rows', rows); else delete (process.stdout as {rows?:number}).rows;
+      if (columns) Object.defineProperty(process.stdout, 'columns', columns); else delete (process.stdout as {columns?:number}).columns;
+    }
     // A client without the private operator environment gets no settings API.
     const ordinary = new Client({ name: 'no-operator', version: '1' });
     const wire = new StdioClientTransport({ command: process.execPath, args: [join(root, 'dist/cli.js'), '--config', config], stderr: 'pipe' });

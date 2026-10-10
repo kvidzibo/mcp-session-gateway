@@ -11,7 +11,7 @@ import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-wo
 import { loadConfig } from '../src/config.js';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
-import { clean, editSettings } from './settings.js';
+import { clean, editSettings, selectSettingsOption } from './settings.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -141,7 +141,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         let service = args.trim();
         if (!service) {
           const labels = result.services.map((s, i) => `${i + 1}. ${clean(s.name)}`);
-          const selected = await ctx.ui.select('MCP child-server settings', labels, options);
+          const selected = await selectSettingsOption(ctx, 'MCP child-server settings', labels, options);
           if (!selected || signal.aborted) return;
           service = result.services[labels.indexOf(selected)].name;
         }
