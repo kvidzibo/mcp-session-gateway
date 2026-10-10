@@ -86,8 +86,9 @@ With the optional Pi adapter, use **`/mcp-settings`** to select a child service,
 child's schema, not hardcoded service names or the parent Pi model catalogue.
 Edits stay in a local draft until **Save changes** shows the exact changes and you
 confirm. Escape/Back discards the draft; declining a save leaves it editable.
-Oversized confirmation previews are refused: save fewer/smaller changes or enlarge
-the terminal. Settings dialogs and one-shot approval prompts cannot overlap.
+Scrollable overlay dialogs keep controls visible even with editor widgets/custom
+footers. Review every preview line before Enter can save; resizing resets that
+review. Settings require TUI mode and cannot overlap one-shot approval prompts.
 
 Enable only services implementing the [operator settings contract](docs/settings.md):
 
@@ -124,7 +125,7 @@ child. `/reload` restarts the gateway and its children—do not use it to save s
 
 Settings use authenticated custom RPC on the existing connections, never tools,
 resources or model messages. Pi's built-in MCP alternative has no `/mcp-settings`.
-The adapter creates no settings route without a UI. This is routing isolation, **not
+The adapter creates no settings route outside TUI mode. This is routing isolation, **not
 a sandbox**: trusted services and agents with OS access can still inspect files/processes.
 See [the reusable protocol](docs/settings.md) for other clients and service authors.
 

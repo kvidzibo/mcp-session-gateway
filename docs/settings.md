@@ -60,7 +60,9 @@ operator envelope. The editor is for ordinary values, not credential entry.
 
 Schemas use inline nested object properties and primitive fields. `enum` and
 primitive `oneOf` constant choices become selectors even without an explicit `type`.
-Long service/field/catalogue selectors are paginated to fit the terminal. `readOnly` propagates to descendants.
+TUI selectors use single-row, scrolling lists in isolated overlays, independent
+of editor widgets and footers. Long labels are truncated in selection lists; save
+previews show the complete values. `readOnly` propagates to descendants.
 Complex unions, arrays, `$ref` controls and unsupported types remain view-only;
 full JSON Schema 2020-12 validation still runs before saving. Property paths use
 JSON Pointer escaping. Unsafe prototype property names are refused. Object nesting
@@ -102,12 +104,13 @@ its new revision. It owns how changes affect accepted work. pi-delegate uses
 Suggested errors match pi-delegate: `-33001` unauthorized, `-33002` revision/disk
 conflict, `-33003` persistence/catalogue unavailable, `-32602` invalid input. The UI
 never automatically retries a write; reread after conflict or uncertain completion.
-Confirmation fit is checked both before opening the dialog and immediately before
-writing, so resizing cannot approve a hidden preview.
+Confirmation uses an isolated scrolling overlay. Enter can save only after every
+preview line has been rendered visibly. Resizing resets that review; unrendered
+resize events cannot authorize writing. Escape, cancellation or timeout never saves.
 
 ## Trusted host route
 
-The Pi adapter generates a separate private token and passes it to its gateway via
+In TUI mode, the Pi adapter generates a separate private token and passes it to its gateway via
 `MCP_GATEWAY_SETTINGS_TOKEN`. The gateway consumes/removes it before spawning
 children. With no token, it registers no operator RPC handlers and generates no
 child settings tokens. Tokens must be base64url, 32–256 characters; generate at

@@ -1,7 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
 
@@ -49,35 +49,91 @@ function supported(schema: ObjectValue): boolean {
   if (Array.isArray(schema.oneOf)) return schema.oneOf.length > 0 && schema.oneOf.every((entry) => object(entry) && primitive(entry.const));
   return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
 }
-const dimensions = () => ({ rows: process.stdout.rows || 24, columns: process.stdout.columns || 80 });
-function previewFits(text: string): boolean {
-  const { rows, columns } = dimensions();
-  return text.length <= 10_000 && text.split('\n').reduce((sum, line) => sum + wrapTextWithAnsi(line, Math.max(1, columns - 6)).length, 0) <= Math.max(0, rows - 12);
+type DialogOptions = { signal: AbortSignal; timeout: number };
+const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 1 } };
+
+// Isolated overlays own their full height: editor widgets/footers cannot hide
+// controls. Native SelectList keeps options on single rows and follows selection.
+export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: DialogOptions): Promise<string | undefined> {
+  if (options.signal.aborted || !choices.length) return undefined;
+  return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+    let list: SelectList | undefined;
+    let geometry = '';
+    let usable = false;
+    const cancel = () => done(undefined);
+    const timer = setTimeout(cancel, options.timeout);
+    options.signal.addEventListener('abort', cancel, { once: true });
+    return {
+      render(width: number) {
+        geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
+        const height = Math.max(1, tui.terminal.rows - 2);
+        usable = height >= 8 && width >= 20;
+        if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
+        const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 3);
+        const selected = Number(list?.getSelectedItem()?.value ?? 0);
+        list = new SelectList(choices.map((label, i) => ({ value: String(i), label: label.replace(/\n/g, ' ') })), Math.max(1, height - heading.length - 6), {
+          selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
+          description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => s,
+        });
+        list.setSelectedIndex(selected);
+        list.onSelect = (item) => { if (!options.signal.aborted) done(choices[Number(item.value)]); };
+        list.onCancel = cancel;
+        const border = theme.fg('accent', '─'.repeat(width));
+        return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...list.render(width), '', theme.fg('muted', '↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
+      },
+      handleInput(data: string) {
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+        else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) list?.handleInput(data);
+        tui.requestRender();
+      },
+      invalidate() {},
+      dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
+    };
+  }, overlay);
 }
 
-// Pi 1.1.0's native selector has no selection-following scrolling. Page long lists,
-// and reject selections made after a resize until the new page has been displayed.
-export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: { signal: AbortSignal; timeout: number }): Promise<string | undefined> {
-  let offset = 0;
-  while (!options.signal.aborted) {
-    const size = dimensions();
-    const titleLines = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, Math.max(1, size.columns - 6)));
-    const heading = titleLines.slice(0, 3).join('\n') + (titleLines.length > 3 ? '…' : '');
-    const limit = Math.max(1, Math.min(10, size.rows - Math.min(3, titleLines.length) - 12));
-    offset = Math.min(offset, Math.max(0, choices.length - 1));
-    const page = choices.slice(offset, offset + limit);
-    let previous = '← Previous page', next = 'Next page →';
-    while (choices.includes(previous)) previous += ' ←';
-    while (choices.includes(next)) next += ' →';
-    const result = await ctx.ui.select(`${heading}${choices.length > limit ? `\n${offset + 1}–${offset + page.length} of ${choices.length}` : ''}`,
-      [...page, ...(offset ? [previous] : []), ...(offset + limit < choices.length ? [next] : [])], options);
-    if (!result || options.signal.aborted) return undefined;
-    if (dimensions().rows !== size.rows || dimensions().columns !== size.columns) continue;
-    if (result === previous) offset = Math.max(0, offset - limit);
-    else if (result === next) offset += limit;
-    else if (page.includes(result)) return result;
-  }
-  return undefined;
+export async function confirmSettings(ctx: ExtensionContext, text: string, options: DialogOptions): Promise<boolean> {
+  if (options.signal.aborted) return false;
+  return ctx.ui.custom<boolean>((tui, theme, _keys, done) => {
+    let offset = 0, maxOffset = 0, page = 1;
+    let geometry = '', usable = false, complete = false;
+    let seen = new Set<number>();
+    const cancel = () => done(false);
+    const timer = setTimeout(cancel, options.timeout);
+    options.signal.addEventListener('abort', cancel, { once: true });
+    return {
+      render(width: number) {
+        const current = `${width}:${tui.terminal.rows}:${tui.terminal.columns}`;
+        if (current !== geometry) { seen = new Set(); complete = false; }
+        geometry = current;
+        const height = Math.max(1, tui.terminal.rows - 2);
+        usable = height >= 8 && width >= 20;
+        if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
+        const lines = text.split('\n').flatMap((line) => wrapTextWithAnsi(line, width));
+        page = height - 6;
+        maxOffset = Math.max(0, lines.length - page);
+        offset = Math.min(offset, maxOffset);
+        for (let i = offset; i < Math.min(lines.length, offset + page); i++) seen.add(i);
+        complete = seen.size === lines.length;
+        const border = theme.fg('accent', '─'.repeat(width));
+        return [border, theme.fg('accent', 'Save child-server settings?'), '', ...lines.slice(offset, offset + page), '',
+          theme.fg(complete ? 'success' : 'warning', complete ? 'Enter save  Esc cancel' : '↑/↓ PgUp/PgDn review ALL changes before Enter saves'), border].map((line) => truncateToWidth(line, width));
+      },
+      handleInput(data: string) {
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+        else if (usable && geometry.endsWith(`:${tui.terminal.rows}:${tui.terminal.columns}`)) {
+          if (matchesKey(data, Key.enter) && complete && !options.signal.aborted) done(true);
+          else if (matchesKey(data, Key.down)) offset = Math.min(maxOffset, offset + 1);
+          else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
+          else if (matchesKey(data, Key.pageDown)) offset = Math.min(maxOffset, offset + page);
+          else if (matchesKey(data, Key.pageUp)) offset = Math.max(0, offset - page);
+        }
+        tui.requestRender();
+      },
+      invalidate() {},
+      dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
+    };
+  }, overlay);
 }
 
 /** Schema-driven operator editor; no parent model catalogue, tool calls or model messages. */
@@ -109,17 +165,8 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
         const patch: ObjectValue = {};
         for (const field of changes) put(patch, field.path, at(draft, field.path));
         const preview = changes.map((f) => `${pathLabel(f.path)}: ${display(at(document.values, f.path))} → ${display(at(draft, f.path))}`).join('\n');
-        // Native confirmations cannot scroll; never approve a truncated/hidden diff.
         const confirmation = `${preview}\n\nApplies to: ${clean(document.applyTo ?? 'server-defined')}`;
-        if (!previewFits(confirmation)) {
-          ctx.ui.notify('Change preview is too large for this dialog. Save fewer/smaller changes or enlarge the terminal.', 'warning');
-          continue;
-        }
-        if (!await ctx.ui.confirm('Save child-server settings?', confirmation, options) || signal.aborted) continue;
-        if (!previewFits(confirmation)) {
-          ctx.ui.notify('Terminal resized: reopen a fully visible confirmation before saving.', 'warning');
-          continue;
-        }
+        if (!await confirmSettings(ctx, confirmation, options) || signal.aborted) continue;
         try {
           document = await update(document.revision, patch);
           feedback = 'Settings saved';

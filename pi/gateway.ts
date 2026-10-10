@@ -83,7 +83,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const current = new Client({ name: 'pi-gateway-adapter', version: '0.4.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); };
-    operatorToken = ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
+    operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env[OPERATOR_ENV];
     if (operatorToken) env[OPERATOR_ENV] = operatorToken;
@@ -127,7 +127,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.registerCommand('mcp-settings', {
     description: 'Edit child-service operator settings privately, with confirmation before saving.',
     handler: async (args, ctx) => {
-      if (!ctx.hasUI) { ctx.ui.notify('Child-server settings require an interactive UI', 'warning'); return; }
+      if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Child-server settings require TUI mode', 'warning'); return; }
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
       const current = connection();
       const token = operatorToken;

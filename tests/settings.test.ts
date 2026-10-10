@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { randomBytes } from 'node:crypto';
-import { editSettings, selectSettingsOption } from '../pi/settings.js';
+import { confirmSettings, editSettings, selectSettingsOption } from '../pi/settings.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 
@@ -101,6 +101,24 @@ test('operator settings stay private, route by service, and require confirmed sc
         return ++confirmations > 1; // First decline must not write.
       },
       notify: (text: string) => { notices.push(text); },
+      custom: async (factory: Function, options: {overlay:boolean}) => {
+        assert.equal(options.overlay, true);
+        let result: unknown;
+        const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => { result = value; });
+        try {
+          const lines: string[] = panel.render(98);
+          if (lines[1] === 'Save child-server settings?') {
+            const approved = await ctx.ui.confirm(lines[1], lines.slice(3, -3).join('\n'));
+            panel.handleInput(approved ? '\r' : '\u001b');
+          } else {
+            const choices = lines.filter((line) => /^(→ |  )/.test(line)).map((line) => line.slice(2));
+            const choice = await ctx.ui.select(lines[1], choices);
+            if (!choice) panel.handleInput('\u001b');
+            else { for (let i = 0; i < choices.indexOf(choice); i++) panel.handleInput('\u001b[B'); panel.handleInput('\r'); }
+          }
+          return result;
+        } finally { panel.dispose(); }
+      },
     } };
     const dispatch = async (event: string) => { for (const handler of ext.handlers.get(event) ?? []) await handler({ type: event }, ctx); };
     try {
@@ -112,19 +130,38 @@ test('operator settings stay private, route by service, and require confirmed sc
     } finally { await dispatch('session_shutdown'); }
     // Exercise large lists and valid choice schemas without explicit types, plus
     // a resize after approval; none may create an unseen or premature write.
-    const rows = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
-    const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
-    const resize = (height: number) => Object.defineProperty(process.stdout, 'rows', { configurable: true, value: height });
-    try {
-      resize(30);
-      Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 100 });
-      let page = 0;
-      const paged = await selectSettingsOption({ ui: { select: async (_title: string, choices: string[]) => {
-        assert.ok(choices.length <= 12);
-        return page++ < 2 ? 'Next page →' : choices[0];
-      } } } as unknown as ExtensionContext, 'Many services', Array.from({ length: 35 }, (_, i) => `service-${i}`), { signal: new AbortController().signal, timeout: 1000 });
-      assert.equal(paged, 'service-20');
-      let selection = 0, confirmed = 0, updates = 0;
+    const dialog = { signal: new AbortController().signal, timeout: 1000 };
+    const selected = await selectSettingsOption({ui:{custom: async (factory: Function, options: {overlay:boolean}) => {
+      assert.equal(options.overlay, true);
+      let answer: unknown;
+      const terminal = {rows:18,columns:80};
+      const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
+      try {
+        for (let i=0;i<20;i++) { assert.ok(panel.render(78).length <= terminal.rows-2); panel.handleInput('\u001b[B'); }
+        assert.ok(panel.render(78).some((line: string) => line.includes('service-20')));
+        panel.handleInput('\r'); return answer;
+      } finally {panel.dispose();}
+    }}} as unknown as ExtensionContext, 'Many services', Array.from({length:35}, (_, i) => `service-${i} ${'wrapped label '.repeat(30)}`), dialog);
+    assert.ok(selected?.startsWith('service-20'));
+    const approved = await confirmSettings({ui:{custom: async (factory: Function, options: {overlay:boolean}) => {
+      assert.equal(options.overlay, true);
+      let answer: unknown;
+      const terminal = {rows:18,columns:80};
+      const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
+      try {
+        panel.render(78); panel.handleInput('\r'); assert.equal(answer, undefined, 'Unseen changes cannot be approved');
+        for(let i=0;i<4;i++) {panel.handleInput('\u001b[6~'); panel.render(78);}
+        terminal.rows=10;
+        panel.handleInput('\r'); assert.equal(answer, undefined, 'Resize cannot approve stale visibility');
+        assert.ok(panel.render(78).length <= 8); panel.handleInput('\r'); assert.equal(answer, undefined);
+        for(let i=0;i<32;i++) {panel.handleInput('\u001b[5~'); panel.render(78);}
+        for(let i=0;i<32;i++) {panel.handleInput('\u001b[6~'); panel.render(78);}
+        panel.handleInput('\r'); return answer;
+      } finally {panel.dispose();}
+    }}} as unknown as ExtensionContext, Array.from({length:24}, (_,i) => `field-${i}: old → new`).join('\n'), dialog);
+    assert.equal(approved, true);
+    {
+      let selection = 0, updates = 0;
       const choiceContext = { ui: {
         select: async (_title: string, choices: string[]) => {
           switch (selection++) {
@@ -132,23 +169,38 @@ test('operator settings stay private, route by service, and require confirmed sc
             case 1: return choices.find((s) => s.includes('large'));
             case 2: return choices.find((s) => s.includes('active:'));
             case 3: return choices.find((s) => s.endsWith('true'));
-            case 4: case 5: return choices.find((s) => s.startsWith('Save changes'));
+            case 4: return choices.find((s) => s.startsWith('Save changes'));
             default: return 'Back';
           }
         },
-        confirm: async () => { if (++confirmed === 1) resize(12); return true; },
-        notify: (text: string) => { assert.match(text, /Terminal resized/); assert.equal(updates, 0); resize(30); },
-      } } as unknown as ExtensionContext;
+        custom: ctx.ui.custom,
+        confirm: async () => true,
+        notify: (text: string) => assert.fail(text),
+      } };
       const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
         schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]}}},values:{size:'small',active:false}});
-      await editSettings(choiceContext, doc, async (revision, patch) => {
+      // Reuse the overlay driver with this editor's scripted choice callbacks.
+      choiceContext.ui.custom = async (factory: Function, options: {overlay:boolean}) => {
+        let result: unknown;
+        const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;});
+        try {
+          assert.equal(options.overlay,true);
+          const lines: string[] = panel.render(98);
+          if(lines[1] === 'Save child-server settings?') panel.handleInput('\r');
+          else {
+            const choices=lines.filter((line)=>/^(→ |  )/.test(line)).map((line)=>line.slice(2));
+            const picked = await choiceContext.ui.select(lines[1], choices);
+            for(let i=0;i<choices.indexOf(picked!);i++) panel.handleInput('\u001b[B');
+            panel.handleInput('\r');
+          }
+          return result;
+        } finally {panel.dispose();}
+      };
+      await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
         assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true}); updates++;
         return {...doc,revision:'two',values:{size:'large',active:true}};
       }, new AbortController().signal, 1000);
-      assert.equal(confirmed, 2); assert.equal(updates, 1);
-    } finally {
-      if (rows) Object.defineProperty(process.stdout, 'rows', rows); else delete (process.stdout as {rows?:number}).rows;
-      if (columns) Object.defineProperty(process.stdout, 'columns', columns); else delete (process.stdout as {columns?:number}).columns;
+      assert.equal(updates, 1);
     }
     // A client without the private operator environment gets no settings API.
     const ordinary = new Client({ name: 'no-operator', version: '1' });
