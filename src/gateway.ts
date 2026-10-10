@@ -7,13 +7,17 @@ import {
   CallToolRequestSchema,
   ErrorCode,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
   McpError,
   ToolListChangedNotificationSchema,
   type Tool,
+  type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
 import { writeDiagnostic } from './diagnostics.js';
+import { handleElicitation, trackRequests } from './elicitation.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -25,28 +29,42 @@ interface Service {
   tools: Tool[];
   refresh: Promise<void>;
   connected: boolean;
+  queue: Promise<void>;
+  closed: AbortController;
+  active?: { id: RequestId; signal: AbortSignal; tool: string };
+}
+
+function modelVisible(tool: Tool): boolean {
+  const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
+  return !ui?.visibility || ui.visibility.includes('model');
 }
 
 export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.2.0' },
-    { capabilities: { tools: { listChanged: true } } },
+    { name: 'local-stdio-mcp-gateway', version: '0.3.0' },
+    { capabilities: { tools: { listChanged: true }, resources: {} } },
   );
   private readonly services: Service[] = [];
   private initialized = false;
+  private ready: Promise<void> = Promise.resolve();
+  private resolveReady!: () => void;
+  private resolveInitialized!: () => void;
   private closing?: Promise<void>;
+  private requests?: ReturnType<typeof trackRequests>;
 
   constructor(private readonly config: GatewayConfig) {
-    this.server.oninitialized = () => { this.initialized = true; };
+    this.server.oninitialized = () => { this.initialized = true; this.resolveInitialized?.(); };
     this.server.onclose = () => {
-      this.onclose?.();
+      this.resolveInitialized?.();
+      if (!this.closing) this.onclose?.();
       void this.close().catch((error: Error) => this.log(error.message));
     };
     this.server.onerror = (error) => this.log(error.message);
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
+    this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
+      return { tools: [
         {
           name: 'gateway__identity',
           description: 'Return the identity of this gateway run (not a persistent Pi conversation).',
@@ -54,15 +72,42 @@ export class Gateway {
           annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
         },
         ...this.services.filter((service) => service.connected).flatMap((service) =>
-          service.tools.map((tool) => {
-            // Task execution is not proxied by this gateway.
+          service.tools.filter(modelVisible).map((tool) => {
             const { execution: _execution, ...definition } = tool;
             return { ...definition, name: this.toolName(service.config.name, tool.name) };
           }),
         ),
-      ],
+      ] };
     }));
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
+      const resources = [];
+      for (const service of this.services.filter((item) => item.connected && item.client.getServerCapabilities()?.resources)) {
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        let pages = 0;
+        do {
+          if (++pages > 1000) throw new Error(`Too many resource pages from ${service.config.name}`);
+          const page = await this.withService(service, extra.signal, () => service.client.listResources(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs, signal: extra.signal }));
+          for (const resource of page.resources) resources.push({ ...resource, uri: this.resourceUri(service.config.name, resource.uri) });
+          cursor = page.nextCursor;
+          if (cursor !== undefined && (!cursor || seen.has(cursor))) throw new Error(`Invalid resource cursor from ${service.config.name}`);
+          if (cursor) seen.add(cursor);
+        } while (cursor !== undefined);
+      }
+      return { resources };
+    }));
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
+      const parsed = this.parseResourceUri(request.params.uri);
+      const service = this.services.find((item) => item.config.name === parsed.service && item.connected);
+      if (!service) throw new McpError(ErrorCode.InvalidParams, 'Unknown or disconnected resource service');
+      const { progressToken: _progress, ...meta } = request.params._meta ?? {};
+      const result = await this.withService(service, extra.signal, () => service.client.readResource({ uri: parsed.uri, _meta: { ...meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } }, { timeout: this.config.timeoutMs, signal: extra.signal }));
+      return { ...result, contents: result.contents.map((content) => ({ ...content, uri: this.resourceUri(parsed.service, content.uri) })) };
+    }));
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
       if (request.params.name === 'gateway__identity') {
         const identity = { sessionId: this.sessionId };
         return {
@@ -74,37 +119,93 @@ export class Gateway {
       for (const service of this.services) {
         if (!service.connected) continue;
         const tool = service.tools.find((candidate) =>
-          this.toolName(service.config.name, candidate.name) === request.params.name,
+          this.toolName(service.config.name, candidate.name) === request.params.name && modelVisible(candidate),
         );
         if (!tool) continue;
         const { progressToken, ...meta } = request.params._meta ?? {};
-        return service.client.callTool({
-          name: tool.name,
-          arguments: request.params.arguments,
-          _meta: {
-            ...meta,
-            [SESSION_META]: this.sessionId,
-            [SERVICE_META]: service.config.name,
-          },
-        }, undefined, {
-          signal: extra.signal,
-          timeout: this.config.timeoutMs,
-          ...(progressToken !== undefined ? {
-            onprogress: (progress) => {
-              void extra.sendNotification({
-                method: 'notifications/progress',
-                params: { ...progress, progressToken },
-              }).catch((error: Error) => this.log(error.message));
-            },
-          } : {}),
+        return this.withService(service, extra.signal, async () => {
+          const finished = new AbortController();
+          const signal = AbortSignal.any([extra.signal, finished.signal, service.closed.signal]);
+          service.active = { id: extra.requestId, signal, tool: request.params.name };
+          try {
+            return await service.client.callTool({
+              name: tool.name,
+              arguments: request.params.arguments,
+              _meta: {
+                ...meta,
+                [SESSION_META]: this.sessionId,
+                [SERVICE_META]: service.config.name,
+              },
+            }, undefined, {
+              signal,
+              timeout: this.config.timeoutMs,
+              ...(progressToken !== undefined ? {
+                onprogress: (progress) => {
+                  void extra.sendNotification({
+                    method: 'notifications/progress',
+                    params: { ...progress, progressToken },
+                  }).catch((error: Error) => this.log(error.message));
+                },
+              } : {}),
+            });
+          } finally {
+            finished.abort();
+            service.active = undefined;
+          }
         });
       }
       throw new McpError(ErrorCode.InvalidParams, `Unknown or disconnected tool: ${request.params.name}`);
-    });
+    }));
   }
 
   private log(message: string): void {
     writeDiagnostic(`[gateway ${this.sessionId}] ${message}\n`);
+  }
+
+  private async withRequest<T>(extra: { requestId: RequestId; signal: AbortSignal }, run: () => Promise<T>): Promise<T> {
+    extra.signal = this.requests?.signal(extra.requestId, extra.signal) ?? extra.signal;
+    try {
+      extra.signal.throwIfAborted();
+      return await run();
+    } finally { this.requests?.finish(extra.requestId); }
+  }
+
+  // Stdio has no wire-level parent request ID. Serializing service requests
+  // lets ordinary MCP services elicit without custom correlation metadata.
+  private async withService<T>(service: Service, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+    const previous = service.queue;
+    let release!: () => void;
+    service.queue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    let started = false;
+    try {
+      signal?.throwIfAborted();
+      if (!service.connected || service.closed.signal.aborted) throw new McpError(ErrorCode.ConnectionClosed, 'Service disconnected');
+      started = true;
+      return await run();
+    } catch (error) {
+      // Any cancelled request may still be running downstream. Retire before
+      // releasing the queue so its late elicitation cannot attach to a tool.
+      if (started && (signal?.aborted || (error instanceof McpError && error.code === ErrorCode.RequestTimeout))) {
+        service.connected = false;
+        service.closed.abort();
+        service.tools = [];
+        try { await service.client.close(); } finally { await service.transport.close(); }
+      }
+      throw error;
+    } finally { release(); }
+  }
+
+  private resourceUri(service: string, uri: string): string {
+    return `gateway-resource://${service}/${encodeURIComponent(uri)}`;
+  }
+
+  private parseResourceUri(value: string): { service: string; uri: string } {
+    const match = /^gateway-resource:\/\/([a-z][a-z0-9-]*)\/(.+)$/.exec(value);
+    if (!match) throw new McpError(ErrorCode.InvalidParams, 'Invalid gateway resource URI');
+    let uri: string;
+    try { uri = decodeURIComponent(match[2]); } catch { throw new McpError(ErrorCode.InvalidParams, 'Invalid gateway resource URI'); }
+    return { service: match[1], uri };
   }
 
   private toolName(service: string, tool: string): string {
@@ -124,8 +225,10 @@ export class Gateway {
     const names = new Set<string>();
     const cursors = new Set<string>();
     let cursor: string | undefined;
+    let pages = 0;
     do {
-      const page = await service.client.listTools(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs });
+      if (++pages > 1000) throw new Error(`Too many tool pages from ${service.config.name}`);
+      const page = await this.withService(service, undefined, () => service.client.listTools(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs }));
       for (const tool of page.tools) {
         this.toolName(service.config.name, tool.name);
         if (names.has(tool.name)) throw new Error(`Server ${service.config.name} returned duplicate tools`);
@@ -148,7 +251,8 @@ export class Gateway {
   }
 
   private async startService(config: ServiceConfig): Promise<void> {
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.2.0' });
+    const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.3.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
     const transport = new ServiceTransport({
       command: config.command,
       args: config.args,
@@ -159,11 +263,25 @@ export class Gateway {
         MCP_GATEWAY_SERVICE_ID: config.name,
       },
     });
-    const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false };
+    const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
+    if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
+      const active = service.active;
+      if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
+      try {
+        const result = await this.server.elicitInput({
+          mode: 'form',
+          message: `[${service.config.name}] ${active.tool}: ${params.message}`,
+          requestedSchema: params.requestedSchema,
+          _meta: { ...params._meta, [SERVICE_META]: service.config.name, [SESSION_META]: this.sessionId },
+        }, { signal: AbortSignal.any([elicitationSignal, active.signal]), relatedRequestId: active.id, timeout: this.config.timeoutMs });
+        return active.signal.aborted ? { action: 'cancel' } : result;
+      } catch { return { action: 'cancel' }; }
+    });
     this.services.push(service);
     client.onerror = (error) => this.log(`Server ${config.name}: ${error.message}`);
     client.onclose = () => {
       service.connected = false;
+      service.closed.abort();
       service.tools = [];
       void this.notifyToolsChanged().catch((error: Error) => this.log(error.message));
     };
@@ -185,21 +303,32 @@ export class Gateway {
   }
 
   async start(input: Readable = process.stdin): Promise<void> {
-    // Settle all starts before cleanup, including services that succeed after a peer fails.
+    this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
+    const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
+    const transport = new StdioServerTransport(input);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read']);
+    await this.server.connect(transport);
+    // Learn upstream elicitation capability before children initialize.
+    await initialized;
+    if (this.closing) return;
     const results = await Promise.allSettled(this.config.services.map((config) => this.startService(config)));
     const failure = results.find((result) => result.status === 'rejected');
     if (failure?.status === 'rejected') {
+      this.resolveReady();
       await this.close();
       throw failure.reason;
     }
+    this.resolveReady();
     if (this.closing) return;
-    await this.server.connect(new StdioServerTransport(input));
     this.log(`Started with ${this.services.length} service(s)`);
   }
 
   close(): Promise<void> {
     this.closing ??= Promise.resolve().then(async () => {
+      this.resolveReady?.();
+      this.resolveInitialized?.();
       this.initialized = false;
+      for (const service of this.services) service.closed.abort();
       const results = await Promise.allSettled([
         this.server.close(),
         ...this.services.map(async (service) => {

@@ -1,17 +1,17 @@
 # Local stdio MCP gateway
 
-A small TypeScript MCP gateway. Each launch generates a UUID, starts local MCP servers, and exposes their tools through one stdio connection.
+A small TypeScript MCP gateway. Each launch generates a UUID, starts local MCP servers, and exposes their generic tools and manually-read resources through one stdio connection.
 
 ```text
 Pi A ⇄ gateway A ⇄ child MCP processes A
 Pi B ⇄ gateway B ⇄ child MCP processes B
 ```
 
-No HTTP, sockets, cookies, or shared daemon. This first version proxies tools, not resources, prompts, sampling, elicitation, tasks, or agent wake-up events.
+No HTTP, sockets, cookies, shared daemon, subscriptions, or custom events. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
 
 ## Setup
 
-Requires Node.js 22+ and the runtimes needed by your child servers.
+Requires Node.js 22+ and the runtimes needed by your child servers. The optional adapter is tested with Pi 1.1.0 (which requires Node.js 22.19+).
 
 ```bash
 npm ci
@@ -43,9 +43,21 @@ Commands are executables, not shell expressions. `cwd` defaults to the config di
 
 Child processes receive the MCP SDK's minimal default environment plus configured `env`. Other parent environment variables are **not** inherited automatically. `${VARIABLE}` references in `env` resolve from the gateway environment; missing variables fail startup. Keep credentials out of checked-in config files.
 
-## Connect Pi
+## Connect Pi (built-in MCP alternative)
 
-Add an entry to your Pi `mcp.json`, merging it with existing entries. Replace paths with your checkout and config locations:
+Use the optional extension instead of adding the gateway to `mcp.json`; never register the same gateway in both places. Load the extension explicitly with the config flag:
+
+```bash
+pi --extension /absolute/path/to/local-stdio-mcp-gateway/pi/gateway.ts --gateway-config /absolute/path/to/gateway.json
+```
+
+The extension starts one stdio gateway on `session_start`, creates no process at load time, and closes it idempotently at shutdown. The gateway inherits Pi’s environment so `${VARIABLE}` config references work; service processes still receive only their configured environment plus SDK defaults. `gateway_tools` discovers live model-callable tools, `gateway_call` validates each call against its advertised JSON Schema (2020-12), and `/gateway-panel [gateway-resource-uri]` manually lists or reads resources. The adapter registers no resource tools; panel contents are not added to the conversation. An agent can still access the same OS through other tools: this routing is not a secrecy boundary. UI-only tools are omitted and rejected; tools visible to both model and app remain callable. The standalone gateway remains usable without Pi packages.
+
+Approvals use ordinary MCP `elicitation/create`, not an agent-visible tool result. Services must request a flat form with one required boolean field; other forms are cancelled. Allow once returns `accept` with that field set to `true`; Decline and Cancel remain distinct. No UI, timeout, disconnect, or aborted calls cannot grant approval. Dialogs are serialized, and incoming confirmations are cancelled while the panel is open. No credentials are collected. Services must check the decision before performing the operation.
+
+Each service processes one forwarded request at a time, allowing stdio confirmations to be attributed to the active tool without custom request metadata. Separate services can run concurrently. Resource reads do not trigger approval prompts. Resource URIs are wrapped as `gateway-resource://<service>/<percent-encoded-original-uri>`; returned content URIs are wrapped too.
+
+To use Pi's built-in MCP client instead, add an entry to `mcp.json` as below and do not load the adapter. Replace paths with your checkout and config locations:
 
 ```json
 {
@@ -91,7 +103,7 @@ These values override caller/config attempts to replace them; tool arguments are
 
 **The identity belongs to the gateway run, not the Pi conversation.** Reconnect, restart, or reload creates a new UUID. Switching conversations inside Pi may also recreate the gateway. Persistent conversation identity would require additional Pi integration.
 
-Identity is a correlation label, **not authentication or a sandbox**. All configured servers execute with your OS permissions, and only trusted executables should be configured. Tool annotations are upstream hints, not security guarantees.
+Identity is a correlation label, **not authentication or a sandbox**. All configured servers execute with your OS permissions; Pi's `bash` tool has the same OS access, so this is not a security boundary. One-shot confirmations are cooperative service prompts, not general permission enforcement. Only configure trusted executables. Tool annotations are upstream hints, not security guarantees.
 
 ## Logs
 
@@ -115,7 +127,7 @@ An unwritable log prevents startup; a later write failure reports to stderr and 
 
 ## Lifecycle and validation
 
-All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. Upstream EOF is observed during startup; incoming initialization messages are buffered up to 1 MiB until services are ready. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed.
+All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. The upstream handshake happens first so child clients only advertise form elicitation when the harness supports it. Tool and resource requests wait for child startup; upstream EOF is observed throughout. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed. Cancelling or timing out a started service request (including resource reads) retires that service connection and removes its tools/resources until gateway restart (`/reload` in the adapter). MCP cancellation has no completion acknowledgement; retiring prevents late confirmations being attributed to another call. Other services stay connected.
 
 Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). Final bounded drains allow up to 100 ms each for remaining child diagnostics and buffered gateway stderr. This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and child diagnostics use stderr and the log file; stdout is reserved for MCP messages. A failed gateway stderr stream triggers cleanup and suppresses further stderr output; file logging remains available during cleanup.
 
@@ -125,4 +137,14 @@ npm test
 npm run build
 ```
 
-The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, unknown-tool rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
+The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, approval/decline/cancellation and no-UI behavior, private panel refresh through Pi’s extension loader, unknown-tool rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
+
+## Try the demo
+
+```bash
+npm run build
+# In gateway.demo.json, replace the service path with this checkout's absolute path.
+pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.demo.json"
+```
+
+Ask the model to discover `gateway_tools` and call `demo__increment`; approve or decline the one-shot prompt. Then run `/gateway-panel` and select **Demo counter**, or provide `gateway-resource://demo/demo%3A%2F%2Fcounter`; press `r` to refresh and Escape to close. The demo only increments an in-memory counter.
