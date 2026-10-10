@@ -39,7 +39,7 @@ function put(value: ObjectValue, path: string[], next: unknown): void {
   parent[path[path.length - 1]] = next;
 }
 const display = (value: unknown) => (JSON.stringify(value) ?? '(unset)')
-  .replace(/[\s\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  .replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const pathLabel = (path: string[]) => display(path.map((key) => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')).slice(1, -1);
 
 const primitive = (value: unknown) => ['string', 'number', 'boolean'].includes(typeof value);

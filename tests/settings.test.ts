@@ -213,9 +213,10 @@ test('operator settings stay private, route by service, and require confirmed sc
               panel.handleInput('\u001b[6~');
             }
             assert.ok(preview.includes('\\u0020'.repeat(80)), 'Significant spaces survive wrapping');
+            assert.ok(preview.includes('\\u200b\\u200e\\u200f'), 'Invisible characters remain explicit');
             panel.handleInput('\r');
           } else if (lines.some((line) => line.includes('JSON value'))) {
-            panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(JSON.stringify('a'+' '.repeat(80)+'b')); panel.handleInput('\r');
+            panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(JSON.stringify('a'+' '.repeat(80)+'b\u200b\u200e\u200f')); panel.handleInput('\r');
           }
           else {
             const choices=lines.filter((line)=>/^(→ |  )/.test(line)).map((line)=>line.slice(2));
@@ -227,8 +228,8 @@ test('operator settings stay private, route by service, and require confirmed sc
         } finally {panel.dispose();}
       };
       await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
-        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b'}); updates++;
-        return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b'}};
+        assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}); updates++;
+        return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}};
       }, new AbortController().signal, 1000);
       assert.equal(updates, 1);
     }

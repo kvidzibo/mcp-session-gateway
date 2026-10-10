@@ -64,8 +64,8 @@ TUI selectors use single-row, scrolling lists in isolated overlays, independent
 of editor widgets and footers. Long labels are truncated in selection lists; save
 previews show the complete values. Strings/numbers use a focused, single-line JSON
 input overlay (quote strings, use JSON escapes for newlines/control characters).
-Significant whitespace in values/paths is escaped as `\uXXXX` in previews so line
-wrapping cannot hide whitespace-only changes. `readOnly` propagates to descendants.
+Spaces and all non-ASCII characters in values/paths are escaped as `\uXXXX` in
+previews, preserving whitespace and exposing invisible/bidirectional characters. `readOnly` propagates to descendants.
 Complex unions, arrays, `$ref` controls and unsupported types remain view-only;
 full JSON Schema 2020-12 validation still runs before saving. Property paths use
 JSON Pointer escaping. Unsafe prototype property names are refused. Object nesting
