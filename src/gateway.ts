@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -16,9 +17,21 @@ import type { GatewayConfig, ServiceConfig } from './config.js';
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
 
+// The SDK can initiate transport cleanup without awaiting it. Keep that teardown
+// observable even after it has cleared its process/client transport references.
+class ManagedStdioTransport extends StdioClientTransport {
+  private closing?: Promise<void>;
+
+  override close(): Promise<void> {
+    this.closing ??= Promise.resolve().then(() => super.close());
+    return this.closing;
+  }
+}
+
 interface Service {
   config: ServiceConfig;
   client: Client;
+  transport: ManagedStdioTransport;
   tools: Tool[];
   refresh: Promise<void>;
   connected: boolean;
@@ -26,6 +39,7 @@ interface Service {
 
 export class Gateway {
   readonly sessionId = randomUUID();
+  onclose?: () => void;
   private readonly server = new Server(
     { name: 'local-stdio-mcp-gateway', version: '0.1.0' },
     { capabilities: { tools: { listChanged: true } } },
@@ -36,7 +50,10 @@ export class Gateway {
 
   constructor(private readonly config: GatewayConfig) {
     this.server.oninitialized = () => { this.initialized = true; };
-    this.server.onclose = () => { void this.close().catch((error: Error) => this.log(error.message)); };
+    this.server.onclose = () => {
+      this.onclose?.();
+      void this.close().catch((error: Error) => this.log(error.message));
+    };
     this.server.onerror = (error) => this.log(error.message);
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -142,7 +159,18 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.1.0' });
-    const service: Service = { config, client, tools: [], refresh: Promise.resolve(), connected: false };
+    const transport = new ManagedStdioTransport({
+      command: config.command,
+      args: config.args,
+      cwd: config.cwd,
+      stderr: 'inherit',
+      env: {
+        ...config.env,
+        MCP_GATEWAY_SESSION_ID: this.sessionId,
+        MCP_GATEWAY_SERVICE_ID: config.name,
+      },
+    });
+    const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false };
     this.services.push(service);
     client.onerror = (error) => this.log(`Server ${config.name}: ${error.message}`);
     client.onclose = () => {
@@ -161,24 +189,13 @@ export class Gateway {
         await this.notifyToolsChanged();
       }
     });
-    const transport = new StdioClientTransport({
-      command: config.command,
-      args: config.args,
-      cwd: config.cwd,
-      stderr: 'inherit',
-      env: {
-        ...config.env,
-        MCP_GATEWAY_SESSION_ID: this.sessionId,
-        MCP_GATEWAY_SERVICE_ID: config.name,
-      },
-    });
     await client.connect(transport, { timeout: this.config.timeoutMs });
     if (this.closing) return;
     service.connected = true;
     if (client.getServerCapabilities()?.tools) await this.queueRefresh(service);
   }
 
-  async start(): Promise<void> {
+  async start(input: Readable = process.stdin): Promise<void> {
     // Settle all starts before cleanup, including services that succeed after a peer fails.
     const results = await Promise.allSettled(this.config.services.map((config) => this.startService(config)));
     const failure = results.find((result) => result.status === 'rejected');
@@ -187,15 +204,25 @@ export class Gateway {
       throw failure.reason;
     }
     if (this.closing) return;
-    await this.server.connect(new StdioServerTransport());
+    await this.server.connect(new StdioServerTransport(input));
     this.log(`Started with ${this.services.length} service(s)`);
   }
 
   close(): Promise<void> {
     this.closing ??= Promise.resolve().then(async () => {
       this.initialized = false;
-      await this.server.close();
-      await Promise.all(this.services.map((service) => service.client.close()));
+      const results = await Promise.allSettled([
+        this.server.close(),
+        ...this.services.map(async (service) => {
+          try {
+            await service.client.close();
+          } finally {
+            await service.transport.close();
+          }
+        }),
+      ]);
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
     });
     return this.closing;
   }

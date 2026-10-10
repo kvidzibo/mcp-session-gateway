@@ -95,7 +95,7 @@ Identity is a correlation label, **not authentication or a sandbox**. All config
 
 ## Lifecycle and validation
 
-All configured servers must initialize successfully. Startup fails and cleans up children if any server fails. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed.
+All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. Upstream EOF is observed during startup; incoming initialization messages are buffered up to 1 MiB until services are ready. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed.
 
 Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes through the SDK. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and inherited child diagnostics use stderr; stdout is reserved for MCP messages.
 
@@ -105,4 +105,4 @@ npm test
 npm run build
 ```
 
-The integration test runs real MCP clients against separate gateway processes and verifies identity isolation, downstream identity propagation, namespaced routing, and unknown-tool rejection.
+The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, unknown-tool rejection, and cleanup of stubborn children after startup timeout or upstream EOF.
