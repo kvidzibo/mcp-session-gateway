@@ -1,7 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { getKeybindings, Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
 
@@ -94,10 +94,10 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
           ...results, '', theme.fg('muted', width < 40 ? '↑↓ Enter select Esc back' : 'Type to filter  ↑/↓ navigate  Enter select  Esc back'), border].map((line) => truncateToWidth(line, width));
       },
       handleInput(data: string) {
-        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+        const keys = getKeybindings();
+        if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || keys.matches(data, 'tui.select.cancel')) cancel();
         else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) {
-          if (matchesKey(data, Key.up) || matchesKey(data, Key.down) || matchesKey(data, Key.enter) ||
-              matchesKey(data, Key.ctrl('p')) || matchesKey(data, Key.ctrl('n'))) list?.handleInput(data);
+          if (keys.matches(data, 'tui.select.up') || keys.matches(data, 'tui.select.down') || keys.matches(data, 'tui.select.confirm')) list?.handleInput(data);
           else {
             input.handleInput(data);
             if (query !== input.getValue()) {

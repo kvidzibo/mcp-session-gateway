@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import { editSettings, selectSettingsOption, settingsValidationSchema } from '../pi/settings.js';
 
 const theme = { fg: (_color: string, text: string) => text };
@@ -12,6 +12,7 @@ test('settings search filters immediately, preserves original choice identity an
   choices[1400] = '1401. Grok fast — xai/grok-fast';
   choices[1450] = '1451. Grok reasoning — xai/grok-reasoning';
   const controller = new AbortController();
+  let nextKey = '\u001b[B', confirmKey = '\r';
   const ctx = { ui: { custom: async (factory: Function) => {
     let answer: unknown, completed = false;
     const terminal = { rows: 24, columns: 80 };
@@ -29,23 +30,29 @@ test('settings search filters immediately, preserves original choice identity an
       panel.handleInput('XAI GROK');
       assert.match(render(), /1401\. Grok fast/);
       assert.doesNotMatch(render(), /provider\/model-/);
-      panel.handleInput('\u001b[B');
+      panel.handleInput(nextKey);
       terminal.rows = 10; terminal.columns = 28;
       assert.match(render(), /→ 1451\. Grok reasoning/);
       panel.handleInput('nomatch');
       assert.match(render(), /No matching choices/);
-      panel.handleInput('\r');
+      panel.handleInput(confirmKey);
       assert.equal(completed, false, 'Enter cannot select a hidden stale result');
       panel.handleInput('\u0001'); panel.handleInput('\u000b');
       assert.match(render(), /→ 1\. Model 0/);
       panel.handleInput('grok reasoningX'); panel.handleInput('\u007f');
       // Input and Enter can arrive before the scheduled repaint.
-      panel.handleInput('\r');
+      panel.handleInput(confirmKey);
       assert.equal(completed, true);
       return answer;
     } finally { panel.dispose(); }
   } } } as unknown as ExtensionContext;
   assert.equal(await selectSettingsOption(ctx, 'Model', choices, { signal: controller.signal }), choices[1450]);
+  const keys = getKeybindings(), original = keys.getUserBindings();
+  try {
+    keys.setUserBindings({ ...original, 'tui.select.down': 'ctrl+n', 'tui.select.confirm': 'tab' });
+    nextKey = '\u000e'; confirmKey = '\t';
+    assert.equal(await selectSettingsOption(ctx, 'Model', choices, { signal: controller.signal }), choices[1450]);
+  } finally { keys.setUserBindings(original); }
 });
 
 test('large settings catalogues open without compilation and compact only equivalent constant unions', async (t) => {
