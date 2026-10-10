@@ -138,6 +138,10 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     assert.equal(await readFile(lock, 'utf8'), 'another owner');
     await rm(lock);
 
+    const gateMarker = join(dir, 'must-not-run');
+    await assert.rejects(runPackageCommand(process.execPath, ['-e', `require('fs').writeFileSync(${JSON.stringify(gateMarker)}, 'ran')`],
+      dir, process.env, signal, 5000, () => {}, async () => { throw new Error('journal unavailable'); }), /journal unavailable/);
+    await assert.rejects(access(gateMarker), { code: 'ENOENT' }, 'An unjournaled command must never execute');
     let childPid = 0;
     const controller = new AbortController();
     await assert.rejects(runPackageCommand(process.execPath, ['-e', `
@@ -208,7 +212,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     assert.deepEqual(loaded.errors, []);
     loaded.runtime.flagValues.set('gateway-config', blockedFile);
     const extension = loaded.extensions[0];
-    let buildStarted!: () => void;
+    let buildStarted!: () => void, buildPid = 0;
     const buildWaiting = new Promise<void>((resolve) => { buildStarted = resolve; });
     const commandCtx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true, ui: {
       notify() {},
@@ -217,7 +221,8 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
         const done = (value: unknown) => queueMicrotask(() => { component.dispose(); resolve(value); });
         const requestRender = () => queueMicrotask(() => {
           const rendered = component?.render(80).join('\n') ?? '';
-          if (rendered.startsWith('Preparing worker') && /(?:^|\n)BUILD_WAITING:\d+(?:\n|$)/.test(rendered)) buildStarted();
+          const match = /(?:^|\n)BUILD_WAITING:(\d+)(?:\n|$)/.exec(rendered);
+          if (rendered.startsWith('Preparing worker') && match) { buildPid = Number(match[1]); buildStarted(); }
         });
         component = factory({ terminal: { rows: 24, columns: 80 }, requestRender }, { fg: (_: string, value: string) => value }, {}, done);
         const text = () => component.render(80).join('\n');
@@ -233,6 +238,15 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     shutdownExtension = async () => { for (const handler of extension.handlers.get('session_shutdown') ?? []) await handler({}, commandCtx); };
     const managerCommand = extension.commands.get('gateway-manager').handler('', commandCtx);
     await buildWaiting;
+    const journal = (await readFile(lock, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(journal[0].kind, 'owner');
+    assert.equal(journal[0].pid, process.pid);
+    const receipt = journal.at(-1);
+    assert.equal(receipt.kind, 'command');
+    assert.equal(receipt.pid, receipt.pgid);
+    const buildStat = await readFile(`/proc/${buildPid}/stat`, 'utf8');
+    assert.equal(Number(buildStat.slice(buildStat.lastIndexOf(') ') + 2).split(' ')[2]), receipt.pgid,
+      'Running build group must be recorded durably before code is allowed to execute');
     await shutdownExtension();
     await managerCommand;
     shutdownExtension = undefined;

@@ -197,9 +197,21 @@ Failed preparations remove only their new staging release; active/prepared
 versions are preserved. An interrupted process may leave an orphan release or
 `.lock`; this never authorizes automatic activation or retry.
 
-There is no garbage collection or automatic stale-lock deletion. After verifying
-that the recorded PID and its command group have stopped, an operator can remove
-that package's stale `.lock` manually. Never remove a live lock. Preserve all
+There is no garbage collection or automatic stale-lock deletion. `.lock` is an
+append-only JSON Lines journal: an owner PID/start time, then command PID/PGID,
+executable, cwd and start time receipts. Each detached wrapper waits for its receipt
+to be written and synced before launching package code; parent death before that
+gate exits the wrapper without starting the command.
+
+A dead owner PID alone does **not** prove the lock is stale: detached builds can
+outlive Pi after SIGKILL/OOM. Verify that the owner and **every recorded process
+group** have stopped, checking start times, executable/cwd and group members
+(e.g. with `ps -eo pid,ppid,pgid,lstart,args`). PIDs may be reused; never kill a
+process based only on its numeric ID. Inspect surviving groups, terminate or let
+them finish, then verify again before manually removing the package's `.lock`.
+If the journal is incomplete/corrupt or ownership is uncertain, do not unlock
+until an operator has established that no preparation code remains. Never remove
+a live lock. Preserve all
 releases referenced by state or still used by any running session; shut services
 down before manually reclaiming unreferenced directories. Store source identity
 cannot be silently changed—use a new package ID for an unrelated source/branch.
@@ -210,7 +222,8 @@ Run `npm run check`, `npm test`, and `npm run build`. The inventory case covers
 read-only checks and Git/manifest guards. One focused lifecycle case exercises
 real temporary Git repositories and MCP services, npm subprocess wiring, prepare/
 activate/rollback isolation, stale revisions, dirty/divergent checkouts, validation
-failure/log retention, lock contention, process-group cancellation and operator
+failure/log retention, lock contention, durable process-group receipts/gated
+execution, process-group cancellation and operator
 confirmation/decline. It does not install into personal directories.
 
 Visual checks use Xvfb, private D-Bus and temporary Pi HOME/profile/project/store.

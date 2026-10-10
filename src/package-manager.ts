@@ -21,12 +21,23 @@ const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'E
 
 /** Trusted commands only; process-group cleanup also covers npm/uv grandchildren on POSIX. */
 export async function runPackageCommand(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv,
-  signal: AbortSignal, timeout: number, output: (chunk: string) => void): Promise<void> {
+  signal: AbortSignal, timeout: number, output: (chunk: string) => void, recordGroup?: (pid: number) => Promise<void>): Promise<void> {
   signal.throwIfAborted();
   if (process.platform === 'win32') throw new Error('Managed builds currently require POSIX process-group cleanup');
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // A journaled command cannot run until its group receipt is durable. If the
+    // parent dies before the gate opens, stdin EOF exits this wrapper without spawning it.
+    const gate = `const {spawn}=require('node:child_process');let input='',started=false;
+process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{input+=chunk;
+if(!started&&input==='start\\n'){started=true;process.stdin.destroy();
+const child=spawn(process.argv[1],process.argv.slice(2),{stdio:['ignore','inherit','inherit']});
+child.on('error',()=>process.exit(127));child.on('exit',code=>{process.exitCode=code??1;});}});
+process.stdin.on('end',()=>{if(!started)process.exit(1);});`;
+    const child = recordGroup
+      ? spawn(process.execPath, ['-e', gate, '--', command, ...args], { cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      : spawn(command, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let killTimer: NodeJS.Timeout | undefined, stopped = false;
+    let dispatch = Promise.resolve(), dispatchFailure: unknown;
     const stop = () => {
       if (stopped) return;
       stopped = true;
@@ -37,14 +48,24 @@ export async function runPackageCommand(command: string, args: string[], cwd: st
     const timer = setTimeout(stop, timeout);
     signal.addEventListener('abort', stop, { once: true });
     const cleanup = () => { clearTimeout(timer); if (killTimer) clearTimeout(killTimer); signal.removeEventListener('abort', stop); };
-    child.stdout.on('data', (data: Buffer) => output(data.toString('utf8')));
-    child.stderr.on('data', (data: Buffer) => output(data.toString('utf8')));
+    child.stdout!.on('data', (data: Buffer) => output(data.toString('utf8')));
+    child.stderr!.on('data', (data: Buffer) => output(data.toString('utf8')));
+    child.stdin?.on('error', () => stop());
+    if (recordGroup) child.once('spawn', () => {
+      dispatch = (async () => {
+        await recordGroup(child.pid!);
+        if (!stopped && !signal.aborted) child.stdin!.end('start\n');
+        else child.stdin!.destroy();
+      })().catch((error: unknown) => { dispatchFailure = error; stop(); });
+    });
     child.on('error', (error) => { cleanup(); reject(error); });
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
+      await dispatch;
       // Kill lingering same-group helpers even if their parent already exited.
       if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
       cleanup();
       if (signal.aborted) reject(signal.reason);
+      else if (dispatchFailure) reject(dispatchFailure);
       else if (stopped || code !== 0) reject(new Error(stopped ? 'Command timed out' : `Command failed (exit ${code})`));
       else resolve();
     });
@@ -97,7 +118,8 @@ export class PackageManager {
     const info = await lstat(path);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Package store directories must not be symlinks');
   }
-  private async lock<T>(pkg: PackageConfig, revision: string, signal: AbortSignal, run: (state: PackageState) => Promise<T>): Promise<T> {
+  private async lock<T>(pkg: PackageConfig, revision: string, signal: AbortSignal,
+    run: (state: PackageState, record: (entry: Record<string, unknown>) => Promise<void>) => Promise<T>): Promise<T> {
     signal.throwIfAborted();
     await this.directorySafe(this.root);
     const marker = join(this.root, 'store.json');
@@ -117,11 +139,12 @@ export class PackageManager {
     try { lock = await open(lockPath, 'wx', 0o600); }
     catch { throw new Error('Package is locked by another operation. Stale locks require manual recovery; never delete a live lock.'); }
     try {
-      await lock.writeFile(JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+      const record = async (entry: Record<string, unknown>) => { await lock.writeFile(`${JSON.stringify(entry)}\n`); await lock.sync(); };
+      await record({ kind: 'owner', pid: process.pid, started: new Date().toISOString() });
       const state = await this.state(pkg, signal);
       if (state.revision !== revision) throw new Error('Package changed since preview; reopen and confirm again');
       signal.throwIfAborted();
-      return await run(state);
+      return await run(state, record);
     } finally { await lock.close(); await rm(lockPath); }
   }
   private async save(pkg: PackageConfig, state: PackageState, signal: AbortSignal): Promise<void> {
@@ -157,7 +180,7 @@ export class PackageManager {
     if (pkg.source.type === 'local') throw new Error('Local sources are externally managed');
     const source = pkg.source, managed = pkg.managed;
     if (source.type === 'npm' ? !semver.valid(plan.version) : !/^[a-f0-9]{40,64}$/.test(plan.version)) throw new Error('Invalid pinned version');
-    await this.lock(pkg, plan.revision, signal, async (state) => {
+    await this.lock(pkg, plan.revision, signal, async (state, record) => {
       if (state.active) await this.verify(pkg, state.active, signal);
       const release = { id: randomUUID(), version: plan.version };
       await this.directorySafe(join(this.directory(pkg), 'releases'));
@@ -189,17 +212,21 @@ export class PackageManager {
           NPM_CONFIG_USERCONFIG: join(home, 'user.npmrc'), NPM_CONFIG_GLOBALCONFIG: join(home, 'global.npmrc'),
           NPM_CONFIG_CACHE: join(home, 'cache'), NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org', CI: '1',
         };
+        const run = (command: string, args: string[], cwd: string, environment = env) => runPackageCommand(
+          command, args, cwd, environment, signal, managed.timeoutMs, report,
+          (pid) => record({ kind: 'command', pid, pgid: pid, command, cwd, started: new Date().toISOString() }),
+        );
         const root = this.releasePath(pkg, release);
         if (source.type === 'git') {
-          await runPackageCommand('git', [...safeGitArgs, 'clone', '--no-checkout', '--single-branch', '--branch', source.branch, '--', source.url, root], staging, gitEnvironment(), signal, managed.timeoutMs, report);
+          await run('git', [...safeGitArgs, 'clone', '--no-checkout', '--single-branch', '--branch', source.branch, '--', source.url, root], staging, gitEnvironment());
           // The branch may have advanced since approval. Never silently choose its new HEAD.
           if (await git(['rev-parse', 'HEAD'], root, signal) !== plan.version) throw new Error('Remote branch moved since preview; check and confirm again');
           if (state.active) await git(['merge-base', '--is-ancestor', state.active.version, plan.version], root, signal);
-          await runPackageCommand('git', [...safeGitArgs, 'checkout', '--detach', plan.version], root, gitEnvironment(), signal, managed.timeoutMs, report);
+          await run('git', [...safeGitArgs, 'checkout', '--detach', plan.version], root, gitEnvironment());
         } else {
           const prefix = join(staging, 'install');
           await mkdir(prefix);
-          await runPackageCommand('npm', ['install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org', '--', `${source.name}@${plan.version}`], staging, env, signal, managed.timeoutMs, report);
+          await run('npm', ['install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org', '--', `${source.name}@${plan.version}`], staging);
         }
         for (const [phase, steps] of [['Build', managed.build], ['Validate', managed.validate]] as const) {
           for (const step of steps) {
@@ -207,7 +234,7 @@ export class PackageManager {
             const inside = relative(await realpath(root), cwd);
             if (inside.startsWith('..') || isAbsolute(inside)) throw new Error('Step cwd escapes package root');
             report(`\n${phase}: ${JSON.stringify([step.command, ...step.args])}\n`);
-            await runPackageCommand(step.command, step.args, cwd, env, signal, managed.timeoutMs, report);
+            await run(step.command, step.args, cwd);
           }
         }
         await this.verify(pkg, release, signal);
