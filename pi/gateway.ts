@@ -61,15 +61,17 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     let release!: () => void;
     approvalQueue = new Promise<void>((resolve) => { release = resolve; });
     await previous;
+    let acquired = false;
     try {
       if (signal.aborted || uiBusy) return { action: 'cancel' };
       uiBusy = true;
+      acquired = true;
       const choice = await ctx.ui.select(clean(params.message), ['Decline', 'Allow once', 'Cancel'], { signal, timeout });
       if (signal.aborted) return { action: 'cancel' };
       if (choice === 'Allow once') return { action: 'accept', content: { [key]: true } };
       return { action: choice === 'Decline' ? 'decline' : 'cancel' };
     } catch { return { action: 'cancel' }; }
-    finally { uiBusy = false; release(); }
+    finally { if (acquired) uiBusy = false; release(); }
   }
 
   pi.on('session_start', async (_event, ctx) => {
@@ -82,8 +84,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const current = new Client({ name: 'pi-gateway-adapter', version: '0.3.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); };
-    if (ctx.hasUI) handleElicitation(current, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: 'pipe' });
+    if (ctx.hasUI) handleElicitation(current, transport, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});
     try {

@@ -17,7 +17,7 @@ import {
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
 import { writeDiagnostic } from './diagnostics.js';
-import { handleElicitation } from './elicitation.js';
+import { handleElicitation, trackRequests } from './elicitation.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -52,6 +52,7 @@ export class Gateway {
   private resolveReady!: () => void;
   private resolveInitialized!: () => void;
   private closing?: Promise<void>;
+  private requests?: ReturnType<typeof trackRequests>;
 
   constructor(private readonly config: GatewayConfig) {
     this.server.oninitialized = () => { this.initialized = true; this.resolveInitialized?.(); };
@@ -61,7 +62,7 @@ export class Gateway {
       void this.close().catch((error: Error) => this.log(error.message));
     };
     this.server.onerror = (error) => this.log(error.message);
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    this.server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       return { tools: [
         {
@@ -77,8 +78,8 @@ export class Gateway {
           }),
         ),
       ] };
-    });
-    this.server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => {
+    }));
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       const resources = [];
       for (const service of this.services.filter((item) => item.connected && item.client.getServerCapabilities()?.resources)) {
@@ -95,8 +96,8 @@ export class Gateway {
         } while (cursor !== undefined);
       }
       return { resources };
-    });
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
+    }));
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       const parsed = this.parseResourceUri(request.params.uri);
       const service = this.services.find((item) => item.config.name === parsed.service && item.connected);
@@ -104,8 +105,8 @@ export class Gateway {
       const { progressToken: _progress, ...meta } = request.params._meta ?? {};
       const result = await this.withService(service, extra.signal, () => service.client.readResource({ uri: parsed.uri, _meta: { ...meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } }, { timeout: this.config.timeoutMs, signal: extra.signal }));
       return { ...result, contents: result.contents.map((content) => ({ ...content, uri: this.resourceUri(parsed.service, content.uri) })) };
-    });
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    }));
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       if (request.params.name === 'gateway__identity') {
         const identity = { sessionId: this.sessionId };
@@ -154,11 +155,19 @@ export class Gateway {
         });
       }
       throw new McpError(ErrorCode.InvalidParams, `Unknown or disconnected tool: ${request.params.name}`);
-    });
+    }));
   }
 
   private log(message: string): void {
     writeDiagnostic(`[gateway ${this.sessionId}] ${message}\n`);
+  }
+
+  private async withRequest<T>(extra: { requestId: RequestId; signal: AbortSignal }, run: () => Promise<T>): Promise<T> {
+    extra.signal = this.requests?.signal(extra.requestId, extra.signal) ?? extra.signal;
+    try {
+      extra.signal.throwIfAborted();
+      return await run();
+    } finally { this.requests?.finish(extra.requestId); }
   }
 
   // Stdio has no wire-level parent request ID. Serializing service requests
@@ -255,7 +264,7 @@ export class Gateway {
       },
     });
     const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
-    if (supportsForms) handleElicitation(client, async (params, elicitationSignal) => {
+    if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
       const active = service.active;
       if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
       try {
@@ -296,7 +305,9 @@ export class Gateway {
   async start(input: Readable = process.stdin): Promise<void> {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
-    await this.server.connect(new StdioServerTransport(input));
+    const transport = new StdioServerTransport(input);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read']);
+    await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;
     if (this.closing) return;

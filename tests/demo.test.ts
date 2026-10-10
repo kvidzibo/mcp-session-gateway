@@ -6,6 +6,9 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { handleElicitation } from '../src/elicitation.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uri = 'gateway-resource://demo/demo%3A%2F%2Fcounter';
@@ -46,6 +49,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     demo: { command: process.execPath, args: [path.join(root, 'dist/examples/demo-service.js')] },
     checks: { command: process.execPath, args: ['--input-type=module', '-e', checks], cwd: root, env: { PROBE: '${MCP_PANEL_TEST_ENV}' } },
     readchecks: { command: process.execPath, args: ['--input-type=module', '-e', checks], cwd: root, env: { PROBE: '${MCP_PANEL_TEST_ENV}' } },
+    zerochecks: { command: process.execPath, args: ['--input-type=module', '-e', checks], cwd: root, env: { PROBE: '${MCP_PANEL_TEST_ENV}' } },
   } }));
   const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'dist/cli.js'), '--config', config], env: { MCP_PANEL_TEST_ENV: process.env.MCP_PANEL_TEST_ENV }, stderr: 'pipe' });
   transport.stderr?.on('data', () => {});
@@ -71,8 +75,16 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
   });
   try {
     await client.connect(transport);
-    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ['checks__slow', 'checks__structured', 'demo__increment', 'gateway__identity', 'readchecks__slow', 'readchecks__structured']);
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ['checks__slow', 'checks__structured', 'demo__increment', 'gateway__identity', 'readchecks__slow', 'readchecks__structured', 'zerochecks__slow', 'zerochecks__structured']);
     await assert.rejects(client.callTool({ name: 'checks__app', arguments: {} }));
+    // Reuse completed initialization ID 0 in a valid raw upstream call.
+    client.onerror = () => {}; // Its raw response has no SDK response waiter.
+    await transport.send({ jsonrpc: '2.0', id: 0, method: 'tools/call', params: { name: 'zerochecks__slow', arguments: {} } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 0 } });
+    await assert.rejects(client.callTool({ name: 'zerochecks__slow', arguments: {} }));
+    assert.ok(!(await client.listTools()).tools.some(({ name }) => name.startsWith('zerochecks__')));
+    assert.equal(latePrompts, 0);
     const delayedAbort = new AbortController();
     const late = client.callTool({ name: 'checks__slow', arguments: {} }, undefined, { signal: delayedAbort.signal });
     const lateFailed = assert.rejects(late);
@@ -112,6 +124,24 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     await assert.rejects(client.readResource({ uri: 'gateway-resource://missing/x' }));
     await client.close();
 
+    // Deliver request 0 and its cancellation in the same synchronous batch.
+    const [hostWire, serviceWire] = InMemoryTransport.createLinkedPair();
+    const host = new Client({ name: 'immediate-cancel', version: '1' }, { capabilities: { elicitation: { form: {} } } });
+    const service = new Server({ name: 'immediate-cancel', version: '1' }, { capabilities: {} });
+    let sawCancellation!: (aborted: boolean) => void;
+    const observed = new Promise<boolean>((resolve) => { sawCancellation = resolve; });
+    handleElicitation(host, hostWire, async (_params, signal) => { sawCancellation(signal.aborted); return { action: 'cancel' }; });
+    try {
+      await service.connect(serviceWire);
+      await host.connect(hostWire);
+      const cancel = new AbortController();
+      const request = service.elicitInput({ message: 'Immediate cancellation', requestedSchema: { type: 'object', properties: { confirm: { type: 'boolean' } }, required: ['confirm'] } }, { signal: cancel.signal });
+      const rejected = assert.rejects(request);
+      cancel.abort();
+      await rejected;
+      assert.equal(await observed, true);
+    } finally { await host.close(); await service.close(); }
+
     // Load the actual extension through Pi's jiti loader; never invoke a model.
     const { loadExtensions } = await import(pathToFileURL(path.join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
     const loaded = await loadExtensions([path.join(root, 'pi/gateway.ts')], root);
@@ -146,6 +176,12 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
             await changed;
           }
           assert.ok(panel.render(50).some((line: string) => line.includes('Counter: 1')));
+          choice = 'Allow once';
+          const call = ext.tools.get('gateway_call').definition;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const result = await call.execute('panel-confirmation', { name: 'demo__increment', arguments: {} }, undefined, undefined, ctx);
+            assert.equal(result.isError, true, 'Repeated confirmations must not unlock an open panel');
+          }
           changed = new Promise<void>((resolve) => { renderChanged = resolve; });
           panel.handleInput('r');
           await changed;
