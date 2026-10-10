@@ -18,8 +18,14 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
   const checks = `
     import { Server } from '@modelcontextprotocol/sdk/server/index.js';
     import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-    import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-    const server = new Server({name:'checks',version:'1'}, {capabilities:{tools:{}}});
+    import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+    const server = new Server({name:'checks',version:'1'}, {capabilities:{tools:{},resources:{}}});
+    server.setRequestHandler(ListResourcesRequestSchema, async () => ({resources:[{uri:'checks://slow',name:'Slow resource'}]}));
+    server.setRequestHandler(ReadResourceRequestSchema, async () => {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      await server.elicitInput({message:'Late approval',requestedSchema:{type:'object',properties:{confirm:{type:'boolean'}},required:['confirm']}});
+      return {contents:[{uri:'checks://slow',text:'Read finished'}]};
+    });
     const schema = {$schema:'https://json-schema.org/draft/2020-12/schema',$id:'urn:test:input',type:'object',allOf:[{properties:{value:{type:'integer'}}}],required:['value'],unevaluatedProperties:false};
     server.setRequestHandler(ListToolsRequestSchema, async () => ({tools:[
       {name:'structured',inputSchema:schema,_meta:{ui:{visibility:['model','app']}}},
@@ -39,6 +45,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
   await writeFile(config, JSON.stringify({ timeoutMs: 5000, servers: {
     demo: { command: process.execPath, args: [path.join(root, 'dist/examples/demo-service.js')] },
     checks: { command: process.execPath, args: ['--input-type=module', '-e', checks], cwd: root, env: { PROBE: '${MCP_PANEL_TEST_ENV}' } },
+    readchecks: { command: process.execPath, args: ['--input-type=module', '-e', checks], cwd: root, env: { PROBE: '${MCP_PANEL_TEST_ENV}' } },
   } }));
   const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'dist/cli.js'), '--config', config], env: { MCP_PANEL_TEST_ENV: process.env.MCP_PANEL_TEST_ENV }, stderr: 'pipe' });
   transport.stderr?.on('data', () => {});
@@ -64,7 +71,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
   });
   try {
     await client.connect(transport);
-    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ['checks__slow', 'checks__structured', 'demo__increment', 'gateway__identity']);
+    assert.deepEqual((await client.listTools()).tools.map((tool) => tool.name).sort(), ['checks__slow', 'checks__structured', 'demo__increment', 'gateway__identity', 'readchecks__slow', 'readchecks__structured']);
     await assert.rejects(client.callTool({ name: 'checks__app', arguments: {} }));
     const delayedAbort = new AbortController();
     const late = client.callTool({ name: 'checks__slow', arguments: {} }, undefined, { signal: delayedAbort.signal });
@@ -76,6 +83,15 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     await lateFailed;
     await followingFailed;
     assert.ok(!(await client.listTools()).tools.some(({ name }) => name.startsWith('checks__')));
+    assert.equal(latePrompts, 0);
+    const readAbort = new AbortController();
+    const cancelledRead = assert.rejects(client.readResource({ uri: 'gateway-resource://readchecks/checks%3A%2F%2Fslow' }, { signal: readAbort.signal }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    readAbort.abort();
+    const afterReadFailed = assert.rejects(client.callTool({ name: 'readchecks__slow', arguments: {} }));
+    await cancelledRead;
+    await afterReadFailed;
+    assert.ok(!(await client.listTools()).tools.some(({ name }) => name.startsWith('readchecks__')));
     assert.equal(latePrompts, 0);
     assert.equal((await client.listResources()).resources[0].uri, uri);
     assert.equal((await client.callTool({ name: 'demo__increment', arguments: {} })).isError, undefined);
@@ -107,6 +123,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     let choice = 'Allow once';
     let waitForCancel = false;
     let promptReady: (() => void) | undefined;
+    let promptCancelled: (() => void) | undefined;
     const ctx = {
       cwd: root, mode: 'tui', hasUI: true,
       ui: {
@@ -114,6 +131,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
           if (!waitForCancel) return choice;
           promptReady?.();
           await new Promise<void>((resolve) => opts.signal.addEventListener('abort', () => resolve(), { once: true }));
+          promptCancelled?.();
           return undefined;
         },
         notify: () => {},
@@ -148,6 +166,19 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
       await dispatch('session_start');
       const tool = ext.tools.get('gateway_call').definition;
       const invoke = (signal?: AbortSignal) => tool.execute('test', { name: 'demo__increment', arguments: {} }, signal, undefined, ctx);
+      // Cancel the first incoming elicitation: its SDK request ID is exactly 0.
+      waitForCancel = true;
+      const firstReady = new Promise<void>((resolve) => { promptReady = resolve; });
+      const firstCancelled = new Promise<void>((resolve) => { promptCancelled = resolve; });
+      const firstAbort = new AbortController();
+      const firstFailure = assert.rejects(invoke(firstAbort.signal));
+      await firstReady;
+      firstAbort.abort();
+      await firstFailure;
+      await firstCancelled;
+      waitForCancel = false;
+      await dispatch('session_shutdown');
+      await dispatch('session_start');
       assert.equal((await invoke()).isError, false);
       for (let round = 0; round < 2; round++) {
         const result = await tool.execute('schema', { name: 'checks__structured', arguments: { value: 42 } }, undefined, undefined, ctx);

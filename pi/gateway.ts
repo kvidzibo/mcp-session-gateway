@@ -3,11 +3,12 @@ import { Ajv2020 } from 'ajv/dist/2020.js';
 import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { CallToolResultSchema, ElicitRequestSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { loadConfig } from '../src/config.js';
+import { handleElicitation } from '../src/elicitation.js';
 
 // Server data is untrusted terminal text, never terminal instructions.
 const clean = (text: string) => text
@@ -81,7 +82,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const current = new Client({ name: 'pi-gateway-adapter', version: '0.3.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); };
-    if (ctx.hasUI) current.setRequestHandler(ElicitRequestSchema, (request, extra) => approve(request.params, AbortSignal.any([extra.signal, lifetime.signal]), ctx));
+    if (ctx.hasUI) handleElicitation(current, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: 'pipe' });
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});

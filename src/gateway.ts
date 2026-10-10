@@ -9,7 +9,6 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
-  ElicitRequestSchema,
   McpError,
   ToolListChangedNotificationSchema,
   type Tool,
@@ -18,6 +17,7 @@ import {
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
 import { writeDiagnostic } from './diagnostics.js';
+import { handleElicitation } from './elicitation.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
@@ -147,16 +147,6 @@ export class Gateway {
                 },
               } : {}),
             });
-          } catch (error) {
-            // Cancellation is not a downstream completion acknowledgement.
-            // Do not let a late elicitation attach to a subsequent call.
-            if (extra.signal.aborted || (error instanceof McpError && error.code === ErrorCode.RequestTimeout)) {
-              service.connected = false;
-              service.closed.abort();
-              service.tools = [];
-              try { await service.client.close(); } finally { await service.transport.close(); }
-            }
-            throw error;
           } finally {
             finished.abort();
             service.active = undefined;
@@ -178,10 +168,22 @@ export class Gateway {
     let release!: () => void;
     service.queue = new Promise<void>((resolve) => { release = resolve; });
     await previous;
+    let started = false;
     try {
       signal?.throwIfAborted();
       if (!service.connected || service.closed.signal.aborted) throw new McpError(ErrorCode.ConnectionClosed, 'Service disconnected');
+      started = true;
       return await run();
+    } catch (error) {
+      // Any cancelled request may still be running downstream. Retire before
+      // releasing the queue so its late elicitation cannot attach to a tool.
+      if (started && (signal?.aborted || (error instanceof McpError && error.code === ErrorCode.RequestTimeout))) {
+        service.connected = false;
+        service.closed.abort();
+        service.tools = [];
+        try { await service.client.close(); } finally { await service.transport.close(); }
+      }
+      throw error;
     } finally { release(); }
   }
 
@@ -253,16 +255,16 @@ export class Gateway {
       },
     });
     const service: Service = { config, client, transport, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
-    if (supportsForms) client.setRequestHandler(ElicitRequestSchema, async (request, extra) => {
+    if (supportsForms) handleElicitation(client, async (params, elicitationSignal) => {
       const active = service.active;
-      if (!active || active.signal.aborted || request.params.mode === 'url') return { action: 'cancel' };
+      if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
       try {
         const result = await this.server.elicitInput({
           mode: 'form',
-          message: `[${service.config.name}] ${active.tool}: ${request.params.message}`,
-          requestedSchema: request.params.requestedSchema,
-          _meta: { ...request.params._meta, [SERVICE_META]: service.config.name, [SESSION_META]: this.sessionId },
-        }, { signal: AbortSignal.any([extra.signal, active.signal]), relatedRequestId: active.id, timeout: this.config.timeoutMs });
+          message: `[${service.config.name}] ${active.tool}: ${params.message}`,
+          requestedSchema: params.requestedSchema,
+          _meta: { ...params._meta, [SERVICE_META]: service.config.name, [SESSION_META]: this.sessionId },
+        }, { signal: AbortSignal.any([elicitationSignal, active.signal]), relatedRequestId: active.id, timeout: this.config.timeoutMs });
         return active.signal.aborted ? { action: 'cancel' } : result;
       } catch { return { action: 'cancel' }; }
     });
