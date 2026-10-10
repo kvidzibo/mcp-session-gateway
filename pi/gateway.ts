@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
-import { Ajv } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import addFormats, { type FormatsPlugin } from 'ajv-formats';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema, ElicitRequestSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -28,7 +29,6 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let closing: Promise<void> | undefined;
   let uiBusy = false;
   let approvalQueue = Promise.resolve();
-  const ajv = new Ajv({ allErrors: true, strict: false });
 
   async function close(): Promise<void> {
     if (closing) return closing;
@@ -82,7 +82,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); };
     if (ctx.hasUI) current.setRequestHandler(ElicitRequestSchema, (request, extra) => approve(request.params, AbortSignal.any([extra.signal, lifetime.signal]), ctx));
-    transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, stderr: 'pipe' });
+    transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env: Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), stderr: 'pipe' });
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});
     try {
@@ -106,10 +106,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     async execute(_id, params, signal) {
       const tool = (await tools(signal)).find(({ name }) => name === params.name);
       if (!tool) throw new Error(`Unknown or app-only gateway tool: ${params.name}`);
+      // Fresh validator avoids stale/colliding $id registrations after discovery.
+      const ajv = new Ajv2020({ allErrors: true, strict: false });
+      (addFormats as unknown as FormatsPlugin)(ajv);
       const valid = ajv.compile(tool.inputSchema);
       if (!valid(params.arguments)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
       const result = CallToolResultSchema.parse(await connection().callTool({ name: params.name, arguments: params.arguments }, undefined, { signal, timeout }));
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
+      if (!content.length && result.structuredContent) content.push({ type: 'text', text: JSON.stringify(result.structuredContent) });
       return { content, details: undefined, isError: Boolean(result.isError) };
     },
   });

@@ -147,6 +147,16 @@ export class Gateway {
                 },
               } : {}),
             });
+          } catch (error) {
+            // Cancellation is not a downstream completion acknowledgement.
+            // Do not let a late elicitation attach to a subsequent call.
+            if (extra.signal.aborted || (error instanceof McpError && error.code === ErrorCode.RequestTimeout)) {
+              service.connected = false;
+              service.closed.abort();
+              service.tools = [];
+              try { await service.client.close(); } finally { await service.transport.close(); }
+            }
+            throw error;
           } finally {
             finished.abort();
             service.active = undefined;

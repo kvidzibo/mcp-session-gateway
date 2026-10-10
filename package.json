@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
-    "ajv": "^8.17.1"
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -25,11 +26,21 @@
     "typebox": "*"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@earendil-works/pi-tui": { "optional": true },
-    "typebox": { "optional": true }
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
-  "pi": { "extensions": ["./pi/gateway.ts"] },
+  "pi": {
+    "extensions": [
+      "./pi/gateway.ts"
+    ]
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^1.1.0",
     "@earendil-works/pi-tui": "^1.1.0",
