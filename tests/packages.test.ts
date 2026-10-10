@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -160,5 +160,39 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     await startedRequest;
     pendingController.abort();
     await assert.rejects(pending);
+
+    // Observe the actual subprocess boundary, including unsupported-Git failure.
+    const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    const bin = join(dir, 'bin'), calls = join(dir, 'git-calls');
+    await mkdir(bin);
+    const proxy = join(bin, 'git');
+    await writeFile(proxy, `#!${process.execPath}\nconst fs = require('fs');
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({args:process.argv.slice(2), askpass:process.env.GIT_ASKPASS, sshAskpass:process.env.SSH_ASKPASS})+'\\n');
+if (fs.existsSync(${JSON.stringify(join(dir, 'old-git'))})) process.exit(129);
+const result = require('child_process').spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), {stdio:'inherit'});
+process.exit(result.status ?? 1);\n`);
+    await chmod(proxy, 0o700);
+    const originalPath = process.env.PATH, originalAskpass = process.env.SSH_ASKPASS;
+    try {
+      process.env.PATH = `${bin}:${originalPath}`;
+      process.env.SSH_ASKPASS = '/must-not-execute';
+      assert.equal((await inspectPackage(gitPkg, false, signal)).installed, commit);
+      const observed = (await readFile(calls, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+      assert.ok(observed.length > 0);
+      for (const call of observed) {
+        assert.equal(call.args[0], '--no-lazy-fetch');
+        assert.ok(call.args.includes('core.askPass='));
+        assert.equal(call.askpass, '');
+        assert.equal(call.sshAskpass, '');
+      }
+      await writeFile(join(dir, 'old-git'), 'unsupported');
+      const unsupported = await inspectPackage(gitPkg, false, signal);
+      assert.equal(unsupported.installed, undefined);
+      assert.match(unsupported.notes.join(), /Cannot verify/);
+      assert.equal((await readFile(calls, 'utf8')).trim().split('\n').length, observed.length + 1, 'Never retry without the safety flag');
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+      if (originalAskpass === undefined) delete process.env.SSH_ASKPASS; else process.env.SSH_ASKPASS = originalAskpass;
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
