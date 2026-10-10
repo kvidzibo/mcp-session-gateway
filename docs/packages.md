@@ -92,14 +92,19 @@ can create a project-local Python environment.
    must be idle; background job count is unknown. The explicit warning states that
    active/queued jobs will be cancelled—finish them first or decline.
 
-Restart uses the configuration and active versions at startup, which another
-session may have changed. The gateway run UUID changes; saved native UI
+Restart previews the old gateway's launch-snapshot service names separately from
+newly configured launches, so editing/removing a config entry cannot hide a child
+that will be stopped. The gateway advertises that snapshot in its private
+`gateway-services-v1` experimental capability; without it managed restart is
+unavailable. Restart uses the configuration and active versions at startup, which
+another session may have changed. The gateway run UUID changes; saved native UI
 conversation/branch selection is restored. Restart failure leaves the connection
 stopped: rollback and restart again explicitly, with no automatic retries/fallback.
 
 **Rollback** separately confirms switching future launches to the previous active
-release. It does not restart processes, rebuild code, or roll back external data
-migrations. Old release directories are retained, so existing processes and
+release. It discards any pending prepared candidate because that candidate was
+checked against a different active base (files are retained). It does not restart
+processes, rebuild code, or roll back external data migrations. Old release directories are retained, so existing processes and
 previous versions remain usable. Commands must keep persistent application data
 outside release directories. Absolute paths in virtual environments remain valid:
 release directories are built in their final location, never renamed after build.
@@ -173,7 +178,7 @@ Edit configuration explicitly and reload to change that wiring.
   preparation performs the actual ancestry check in the new clone.
 - Managed builds currently require **POSIX** for process-group termination.
   Escape/shutdown cancels pending work, terminates the command group, and waits
-  for cleanup before finishing. Detached/unmanaged descendants are unsupported;
+  for cleanup before finishing, including when Pi shuts down. Detached/unmanaged descendants are unsupported;
   trusted scripts must not daemonize or detach workers.
 - State uses revisions, per-package exclusive lock files and atomic replacement.
   A stale preview never overwrites another session's activation. No operation is

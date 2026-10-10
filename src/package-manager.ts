@@ -231,7 +231,8 @@ export class PackageManager {
       const next = rollback ? state.previous : state.prepared;
       if (!next) throw new Error(rollback ? 'No previous version to roll back to' : 'No prepared version to activate');
       await this.verify(pkg, next, signal);
-      await this.save(pkg, { ...state, active: next, previous: state.active, ...(rollback ? {} : { prepared: undefined }) }, signal);
+      // A candidate was checked against the old active base; never keep it across rollback.
+      await this.save(pkg, { ...state, active: next, previous: state.active, prepared: undefined }, signal);
     });
   }
 }

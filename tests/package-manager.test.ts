@@ -8,6 +8,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { loadConfig } from '../src/config.js';
+import { Gateway } from '../src/gateway.js';
 import { bindManagedService, PackageManager, runPackageCommand } from '../src/package-manager.js';
 import { parsePackages } from '../src/packages.js';
 import { managePackages } from '../pi/package-actions.js';
@@ -19,6 +20,7 @@ test('managed releases prepare, validate, activate and roll back independently o
   const originalPath = process.env.PATH;
   const connections: { client: Client; transport: StdioClientTransport }[] = [];
   const signal = new AbortController().signal;
+  let shutdownExtension: (() => Promise<void>) | undefined;
   try {
     const repo = join(dir, 'remote'), bin = join(dir, 'bin');
     await mkdir(repo); await mkdir(bin);
@@ -87,6 +89,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     await manager.activate(pkg, state.revision, false, signal);
     assert.deepEqual((await stopped.listTools()).tools.map((tool) => tool.name), ['gateway__identity'], 'Activation never starts stopped services');
     const one = await connect();
+    assert.deepEqual(one.getServerCapabilities()?.experimental?.['gateway-services-v1'], { names: ['worker'] });
     const version = async (client: Client) => (await client.callTool({ name: 'worker__version', arguments: {} })).content;
     assert.deepEqual(await version(one), [{ type: 'text', text: 'one' }]);
     const bound = await bindManagedService(config, config.services[0]);
@@ -164,6 +167,78 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     npmState = await manager.state(npm, signal);
     await manager.activate(npm, npmState.revision, true, signal);
     assert.equal((await manager.state(npm, signal)).active?.version, '1.0.0');
+    npmVersion = '1.5.0';
+    await manager.prepare(npm, await manager.plan(npm, signal), signal, () => {});
+    npmState = await manager.state(npm, signal);
+    assert.equal(npmState.prepared?.version, '1.5.0');
+    await manager.activate(npm, npmState.revision, true, signal);
+    npmState = await manager.state(npm, signal);
+    assert.equal(npmState.active?.version, '2.0.0');
+    assert.equal(npmState.prepared, undefined, 'Rollback invalidates a candidate checked against the old active base');
+    await assert.rejects(manager.activate(npm, npmState.revision, false, signal), /No prepared version/);
+
+    // EOF/close during asynchronous package binding must not create an unowned child.
+    const activeState = await manager.state(pkg, signal);
+    let releaseBinding!: () => void, enteredBinding!: () => void;
+    const heldBinding = new Promise<void>((resolve) => { releaseBinding = resolve; });
+    const bindingStarted = new Promise<void>((resolve) => { enteredBinding = resolve; });
+    const stateMock = t.mock.method(PackageManager.prototype, 'state', async () => { enteredBinding(); await heldBinding; return activeState; });
+    const closingGateway = new Gateway(config) as any;
+    try {
+      const binding = closingGateway.startService(config.services[0]);
+      await bindingStarted;
+      await closingGateway.close();
+      releaseBinding();
+      await binding;
+      assert.equal(closingGateway.services.length, 0, 'No service may register/spawn after close has snapshotted children');
+    } finally {
+      releaseBinding(); stateMock.mock.restore();
+      await Promise.allSettled(closingGateway.services.map(async (service: any) => { await service.client.close(); await service.transport.close(); }));
+    }
+
+    // A real extension shutdown waits for a SIGTERM-resistant preparation process,
+    // log drain, staging cleanup and lock release, without starting a model/session.
+    const blockedFile = join(dir, 'blocked.json');
+    await writeFile(blockedFile, JSON.stringify({ ...declaration, packages: { worker: { ...declaration.packages.worker, managed: {
+      ...declaration.packages.worker.managed,
+      build: [{ command: process.execPath, args: ['-e', "process.on('SIGTERM',()=>{});console.log('BUILD_WAITING:'+process.pid);setInterval(()=>{},1000)"] }],
+    } } } }));
+    const { loadExtensions } = await import(pathToFileURL(join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
+    const loaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
+    assert.deepEqual(loaded.errors, []);
+    loaded.runtime.flagValues.set('gateway-config', blockedFile);
+    const extension = loaded.extensions[0];
+    let buildStarted!: () => void;
+    const buildWaiting = new Promise<void>((resolve) => { buildStarted = resolve; });
+    const commandCtx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true, ui: {
+      notify() {},
+      custom: async (factory: Function) => new Promise((resolve) => {
+        let component: any;
+        const done = (value: unknown) => queueMicrotask(() => { component.dispose(); resolve(value); });
+        const requestRender = () => queueMicrotask(() => {
+          const rendered = component?.render(80).join('\n') ?? '';
+          if (rendered.startsWith('Preparing worker') && /(?:^|\n)BUILD_WAITING:\d+(?:\n|$)/.test(rendered)) buildStarted();
+        });
+        component = factory({ terminal: { rows: 24, columns: 80 }, requestRender }, { fg: (_: string, value: string) => value }, {}, done);
+        const text = () => component.render(80).join('\n');
+        const rendered = text();
+        if (rendered.includes('Gateway manager')) component.handleInput('p');
+        else if (rendered.includes('Managed package') || rendered.includes('Active:')) component.handleInput('\r');
+        else if (rendered.includes('Prepare package?')) {
+          for (let i = 0; i < 100 && !text().includes('Enter prepare'); i++) component.handleInput('\x1b[6~');
+          component.handleInput('\r');
+        }
+      }),
+    } };
+    shutdownExtension = async () => { for (const handler of extension.handlers.get('session_shutdown') ?? []) await handler({}, commandCtx); };
+    const managerCommand = extension.commands.get('gateway-manager').handler('', commandCtx);
+    await buildWaiting;
+    await shutdownExtension();
+    await managerCommand;
+    shutdownExtension = undefined;
+    await assert.rejects(access(lock), { code: 'ENOENT' }, 'Shutdown must await release of the preparation lock');
+    const afterShutdown = await manager.state(pkg, signal);
+    await assert.rejects(access(join(config.packageStore, pkg.name, 'releases', afterShutdown.log!)), { code: 'ENOENT' });
 
     // Exercise the real operator menus: no preparation is dispatched on decline,
     // and confirmation cannot proceed until every preview line has been reviewed.
@@ -198,6 +273,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
       assert.equal(preparations, allow ? 1 : 0);
     }
   } finally {
+    await shutdownExtension?.();
     await Promise.allSettled(connections.map(async ({ client, transport }) => { try { await client.close(); } finally { await transport.close(); } }));
     if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
     await rm(dir, { recursive: true, force: true });

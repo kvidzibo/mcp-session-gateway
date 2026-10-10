@@ -35,6 +35,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let uiBusy = false;
   let shuttingDown = false;
   let managerController: AbortController | undefined;
+  let managerWork: Promise<void> | undefined;
+  let launchedServices: string[] | undefined;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
@@ -49,8 +51,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     lifetime.abort();
     operatorToken = undefined;
     native.stop();
+    const pendingManager = managerWork;
     closing = (async () => {
-      try { await client?.close(); } finally { await transport?.close(); }
+      const results = await Promise.allSettled([
+        pendingManager,
+        (async () => { try { await client?.close(); } finally { await transport?.close(); } })(),
+      ]);
+      // Aborted package operations report through their own UI, but cleanup must finish.
+      if (results[1].status === 'rejected') throw results[1].reason;
     })();
     return closing;
   }
@@ -112,6 +120,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     transport.stderr?.on('data', () => {});
     try {
       await current.connect(transport, { timeout, signal: lifetime.signal });
+      const inventory = current.getServerCapabilities()?.experimental?.['gateway-services-v1'] as { names?: unknown } | undefined;
+      launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
       await native.start(ctx, resolve(configPath));
@@ -141,9 +151,15 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
           const config = await loadConfig(configPath);
           const action = await openManager(ctx, config, signal);
           if (!action || signal.aborted) break;
-          if (action === 'manage') { await managePackages(ctx, config, signal); continue; }
+          if (action === 'manage') {
+            const work = managePackages(ctx, config, signal);
+            managerWork = work;
+            try { await work; } finally { if (managerWork === work) managerWork = undefined; }
+            continue;
+          }
+          if (!launchedServices) { ctx.ui.notify('Runtime service inventory unavailable; build/reload the matching gateway before using managed restart', 'warning'); continue; }
           if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before restarting', 'warning'); continue; }
-          const preview = `Stop and restart ALL services in THIS gateway:\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
+          const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${launchedServices.map((name) => `- ${name}`).join('\n') || '(none)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
           if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
           if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
           managerController = undefined;

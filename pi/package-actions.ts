@@ -106,7 +106,7 @@ export async function managePackages(ctx: ExtensionContext, config: GatewayConfi
         const rollback = action.startsWith('Roll');
         const target = rollback ? state.previous! : state.prepared!;
         const services = config.services.filter((service) => service.package === pkg.name).map((service) => service.name).join(', ') || '(none linked)';
-        const preview = `${pkg.name}: ${state.active?.version ?? 'None'} → ${target.version}\nServices: ${services}\n\nChange the active version for FUTURE launches in ALL sessions sharing ${literal(config.packageStore)}.\nExisting processes keep their old directories and are NOT restarted. Previous versions are retained.\n\nTo apply it here, separately choose Restart gateway services.`;
+        const preview = `${pkg.name}: ${state.active?.version ?? 'None'} → ${target.version}\nServices: ${services}\n\nChange the active version for FUTURE launches in ALL sessions sharing ${literal(config.packageStore)}.\nExisting processes keep their old directories and are NOT restarted. Previous versions are retained.\n${rollback ? 'Any prepared candidate is discarded because its upgrade base changes; its files are retained.\n' : ''}\nTo apply it here, separately choose Restart gateway services.`;
         if (!await confirmSettings(ctx, preview, { ...options, title: rollback ? 'Roll back activation?' : 'Activate prepared version?', actionLabel: rollback ? 'roll back' : 'activate' }) || signal.aborted) continue;
         await manager.activate(pkg, state.revision, rollback, signal);
         ctx.ui.notify('Activation changed for future launches only; current services were not restarted', 'info');

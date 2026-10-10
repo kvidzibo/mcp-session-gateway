@@ -68,6 +68,7 @@ export class Gateway {
 
   constructor(private readonly config: GatewayConfig, private readonly operatorToken?: string) {
     if (operatorToken && !validToken(operatorToken)) throw new Error('Invalid gateway operator token');
+    this.server.registerCapabilities({ experimental: { 'gateway-services-v1': { names: config.services.map((service) => service.name) } } });
     if (operatorToken) {
       this.server.registerCapabilities({ experimental: { [OPERATOR_EXTENSION]: { version: 1, audience: 'operator', authorization: 'token' } } });
       this.server.setRequestHandler(OperatorListSchema, async (request, extra) => this.withRequest(extra, async () => {
@@ -347,6 +348,7 @@ export class Gateway {
 
   private async startService(declaration: ServiceConfig): Promise<void> {
     const config = await bindManagedService(this.config, declaration);
+    if (this.closing) return;
     if (!config) { this.log(`Server ${declaration.name}: managed package not activated; service stays stopped`); return; }
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
     const client = new Client(gatewayIdentity, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
