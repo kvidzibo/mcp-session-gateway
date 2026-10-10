@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -12,11 +13,11 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-// Exercise both review findings against a child that ignores EOF and SIGTERM.
-test('startup timeout and upstream EOF await child teardown', { timeout: 25_000 }, async () => {
+// A child ignoring EOF and SIGTERM must not outlive either gateway layer.
+test('startup failure, EOF, and SDK shutdown await child teardown', { timeout: 25_000 }, async () => {
   const directory = await mkdtemp('/tmp/mcp-gateway-lifecycle-');
   try {
-    for (const reason of ['timeout', 'eof'] as const) {
+    for (const reason of ['timeout', 'eof', 'sdk'] as const) {
       const config = path.join(directory, `${reason}.json`);
       await writeFile(config, JSON.stringify({
         timeoutMs: reason === 'timeout' ? 1000 : 300_000,
@@ -32,6 +33,36 @@ test('startup timeout and upstream EOF await child teardown', { timeout: 25_000 
           },
         },
       }));
+      if (reason === 'sdk') {
+        const transport = new StdioClientTransport({
+          command: process.execPath,
+          args: ['--import', 'tsx', path.join(root, 'src/cli.ts'), '--config', config],
+          cwd: root,
+          stderr: 'pipe',
+        });
+        let stderr = '';
+        let childPid: number | undefined;
+        transport.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString();
+          const match = /fixture-pid:(\d+)/.exec(stderr);
+          if (match) childPid = Number(match[1]);
+        });
+        try {
+          await transport.start();
+          while (childPid === undefined) {
+            await once(transport.stderr!, 'data', { signal: AbortSignal.timeout(5000) });
+          }
+          await transport.close();
+          for (let attempt = 0; attempt < 50 && alive(childPid); attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          assert.equal(alive(childPid), false, `Child ${childPid} survived SDK close`);
+        } finally {
+          if (childPid !== undefined && alive(childPid)) process.kill(childPid, 'SIGKILL');
+          await transport.close();
+        }
+        continue;
+      }
       const gateway = spawn(process.execPath, ['--import', 'tsx', path.join(root, 'src/cli.ts'), '--config', config], {
         cwd: root,
         stdio: ['pipe', 'pipe', 'pipe'],

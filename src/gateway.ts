@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -13,25 +12,15 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
+import { ServiceTransport } from './service-transport.js';
 
 const SESSION_META = 'local-stdio-mcp-gateway/sessionId';
 const SERVICE_META = 'local-stdio-mcp-gateway/serviceId';
 
-// The SDK can initiate transport cleanup without awaiting it. Keep that teardown
-// observable even after it has cleared its process/client transport references.
-class ManagedStdioTransport extends StdioClientTransport {
-  private closing?: Promise<void>;
-
-  override close(): Promise<void> {
-    this.closing ??= Promise.resolve().then(() => super.close());
-    return this.closing;
-  }
-}
-
 interface Service {
   config: ServiceConfig;
   client: Client;
-  transport: ManagedStdioTransport;
+  transport: ServiceTransport;
   tools: Tool[];
   refresh: Promise<void>;
   connected: boolean;
@@ -159,11 +148,10 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.1.0' });
-    const transport = new ManagedStdioTransport({
+    const transport = new ServiceTransport({
       command: config.command,
       args: config.args,
       cwd: config.cwd,
-      stderr: 'inherit',
       env: {
         ...config.env,
         MCP_GATEWAY_SESSION_ID: this.sessionId,
