@@ -1,13 +1,13 @@
 # Local stdio MCP gateway
 
-A small TypeScript MCP gateway. Each launch generates a UUID, starts local MCP servers, and exposes their generic tools and manually-read resources through one stdio connection.
+A small TypeScript MCP gateway. Each launch generates a UUID, starts local MCP servers, and exposes their generic tools and subscribable resources through one stdio connection.
 
 ```text
 Pi A ⇄ gateway A ⇄ child MCP processes A
 Pi B ⇄ gateway B ⇄ child MCP processes B
 ```
 
-No HTTP, sockets, cookies, shared daemon, subscriptions, or custom events. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, reusable child-server settings, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
+No HTTP, sockets, cookies, shared daemon, or custom job events. Standard MCP resource subscriptions are forwarded. The optional Pi adapter owns one MCP SDK client and provides generic tool discovery/calls, a native resource panel, a live delegate widget, reusable child-server settings, and boolean one-shot approval prompts. Sampling, tasks, resource templates, and browser-based MCP Apps are not forwarded.
 
 ## Setup
 
@@ -80,6 +80,53 @@ To use Pi's built-in MCP client instead, add an entry to `mcp.json` as below and
 Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entries from `.pi/mcp.json`. Run `pi mcp list` to diagnose the connection, or `/reload` after configuration changes in an existing Pi session. No Pi extension is required.
 
 Tools are named `<server>__<tool>` by the gateway, for example `files__read_file`. Pi adds its own MCP namespace. Namespaced tool names must fit MCP's 128-character name limit. Duplicate or invalid names fail discovery. Paginated tool discovery and tool-list change notifications are supported. Task-required tools are omitted.
+
+## Live delegate panel
+
+The optional Pi adapter automatically subscribes to resources declaring MIME type
+`application/vnd.pi-delegate.jobs+json` (schema version 1), provided by
+[pi-delegate 0.20.0+](https://github.com/kvidzibo/pi-delegate#readme). Use the same
+adapter/config setup above, with a delegate service:
+
+```json
+{
+  "mcpServers": {
+    "delegate": {
+      "command": "pi-delegate-mcp",
+      "args": ["--workspace", "/absolute/path/to/project"]
+    }
+  }
+}
+```
+
+Queued/running jobs appear automatically **above the editor**, independent of
+parent activity. Cards show role, model/reasoning, task preview, elapsed/queue time,
+job ID and current/recent tool activity. Completed jobs remain for eight seconds;
+finished means **unverified**, not successful. Disconnects retain a stale warning
+and freeze the last-known clock instead of claiming completion. `/gateway-panel`
+opens the full resource JSON; the compact widget shows overflow counts on small
+terminals. Settings and approval dialogs remain usable while the widget is visible.
+
+The adapter owns one gateway connection for both tools and UI. It does not load
+the original delegate extension, start another observer server, poll job status,
+send chat messages or trigger model turns. Clock ticks are local; MCP reads occur
+on discovery and change notifications, coalescing bursts. Resources are not a
+secrecy boundary. Models still see their explicit tool results. No widget or
+subscriptions are started outside TUI mode. Reload closes the connection and its
+workers; it is not a way to detach jobs.
+
+Gateway resource forwarding is generic: `resources/subscribe` and
+`resources/unsubscribe` route to the owning service, and updates are forwarded
+only for subscribed URIs. Resource-list changes and service disconnects propagate
+upstream. Clients must subscribe before reading and reread after each update.
+Services without subscription support keep manual reads. Resource observation
+requests that supply a progress token receive standard progress heartbeats while
+queued or aggregating pages. The live adapter resets its request timeout on those
+heartbeats; healthy children are not cancelled merely because total discovery
+exceeds one child-request timeout. Each actual child request retains its normal
+timeout and retirement policy. Resource templates are not forwarded. Pi rendering is isolated in `pi/live-jobs.ts`; the gateway does not
+interpret delegate JSON. The adapter validates the declared format and caps it at
+32 sources, 256 jobs per source and 1 MB per snapshot.
 
 ## Child-server settings
 
@@ -191,7 +238,7 @@ npm test
 npm run build
 ```
 
-The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, approval/decline/cancellation and no-UI behavior, private panel refresh through Pi’s extension loader, unknown-tool rejection, private authenticated settings routing, confirmed schema-valid saves and stale revision rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
+The integration tests run real gateway processes and verify identity isolation, downstream identity propagation, namespaced routing, approval/decline/cancellation and no-UI behavior, manual and live panel updates through Pi’s extension loader, subscription routing and disconnects, narrow-width rendering, unknown-tool rejection, private authenticated settings routing, confirmed schema-valid saves and stale revision rejection, and cleanup of stubborn children after startup timeout, raw upstream EOF, SDK-managed shutdown, or a closed stderr reader.
 
 ## Try the demo
 
