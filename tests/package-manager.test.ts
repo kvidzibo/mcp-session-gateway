@@ -213,6 +213,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     loaded.runtime.flagValues.set('gateway-config', blockedFile);
     const extension = loaded.extensions[0];
     let buildStarted!: () => void, buildPid = 0;
+    const navigation = ['Packages', 'Manage releases', 'worker', 'Check source and prepare install/update'];
     const buildWaiting = new Promise<void>((resolve) => { buildStarted = resolve; });
     const commandCtx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true, ui: {
       notify() {},
@@ -227,8 +228,13 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
         component = factory({ terminal: { rows: 24, columns: 80 }, requestRender }, { fg: (_: string, value: string) => value }, {}, done);
         const text = () => component.render(80).join('\n');
         const rendered = text();
-        if (rendered.includes('Gateway manager')) component.handleInput('p');
-        else if (rendered.includes('Managed package') || rendered.includes('Active:')) component.handleInput('\r');
+        if (component.render(80)[1]?.startsWith('Gateway')) {
+          const target = navigation.shift();
+          assert.ok(target);
+          for (let i = 0; i < 20 && !component.render(80).includes(`→ ${target}`); i++) component.handleInput('\u001b[B');
+          assert.ok(component.render(80).includes(`→ ${target}`));
+          component.handleInput('\r');
+        }
         else if (rendered.includes('Prepare package?')) {
           for (let i = 0; i < 100 && !text().includes('Enter prepare'); i++) component.handleInput('\x1b[6~');
           component.handleInput('\r');
@@ -236,7 +242,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
       }),
     } };
     shutdownExtension = async () => { for (const handler of extension.handlers.get('session_shutdown') ?? []) await handler({}, commandCtx); };
-    const managerCommand = extension.commands.get('gateway-manager').handler('', commandCtx);
+    const managerCommand = extension.commands.get('gateway').handler('', commandCtx);
     await buildWaiting;
     const journal = (await readFile(lock, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(journal[0].kind, 'owner');
@@ -259,7 +265,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     let preparations = 0;
     t.mock.method(PackageManager.prototype, 'prepare', async () => { preparations++; });
     for (const allow of [false, true]) {
-      let menuVisits = 0, confirmations = 0;
+      let menuVisits = 0, packageVisits = 0, confirmations = 0;
       const ctx: any = { ui: {
         notify() {},
         custom: async (factory: Function) => new Promise((resolve) => {
@@ -277,7 +283,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
               assert.match(text(), /Enter prepare/);
               component.handleInput('\r');
             }
-          } else if (rendered.includes('Managed package')) component.handleInput('\r');
+          } else if (rendered.includes('Choose a managed package')) component.handleInput(packageVisits++ === 0 ? '\r' : '\x1b');
           else if (rendered.includes('Active:')) component.handleInput(menuVisits++ === 0 ? '\r' : '\x1b');
           // Progress views complete through their own async operation/done callback.
         }),

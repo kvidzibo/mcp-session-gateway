@@ -200,7 +200,7 @@ export class LiveJobs {
         : tool ? `${tool.name}${tool.args ? ` ${tool.args}` : ''}` : 'Working';
       lines.push(row(`${singleLine(job.jobId).slice(0, 8)} · ${singleLine(activity)}${job.wrapped && active(job) ? ' · wrap requested' : ''}`));
     }
-    if (entries.length > capacity) lines.push(row(`${entries.length - capacity} more · /gateway-panel for full job data`));
+    if (entries.length > capacity) lines.push(row(`${entries.length - capacity} more · /gateway → Services → Resources for full job data`));
     return lines.slice(0, maxRows);
   }
 

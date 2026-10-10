@@ -15,10 +15,11 @@ import { ChangedSchema, InvalidatedSchema } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
-import { clean, confirmSettings, editSettings, selectSettingsOption } from './settings.js';
+import { clean, confirmSettings, editSettings } from './settings.js';
 import { LiveJobs } from './live-jobs.js';
 import { openManager } from './manager.js';
 import { managePackages } from './package-actions.js';
+import { GatewayMenu } from './menu.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -42,8 +43,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
   let liveJobs: LiveJobs | undefined;
 
-  async function close(): Promise<void> {
-    managerController?.abort();
+  async function close(preserveMenu = false): Promise<void> {
+    if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
     liveJobs?.stop();
@@ -96,7 +97,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     finally { if (acquired) uiBusy = false; release(); }
   }
 
-  async function start(ctx: ExtensionContext): Promise<void> {
+  async function start(ctx: ExtensionContext, preserveMenu = false): Promise<void> {
     if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
@@ -129,56 +130,106 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         liveJobs = new LiveJobs(current, ctx, timeout);
         await liveJobs.start();
       }
-    } catch (error) { await close(); throw error; }
+    } catch (error) { await close(preserveMenu); throw error; }
   }
   pi.on('session_start', async (_event, ctx) => { shuttingDown = false; await start(ctx); });
   pi.on('session_shutdown', async () => { shuttingDown = true; await close(); });
   pi.on('session_tree', async (_event, ctx) => {
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  pi.registerCommand('gateway-manager', {
-    description: 'Inspect packages; explicitly confirm preparation, activation, rollback and gateway restarts.',
+  pi.registerCommand('gateway', {
+    description: 'Open gateway services, packages and connection menus. No model turn.',
     handler: async (_args, ctx) => {
-      if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway manager requires TUI mode', 'warning'); return; }
+      if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
       const configPath = pi.getFlag('gateway-config');
       if (typeof configPath !== 'string' || !configPath) { ctx.ui.notify('Use --gateway-config <file> to select a configuration', 'warning'); return; }
       uiBusy = true;
-      managerController = new AbortController();
+      const controller = new AbortController();
+      managerController = controller;
+      const signal = controller.signal;
+      const menu = new GatewayMenu(ctx, signal);
       try {
-        const signal = managerController.signal;
         while (!signal.aborted) {
-          const config = await loadConfig(configPath);
-          const action = await openManager(ctx, config, signal);
-          if (!action || signal.aborted) break;
-          if (action === 'manage') {
-            const work = managePackages(ctx, config, signal);
-            managerWork = work;
-            try { await work; } finally { if (managerWork === work) managerWork = undefined; }
-            continue;
-          }
-          if (!launchedServices) { ctx.ui.notify('Runtime service inventory unavailable; build/reload the matching gateway before using managed restart', 'warning'); continue; }
-          if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before restarting', 'warning'); continue; }
-          const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${launchedServices.map((name) => `- ${name}`).join('\n') || '(none)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
-          if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
-          if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
-          managerController = undefined;
-          await close();
-          if (!shuttingDown) { await start(ctx); ctx.ui.notify('Gateway services restarted', 'info'); }
-          break;
+          const action = await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
+            { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
+            { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
+            { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
+          ]);
+          if (!action) break;
+          try {
+            if (action === 'services') {
+              while (!signal.aborted && connected) {
+                const config = await loadConfig(configPath);
+                const names = [...new Set([...config.services.map((s) => s.name), ...(launchedServices ?? [])])];
+                const service = await menu.choose(['Gateway', 'Services'], 'Choose a service · listed does not mean running',
+                  names.map((name) => ({ id: name, label: name, description: 'Open this service’s app, settings and resources. Listed does not mean running.' })));
+                if (!service) break;
+                while (!signal.aborted && connected) {
+                  const options = { signal: lifetime.signal, timeout };
+                  const resources = (await connection().listResources(undefined, options)).resources.filter((r) => new URL(r.uri).hostname === service);
+                  const settings = operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
+                  const editable = settings.services.some((s) => s.name === service);
+                  const app = native.has(service);
+                  const selected = await menu.choose(['Gateway', 'Services', service], 'Available service features', [
+                    { id: 'app', label: 'Open app', description: app ? 'Open the service-provided interactive menu.' : 'This service has no available native app.', disabled: !app },
+                    { id: 'settings', label: 'Settings', description: editable ? 'Edit a draft; review and confirm before saving.' : 'Settings are not enabled or advertised by this service.', disabled: !editable },
+                    { id: 'resources', label: 'Resources', description: resources.length ? 'Read service data privately, without sending it to the model.' : 'This service advertises no resources.', disabled: !resources.length },
+                  ]);
+                  if (!selected) break;
+                  if (selected === 'app') await native.open(service, ctx);
+                  if (selected === 'settings') await openSettings(service, ctx);
+                  if (selected === 'resources') {
+                    while (!signal.aborted && connected) {
+                      const available = (await connection().listResources(undefined, { signal: lifetime.signal, timeout })).resources.filter((r) => new URL(r.uri).hostname === service);
+                      const uri = await menu.choose(['Gateway', 'Services', service, 'Resources'], 'Read-only · contents are not added to the conversation',
+                        available.map((r) => ({ id: r.uri, label: r.name, description: r.uri })));
+                      if (!uri) break;
+                      await openResource(uri, ctx, signal);
+                    }
+                  }
+                }
+              }
+            } else if (action === 'packages') {
+              while (!signal.aborted) {
+                const config = await loadConfig(configPath);
+                const selected = await menu.choose(['Gateway', 'Packages'], 'Preparation → activation → restart are separate decisions', [
+                  { id: 'status', label: 'Installed versions', description: 'Read local package metadata only. Versions describe installations, not running processes.' },
+                  { id: 'check', label: 'Check for updates', description: 'Contact public package sources to compare versions. Nothing is installed.', disabled: !config.packages.length },
+                  { id: 'manage', label: 'Manage releases', description: 'Choose a managed package to prepare, activate, roll back or view its build log.', disabled: !config.packages.some((pkg) => pkg.managed) },
+                ]);
+                if (!selected) break;
+                if (selected === 'manage') {
+                  const work = managePackages(ctx, config, signal, menu);
+                  managerWork = work;
+                  try { await work; } finally { if (managerWork === work) managerWork = undefined; }
+                } else await openManager(ctx, config, signal, selected === 'check');
+              }
+            } else {
+              while (!signal.aborted) {
+                const selected = await menu.choose(['Gateway', 'Connection'], connected ? 'Connected · restart affects this session only' : 'Disconnected · no automatic retry', [
+                  { id: 'details', label: 'Connection details', description: 'Show the configuration path and the previous launch’s service names.' },
+                  { id: 'restart', label: 'Restart gateway services…', description: 'Stops ALL services here and cancels their active/queued jobs. Requires a separate confirmation.' },
+                ]);
+                if (!selected) break;
+                if (selected === 'details') {
+                  await menu.info(['Gateway', 'Connection', 'Details'],
+                    `${connected ? 'Connected' : 'Disconnected'}\n\nConfiguration\n${configPath}\n\nLast launch (not a health check)\n${launchedServices?.join('\n') || 'No runtime inventory available.'}\n\nPackage activation changes future launches. Restarting here affects only this Pi session.`);
+                } else {
+                  const config = await loadConfig(configPath);
+                  if (connected && !launchedServices) { ctx.ui.notify('Runtime service inventory unavailable; build/reload the matching gateway before using managed restart', 'warning'); continue; }
+                  if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before restarting', 'warning'); continue; }
+                  const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${(launchedServices ?? []).map((name) => `- ${name}`).join('\n') || '(none known)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
+                  if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
+                  if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
+                  await close(true);
+                  if (!shuttingDown) { await start(ctx, true); ctx.ui.notify('Gateway services restarted', 'info'); }
+                }
+              }
+            }
+          } catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Gateway: ${String(error)}`), 'error'); }
         }
-      }
-      catch (error) { if (!shuttingDown) ctx.ui.notify(clean(`Gateway manager: ${String(error)}`), 'error'); }
-      finally { managerController = undefined; uiBusy = false; }
-    },
-  });
-  pi.registerCommand('gateway-ui', {
-    description: 'Open a server-provided native UI (optional service name). No model turn.',
-    handler: async (args, ctx) => {
-      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
-      uiBusy = true;
-      try { await native.open(args.trim(), ctx); }
-      finally { uiBusy = false; }
+      } finally { if (managerController === controller) managerController = undefined; uiBusy = false; }
     },
   });
 
@@ -209,100 +260,65 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand('mcp-settings', {
-    description: 'Edit child-service operator settings privately, with confirmation before saving.',
-    handler: async (args, ctx) => {
-      if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Child-server settings require TUI mode', 'warning'); return; }
-      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
-      const current = connection();
-      const token = operatorToken;
-      if (!token) { ctx.ui.notify('Settings unavailable; reconnect the gateway', 'warning'); return; }
-      const signal = lifetime.signal;
-      uiBusy = true;
-      try {
-        const options = { signal, timeout };
-        const result = await current.request({ method: OPERATOR_LIST, params: { token } }, OperatorServicesSchema, options);
-        if (!result.services.length) { ctx.ui.notify('No child services with operator settings enabled', 'info'); return; }
-        let service = args.trim();
-        if (!service) {
-          const labels = result.services.map((s, i) => `${i + 1}. ${clean(s.name)}`);
-          const selected = await selectSettingsOption(ctx, 'MCP child-server settings', labels, options);
-          if (!selected || signal.aborted) return;
-          service = result.services[labels.indexOf(selected)].name;
-        }
-        if (!result.services.some((s) => s.name === service)) throw new Error('Unknown settings service');
-        const document = await current.request({ method: OPERATOR_GET, params: { token, service } }, SettingsDocumentSchema, options);
-        await editSettings(ctx, document, (revision, patch) => current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal, timeout);
-      } catch (error) {
-        if (!signal.aborted) ctx.ui.notify(clean(`Child-server settings: ${String(error)}`), 'error');
-      } finally { uiBusy = false; }
-    },
-  });
+  async function openSettings(service: string, ctx: ExtensionContext): Promise<void> {
+    const current = connection();
+    const token = operatorToken;
+    if (!token) { ctx.ui.notify('Settings unavailable; reconnect the gateway', 'warning'); return; }
+    const signal = lifetime.signal;
+    const options = { signal, timeout };
+    const document = await current.request({ method: OPERATOR_GET, params: { token, service } }, SettingsDocumentSchema, options);
+    await editSettings(ctx, document, (revision, patch) =>
+      current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal, timeout);
+  }
 
-  pi.registerCommand('gateway-panel', {
-    description: 'Read a gateway resource privately; r refreshes, arrows scroll, Escape closes.',
-    handler: async (args, ctx) => {
-      if (ctx.mode !== 'tui') { ctx.ui.notify('The gateway panel requires TUI mode', 'error'); return; }
-      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
-      connection();
-      uiBusy = true;
-      try {
-        let uri = args.trim();
-        if (!uri) {
-          const resources = await connection().listResources(undefined, { signal: lifetime.signal, timeout });
-          if (!resources.resources.length) { ctx.ui.notify('No gateway resources', 'info'); return; }
-          const labels = resources.resources.map((r, i) => `${i + 1}. ${clean(r.name)} — ${clean(r.uri)}`);
-          const selected = await ctx.ui.select('Gateway resource', labels, { signal: lifetime.signal, timeout });
-          if (!selected) return;
-          uri = resources.resources[labels.indexOf(selected)]?.uri ?? '';
-        }
-        if (!uri) return;
-        await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-          let controller = new AbortController();
-          let content = '';
-          let error = '';
-          let loading = true;
-          let offset = 0;
-          let maxOffset = 0;
-          let disposed = false;
-          const refresh = () => {
-            controller.abort();
-            controller = new AbortController();
-            const current = controller;
-            loading = true; error = ''; offset = 0;
-            tui.requestRender();
-            void connection().readResource({ uri }, { signal: AbortSignal.any([current.signal, lifetime.signal]), timeout }).then((result) => {
-              if (!current.signal.aborted && !disposed) content = clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
-            }).catch((cause: unknown) => {
-              if (!current.signal.aborted && !disposed) error = clean(String(cause));
-            }).finally(() => {
-              if (!current.signal.aborted && !disposed) { loading = false; tui.requestRender(); }
-            });
-          };
-          const disconnect = () => { controller.abort(); error = 'Gateway disconnected'; loading = false; tui.requestRender(); };
-          lifetime.signal.addEventListener('abort', disconnect, { once: true });
-          refresh();
-          return {
-            render(width: number) {
-              const safeWidth = Math.max(1, width);
-              const body = (loading ? 'Loading…' : error ? `Error: ${error}` : content || '(empty resource)').split('\n').flatMap((line) => wrapTextWithAnsi(line, safeWidth));
-              const height = Math.max(1, Math.min(20, tui.terminal.rows - 8));
-              maxOffset = Math.max(0, body.length - height);
-              offset = Math.min(offset, maxOffset);
-              return [theme.fg('accent', `Gateway resource: ${clean(uri)}`), ...body.slice(offset, offset + height), '', theme.fg('muted', '↑/↓ scroll   r refresh   Esc close')].map((line) => truncateToWidth(line, safeWidth));
-            },
-            handleInput(data: string) {
-              if (matchesKey(data, Key.escape)) { controller.abort(); done(); }
-              else if (data.toLowerCase() === 'r' && connected) refresh();
-              else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
-              else if (matchesKey(data, Key.down)) offset = Math.min(maxOffset, offset + 1);
-              tui.requestRender();
-            },
-            invalidate() {},
-            dispose() { disposed = true; controller.abort(); lifetime.signal.removeEventListener('abort', disconnect); },
-          };
+  async function openResource(uri: string, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return;
+    await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+      let controller = new AbortController();
+      let content = '';
+      let error = '';
+      let loading = true;
+      let offset = 0;
+      let maxOffset = 0;
+      let disposed = false;
+      const refresh = () => {
+        controller.abort();
+        controller = new AbortController();
+        const current = controller;
+        loading = true; error = ''; offset = 0;
+        tui.requestRender();
+        void connection().readResource({ uri }, { signal: AbortSignal.any([current.signal, lifetime.signal]), timeout }).then((result) => {
+          if (!current.signal.aborted && !disposed) content = clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
+        }).catch((cause: unknown) => {
+          if (!current.signal.aborted && !disposed) error = clean(String(cause));
+        }).finally(() => {
+          if (!current.signal.aborted && !disposed) { loading = false; tui.requestRender(); }
         });
-      } finally { uiBusy = false; }
-    },
-  });
+      };
+      const disconnect = () => { controller.abort(); error = 'Gateway disconnected'; loading = false; tui.requestRender(); };
+      const back = () => done();
+      signal.addEventListener('abort', back, { once: true });
+      lifetime.signal.addEventListener('abort', disconnect, { once: true });
+      refresh();
+      return {
+        render(width: number) {
+          const safeWidth = Math.max(1, width);
+          const body = (loading ? 'Loading…' : error ? `Error: ${error}` : content || '(empty resource)').split('\n').flatMap((line) => wrapTextWithAnsi(line, safeWidth));
+          const height = Math.max(1, Math.min(20, tui.terminal.rows - 8));
+          maxOffset = Math.max(0, body.length - height);
+          offset = Math.min(offset, maxOffset);
+          return [theme.fg('accent', `Gateway resource: ${clean(uri)}`), ...body.slice(offset, offset + height), '', theme.fg('muted', '↑/↓ scroll   r refresh   Esc back')].map((line) => truncateToWidth(line, safeWidth));
+        },
+        handleInput(data: string) {
+          if (matchesKey(data, Key.escape)) { controller.abort(); done(); }
+          else if (data.toLowerCase() === 'r' && connected) refresh();
+          else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
+          else if (matchesKey(data, Key.down)) offset = Math.min(maxOffset, offset + 1);
+          tui.requestRender();
+        },
+        invalidate() {},
+        dispose() { disposed = true; controller.abort(); signal.removeEventListener('abort', back); lifetime.signal.removeEventListener('abort', disconnect); },
+      };
+    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
+  }
 }

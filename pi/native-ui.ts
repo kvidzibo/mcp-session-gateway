@@ -64,6 +64,8 @@ export class NativeUI {
     this.changed();
   }
 
+  has(service: string): boolean { return this.resources.has(service) && this.views.has(this.resources.get(service)!); }
+
   meta(service: string): Record<string, unknown> {
     return { [UI_CONTEXT]: ContextSchema.parse({
       conversationId: this.ctx?.sessionManager?.getSessionId() ?? this.ephemeralId,

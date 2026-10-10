@@ -4,8 +4,8 @@ This is a **private extension over MCP**, not HTML MCP Apps. A service supplies
 validated JSON screens; the Pi adapter renders them without importing service
 code or running a model turn. The gateway remains service-agnostic.
 
-Use `/gateway-ui` to choose an app, or `/gateway-ui pinote`. Use arrows/Enter to
-navigate, Ctrl+R to refresh, and Escape to close. Controls have labels and optional
+Use **`/gateway` → Services → service → Open app**. Use arrows/Enter to
+navigate, Ctrl+R to refresh, and Escape to return to the service menu. Controls have labels and optional
 icons/descriptions. Forms save only when their action succeeds; confirmation
 prompts show the proposed value. Text/number inputs use JSON values (quote strings;
 use `\n` for line breaks), preserving tabs and boundary whitespace exactly. Footer text and HTTP(S) links use Pi's ordinary
