@@ -28,6 +28,7 @@ export const ActionSchema = z.object({
   params: z.object({ uri: z.string().max(4096), revision: z.string().min(1).max(256), action: z.string().min(1).max(256), value: scalar.optional(), _meta: z.record(z.string(), z.unknown()).optional() }),
 });
 export const ActionResultSchema = z.object({ view: ViewSchema, draft: text.optional(), preview: text.optional() });
+export const InvalidatedSchema = z.object({ method: z.literal('notifications/native-ui/invalidated'), params: z.object({ service: z.string() }) });
 export const ChangedSchema = z.object({ method: z.literal('notifications/native-ui/changed'), params: z.object({ uri: z.string().max(4096) }) });
 export type NativeView = z.infer<typeof ViewSchema>;
 export type NativeControl = z.infer<typeof control>;
@@ -35,6 +36,11 @@ export type NativeControl = z.infer<typeof control>;
 export function clean(text: string): string {
   return text.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 20_000);
+}
+// Editors render their contents literally; do not silently alter editable data.
+export function editorText(text: string): string {
+  if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) throw new Error('Unsupported terminal controls in editor text');
+  return text;
 }
 export function footerText(view: NativeView, clip: (text: string, width: number) => string = (text) => text): string {
   return (view.footer ?? []).map(({ text, url, width }) => {

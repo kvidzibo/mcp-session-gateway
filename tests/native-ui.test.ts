@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { NativeUI } from '../pi/native-ui.js';
-import { ActionResultSchema, clean, footerText, ViewSchema } from '../src/native-ui.js';
+import { ActionResultSchema, clean, editorText, footerText, InvalidatedSchema, ViewSchema } from '../src/native-ui.js';
 
 // One fixture covers the transport plus the actual generic renderer/action loop.
 test('native UI routes privately, renders safely, persists host state, and rejects malformed views', async () => {
@@ -25,6 +25,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     server.setRequestHandler(ListResourcesRequestSchema,async()=>({resources:[{uri:'test://root',name:'Remote',mimeType:'application/vnd.mcp-native-ui+json'}]}));
     server.setRequestHandler(ReadResourceRequestSchema,async r=>({contents:[{uri:'test://root',mimeType:'application/vnd.mcp-native-ui+json',text:JSON.stringify(view(r.params._meta?.['native-ui/context']?.state))}]}));
     server.setRequestHandler(z.object({method:z.literal('native-ui/action'),params:z.any()}),async r=>{
+      if(r.params.action==='disconnect') process.exit(0);
       if(r.params.uri!=='test://root'||r.params.action!=='save') throw Error('Wrong routing');
       if(r.params.revision!=='r1') throw Error('Stale revision');
       if(r.params._meta['local-stdio-mcp-gateway/serviceId']!=='demo') throw Error('Missing service identity');
@@ -42,7 +43,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   let rounds = 0, confirms = 0;
   const ctx: any = { mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'conversation', getBranch: () => entries }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify: (message: string) => assert.fail(message),
-    input: async () => 'Updated', confirm: async () => { confirms++; return true; },
+    editor: async (_title: string, prefill: string) => { assert.equal(prefill, 'Original'); return 'Updated'; }, confirm: async () => { confirms++; return true; },
     custom: async (factory: Function) => {
       let result;
       const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: unknown) => { result = value; });
@@ -64,6 +65,43 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, 'Updated');
     host.stop(); await host.start(ctx, config);
     assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, 'Updated');
+    const uri = 'gateway-resource://demo/test%3A%2F%2Froot';
+    const originalRead = client.readResource.bind(client);
+    let release!: () => void, started!: () => void, reads = 0;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const reading = new Promise<void>((resolve) => { started = resolve; });
+    client.readResource = async (...args) => {
+      const result = await originalRead(...args);
+      const count = ++reads;
+      if (count === 1) { started(); await held; }
+      const item = result.contents[0];
+      if ('text' in item) item.text = JSON.stringify({ ...JSON.parse(item.text), footer: [{ text: `Read ${count}` }] });
+      return result;
+    };
+    const pending = host.refresh(uri);
+    await reading;
+    const changed = host.refresh(uri); release();
+    await Promise.all([pending, changed]);
+    assert.equal(reads, 2, 'An update arriving after a snapshot needs another read');
+    assert.equal(statuses.get('gateway-ui:demo'), 'Read 2');
+    client.readResource = originalRead;
+    rounds = 0;
+    const originalRequest = client.request.bind(client);
+    let actions = 0;
+    client.request = ((request: any, ...args: any[]) => { if (request.method === 'native-ui/action') actions++; return (originalRequest as any)(request, ...args); }) as typeof client.request;
+    ctx.ui.editor = async () => { host.invalidate('demo'); return 'Must not save'; };
+    ctx.ui.notify = () => {};
+    await host.open('demo', ctx);
+    assert.equal(actions, 0, 'Invalidation during input must prevent dispatch');
+    assert.equal(statuses.get('gateway-ui:demo'), undefined);
+    await host.start(ctx, config);
+    let invalidated!: () => void;
+    const gone = new Promise<void>((resolve) => { invalidated = resolve; });
+    client.setNotificationHandler(InvalidatedSchema, ({ params }) => { host.invalidate(params.service); invalidated(); });
+    await assert.rejects(client.request({ method: 'native-ui/action', params: { uri, action: 'disconnect', revision: 'r1' } }, ActionResultSchema));
+    await gone;
+    assert.equal(statuses.get('gateway-ui:demo'), undefined, 'Child exit clears the native footer');
+    assert.throws(() => editorText('\x1b]52;c;payload\x07'), /terminal controls/);
     await assert.rejects(client.request({ method: 'native-ui/action', params: { uri: 'gateway-resource://unknown/x', action: 'save', revision: 'r1' } }, ActionResultSchema));
     const base = { version: 1, title: 'Test', revision: '1', state: {}, controls: [] };
     assert.throws(() => ViewSchema.parse({ ...base, version: 2 }));

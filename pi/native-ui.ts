@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { ActionResultSchema, clean, ContextSchema, footerText, UI_CONTEXT, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
+import { ActionResultSchema, clean, editorText, ContextSchema, footerText, UI_CONTEXT, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown> };
 const entryType = 'gateway-native-ui-v1';
 const serviceOf = (uri: string) => new URL(uri).hostname;
+const oneLine = (text: string) => clean(text).replace(/\n/g, ' ');
 
 /** Generic host: only protocol primitives, no service-specific screens or actions. */
 export class NativeUI {
@@ -17,6 +18,7 @@ export class NativeUI {
   private resources = new Map<string, string>();
   private views = new Map<string, NativeView>();
   private pending = new Map<string, Promise<void>>();
+  private dirty = new Set<string>();
   private ephemeralId = randomUUID();
   private changed = () => {};
 
@@ -45,7 +47,14 @@ export class NativeUI {
   stop(): void {
     this.epoch++;
     for (const service of this.resources.keys()) this.ctx?.ui.setStatus(`gateway-ui:${service}`, undefined);
-    this.resources.clear(); this.views.clear(); this.pending.clear(); this.changed();
+    this.resources.clear(); this.views.clear(); this.pending.clear(); this.dirty.clear(); this.changed();
+  }
+
+  invalidate(service: string): void {
+    const uri = this.resources.get(service);
+    if (uri) { this.resources.delete(service); this.views.delete(uri); this.dirty.delete(uri); }
+    this.ctx?.ui.setStatus(`gateway-ui:${service}`, undefined);
+    this.changed();
   }
 
   meta(service: string): Record<string, unknown> {
@@ -68,25 +77,29 @@ export class NativeUI {
 
   async refresh(uri: string): Promise<void> {
     if (![...this.resources.values()].includes(uri)) return;
-    // Coalesce notifications; a later action response supersedes this read.
+    // A notification can arrive after the pending read took its snapshot.
+    this.dirty.add(uri);
     const existing = this.pending.get(uri);
     if (existing) return existing;
     const epoch = this.epoch;
     const work = (async () => {
-      try {
-        const result = await this.client().readResource({ uri, _meta: this.meta(serviceOf(uri)) }, this.options());
-        if (epoch !== this.epoch) return;
-        const content = result.contents.find((item) => item.mimeType === UI_MIME && 'text' in item);
-        if (!content || !('text' in content) || content.text.length > 256_000) throw new Error('Invalid or oversized native UI resource');
-        this.apply(uri, ViewSchema.parse(JSON.parse(content.text)));
-      } catch (error) {
-        if (epoch === this.epoch) {
-          this.views.delete(uri);
-          this.ctx?.ui.setStatus(`gateway-ui:${serviceOf(uri)}`, undefined);
-          this.ctx?.ui.notify(clean(String(error)), 'error');
-          this.changed();
+      do {
+        this.dirty.delete(uri);
+        try {
+          const result = await this.client().readResource({ uri, _meta: this.meta(serviceOf(uri)) }, this.options());
+          if (epoch !== this.epoch || this.resources.get(serviceOf(uri)) !== uri) return;
+          const content = result.contents.find((item) => item.mimeType === UI_MIME && 'text' in item);
+          if (!content || !('text' in content) || content.text.length > 256_000) throw new Error('Invalid or oversized native UI resource');
+          this.apply(uri, ViewSchema.parse(JSON.parse(content.text)));
+        } catch (error) {
+          if (epoch === this.epoch && this.resources.get(serviceOf(uri)) === uri) {
+            this.views.delete(uri);
+            this.ctx?.ui.setStatus(`gateway-ui:${serviceOf(uri)}`, undefined);
+            this.ctx?.ui.notify(clean(String(error)), 'error');
+            this.changed();
+          }
         }
-      }
+      } while (epoch === this.epoch && this.resources.get(serviceOf(uri)) === uri && this.dirty.has(uri));
     })();
     this.pending.set(uri, work);
     try { await work; } finally { if (this.pending.get(uri) === work) this.pending.delete(uri); }
@@ -118,7 +131,7 @@ export class NativeUI {
         invalidate() {},
         dispose: () => { if (this.changed === changed) this.changed = () => {}; },
       };
-    });
+    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
   }
 
   async open(service: string, ctx: ExtensionContext): Promise<void> {
@@ -132,44 +145,62 @@ export class NativeUI {
       const view = this.views.get(uri);
       if (!view) return;
       const picked = await ctx.ui.custom<NativeControl | 'refresh' | undefined>((tui, theme, _keys, done) => {
-        const list = new SelectList(view.controls.map((control) => ({
+        let list: SelectList | undefined;
+        let visibleRows = 0;
+        const makeList = (rows: number) => {
+          const selected = view.controls.findIndex((control) => control.id === list?.getSelectedItem()?.value);
+          list = new SelectList(view.controls.map((control) => ({
           value: control.id,
-          label: `${control.icon ? `${clean(control.icon)} ` : ''}${clean(control.label)}${control.kind !== 'action' ? `: ${clean(String(control.value ?? '')).replace(/\n/g, ' ')}` : ''}`,
-          description: clean(control.description ?? ''),
-        })), Math.max(1, Math.min(12, tui.terminal.rows - 12)), {
+          label: `${control.icon ? `${oneLine(control.icon)} ` : ''}${oneLine(control.label)}${control.kind !== 'action' ? `: ${oneLine(String(control.value ?? ''))}` : ''}`,
+          description: oneLine(control.description ?? ''),
+        })), rows, {
           selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
           description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => theme.fg('warning', s),
         }, { minPrimaryColumnWidth: 20, maxPrimaryColumnWidth: 80,
           truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth),
         });
         list.onSelect = (item) => done(view.controls.find((c) => c.id === item.value));
-        list.onCancel = () => done(undefined);
+          list.onCancel = () => done(undefined);
+          list.setSelectedIndex(Math.max(0, selected));
+          visibleRows = rows;
+        };
         const changed = () => done('refresh');
         this.changed = changed;
         return {
           render(width: number) {
             const w = Math.max(1, width);
             const body = clean(view.body ?? '').split('\n').flatMap((line) => wrapTextWithAnsi(line, w)).slice(0, Math.max(0, Math.min(6, tui.terminal.rows - 18)));
-            return [theme.fg('accent', clean(view.title)), ...body, '', ...list.render(w), '', theme.fg('muted', '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close')].map((line) => truncateToWidth(line, w));
+            if (tui.terminal.rows < 8) return [truncateToWidth('Enlarge terminal · Esc close', w)];
+            const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8));
+            if (!list || rows !== visibleRows) makeList(rows);
+            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close')].map((line) => truncateToWidth(line, w));
           },
-          handleInput(data: string) { if (matchesKey(data, Key.ctrl('r'))) done('refresh'); else list.handleInput(data); tui.requestRender(); },
-          invalidate() { list.invalidate(); },
+          handleInput(data: string) {
+            if (matchesKey(data, Key.escape)) done(undefined);
+            else if (matchesKey(data, Key.ctrl('r'))) done('refresh');
+            else if (tui.terminal.rows >= 8) list?.handleInput(data);
+            tui.requestRender();
+          },
+          invalidate() { list?.invalidate(); },
           dispose: () => { if (this.changed === changed) this.changed = () => {}; },
         };
-      });
+      }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
       if (epoch !== this.epoch || !picked) return;
       if (picked === 'refresh') { await this.refresh(uri); continue; }
+      const valid = () => epoch === this.epoch && this.resources.get(service) === uri && this.views.get(uri)?.revision === view.revision;
       let value = picked.value;
-      const title = clean(picked.label);
+      const title = oneLine(picked.label);
       if (picked.kind === 'text' || picked.kind === 'number') {
-        const entered = picked.multiline ? await ctx.ui.editor(title, String(value ?? '')) : await ctx.ui.input(title, String(value ?? ''), this.options());
+        let entered: string | undefined;
+        try { entered = await ctx.ui.editor(title, editorText(String(value ?? ''))); }
+        catch (error) { ctx.ui.notify(clean(String(error)), 'error'); continue; }
         if (entered === undefined) continue;
         value = picked.kind === 'number' ? Number(entered) : entered;
         if (typeof value === 'number' && (!entered.trim() || !Number.isFinite(value))) { ctx.ui.notify('Enter a finite number', 'error'); continue; }
       } else if (picked.kind === 'toggle') value = !value;
       else if (picked.kind === 'select') {
         const options = picked.options ?? [];
-        const labels = options.map((o, i) => `${i + 1}. ${clean(o.label)}`);
+        const labels = options.map((o, i) => `${i + 1}. ${oneLine(o.label)}`);
         const choice = await ctx.ui.select(title, labels, this.options());
         if (!choice) continue;
         value = options[labels.indexOf(choice)].value;
@@ -181,17 +212,19 @@ export class NativeUI {
         // Drain in-flight notification reads before acting; never replay a failed write.
         await this.pending.get(uri);
         if (epoch !== this.epoch) return;
+        if (!valid()) { ctx.ui.notify('View changed or disconnected; refresh before acting', 'warning'); continue; }
+        if (typeof value === 'string') editorText(value);
         const result = await this.client().request({ method: 'native-ui/action', params: {
           uri, action: picked.id, revision: view.revision, ...(value === undefined ? {} : { value }), _meta: this.meta(service),
         } }, ActionResultSchema, this.options());
         if (epoch !== this.epoch) return;
         await this.pending.get(uri);
-        if (epoch !== this.epoch) return;
+        if (epoch !== this.epoch || this.resources.get(service) !== uri) return;
         this.apply(uri, result.view);
         if (result.preview) await this.preview(result.preview, ctx);
         if (result.draft && await ctx.ui.confirm('Insert draft?', clean(result.draft), this.options()) && epoch === this.epoch) {
           if (ctx.ui.getEditorText().trim()) ctx.ui.notify('Draft preserved; clear the editor before inserting a server draft', 'warning');
-          else ctx.ui.setEditorText(result.draft);
+          else ctx.ui.setEditorText(editorText(result.draft));
         }
       } catch (error) {
         if (epoch !== this.epoch) return;

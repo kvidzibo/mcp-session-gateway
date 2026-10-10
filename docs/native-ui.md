@@ -78,7 +78,10 @@ wraps that URI for the host, which rereads the view. Notifications cannot perfor
 actions. External writers need to emit an update or the user must refresh; no file
 watcher or background polling is installed. The host also refreshes after model
 tool calls. Missing/invalid views clear the service's footer and show an error;
-gateway disconnect clears native views. Lifetime guards discard late responses
+gateway disconnect clears native views. Child disconnect emits a gateway-owned
+`notifications/native-ui/invalidated` with `{service}` and clears that service's
+view/controls/footer. In-flight refresh notifications queue a follow-up read;
+invalidated views cannot dispatch a pending edit. Lifetime guards discard late responses
 after navigation or shutdown.
 
 Screens and previews are UI-only and never appended as model messages. Ordinary

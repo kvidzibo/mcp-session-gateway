@@ -10,7 +10,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { loadConfig } from '../src/config.js';
 import { NativeUI } from './native-ui.js';
-import { ChangedSchema } from '../src/native-ui.js';
+import { ChangedSchema, InvalidatedSchema } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
@@ -85,10 +85,11 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
-    const current = new Client({ name: 'pi-gateway-adapter', version: '0.4.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
+    const current = new Client({ name: 'pi-gateway-adapter', version: '0.5.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { connected = false; lifetime.abort(); native.stop(); };
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
+    current.setNotificationHandler(InvalidatedSchema, ({ params }) => { native.invalidate(params.service); });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env[OPERATOR_ENV];

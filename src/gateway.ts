@@ -47,7 +47,7 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.4.0' },
+    { name: 'local-stdio-mcp-gateway', version: '0.5.0' },
     { capabilities: { tools: { listChanged: true }, resources: {}, experimental: { 'native-ui-v1': {} } } },
   );
   private readonly services: Service[] = [];
@@ -294,7 +294,7 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.4.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.5.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
     const settingsToken = this.operatorToken && config.settings ? randomBytes(32).toString('base64url') : undefined;
     const env = { ...config.env };
     // The upstream token is never inherited by children; configured child tokens are overridden.
@@ -332,6 +332,7 @@ export class Gateway {
       service.closed.abort();
       service.tools = [];
       void this.notifyToolsChanged().catch((error: Error) => this.log(error.message));
+      if (this.initialized && !this.closing) void this.server.notification({ method: 'notifications/native-ui/invalidated', params: { service: config.name } }).catch((error: Error) => this.log(error.message));
     };
     client.setNotificationHandler(ChangedSchema, async ({ params }) => {
       if (service.connected && this.initialized && !this.closing) {
