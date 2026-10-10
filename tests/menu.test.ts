@@ -59,7 +59,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
   const navigation = ['Connection', 'Restart gateway services…', 'Connection', 'Restart gateway services…', 'Back', 'Packages', 'Installed versions', 'Back', 'Close'];
   let restartAttempts = 0, rootVisits = 0, appsOpened = 0;
   gatewayExtension({
-    registerFlag() {}, getFlag: () => config,
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} },
     registerTool() {}, registerCommand: (name: string, command: any) => commands.set(name, command),
     on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry() {},
   } as any);
