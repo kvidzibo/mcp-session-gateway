@@ -9,6 +9,10 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
+  ResourceUpdatedNotificationSchema,
+  ResourceListChangedNotificationSchema,
   McpError,
   ToolListChangedNotificationSchema,
   type Tool,
@@ -32,6 +36,7 @@ interface Service {
   connected: boolean;
   settingsToken?: string;
   settingsEnabled?: boolean;
+  subscriptions: Set<string>;
   queue: Promise<void>;
   closed: AbortController;
   active?: { id: RequestId; signal: AbortSignal; tool: string };
@@ -46,8 +51,8 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.4.0' },
-    { capabilities: { tools: { listChanged: true }, resources: {} } },
+    { name: 'local-stdio-mcp-gateway', version: '0.5.0' },
+    { capabilities: { tools: { listChanged: true }, resources: { subscribe: true, listChanged: true } } },
   );
   private readonly services: Service[] = [];
   private initialized = false;
@@ -131,6 +136,30 @@ export class Gateway {
       const result = await this.withService(service, extra.signal, () => service.client.readResource({ uri: parsed.uri, _meta: { ...meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } }, { timeout: this.config.timeoutMs, signal: extra.signal }));
       return { ...result, contents: result.contents.map((content) => ({ ...content, uri: this.resourceUri(parsed.service, content.uri) })) };
     }));
+    for (const schema of [SubscribeRequestSchema, UnsubscribeRequestSchema]) {
+      this.server.setRequestHandler(schema, async (request, extra) => this.withRequest(extra, async () => {
+        await this.ready;
+        const { service: name, uri } = this.parseResourceUri(request.params.uri);
+        const service = this.services.find((item) => item.config.name === name && item.connected);
+        if (!service?.client.getServerCapabilities()?.resources?.subscribe) {
+          throw new McpError(ErrorCode.InvalidParams, 'Resource subscriptions unavailable for this service');
+        }
+        return this.withService(service, extra.signal, async () => {
+          const options = { signal: extra.signal, timeout: this.config.timeoutMs };
+          if (request.method === 'resources/subscribe') {
+            if (service.subscriptions.has(uri)) return {};
+            // Accept a notification emitted before the child's subscribe reply.
+            service.subscriptions.add(uri);
+            try { await service.client.subscribeResource({ uri }, options); }
+            catch (error) { service.subscriptions.delete(uri); throw error; }
+          } else if (service.subscriptions.has(uri)) {
+            await service.client.unsubscribeResource({ uri }, options);
+            service.subscriptions.delete(uri);
+          }
+          return {};
+        });
+      }));
+    }
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       if (request.params.name === 'gateway__identity') {
@@ -251,6 +280,10 @@ export class Gateway {
     if (this.initialized && !this.closing) await this.server.sendToolListChanged();
   }
 
+  private async notifyResourcesChanged(): Promise<void> {
+    if (this.initialized && !this.closing) await this.server.sendResourceListChanged();
+  }
+
   private async refreshTools(service: Service): Promise<void> {
     const tools: Tool[] = [];
     const names = new Set<string>();
@@ -283,7 +316,7 @@ export class Gateway {
 
   private async startService(config: ServiceConfig): Promise<void> {
     const supportsForms = Boolean(this.server.getClientCapabilities()?.elicitation?.form);
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.4.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.5.0' }, { capabilities: supportsForms ? { elicitation: { form: {} } } : {} });
     const settingsToken = this.operatorToken && config.settings ? randomBytes(32).toString('base64url') : undefined;
     const env = { ...config.env };
     // The upstream token is never inherited by children; configured child tokens are overridden.
@@ -300,7 +333,7 @@ export class Gateway {
         MCP_GATEWAY_SERVICE_ID: config.name,
       },
     });
-    const service: Service = { config, client, transport, settingsToken, tools: [], refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
+    const service: Service = { config, client, transport, settingsToken, tools: [], subscriptions: new Set(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
     if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
       const active = service.active;
       if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
@@ -320,8 +353,15 @@ export class Gateway {
       service.connected = false;
       service.closed.abort();
       service.tools = [];
+      service.subscriptions.clear();
       void this.notifyToolsChanged().catch((error: Error) => this.log(error.message));
+      void this.notifyResourcesChanged().catch((error: Error) => this.log(error.message));
     };
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (notification) => {
+      if (!service.connected || !service.subscriptions.has(notification.params.uri) || this.closing) return;
+      await this.server.sendResourceUpdated({ uri: this.resourceUri(config.name, notification.params.uri) });
+    });
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => this.notifyResourcesChanged());
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       try {
         await this.queueRefresh(service);
@@ -346,7 +386,7 @@ export class Gateway {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
     const transport = new StdioServerTransport(input);
-    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE]);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', 'resources/subscribe', 'resources/unsubscribe', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE]);
     await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;

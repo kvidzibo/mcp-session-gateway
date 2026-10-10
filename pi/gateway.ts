@@ -12,6 +12,7 @@ import { loadConfig } from '../src/config.js';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 import { clean, editSettings, selectSettingsOption } from './settings.js';
+import { LiveJobs } from './live-jobs.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -28,10 +29,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let uiBusy = false;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
+  let liveJobs: LiveJobs | undefined;
 
   async function close(): Promise<void> {
     if (closing) return closing;
     connected = false;
+    liveJobs?.stop();
+    liveJobs = undefined;
     lifetime.abort();
     operatorToken = undefined;
     closing = (async () => {
@@ -80,9 +84,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
-    const current = new Client({ name: 'pi-gateway-adapter', version: '0.4.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
+    const current = new Client({ name: 'pi-gateway-adapter', version: '0.5.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { connected = false; lifetime.abort(); };
+    current.onclose = () => { connected = false; liveJobs?.disconnect(); lifetime.abort(); };
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env[OPERATOR_ENV];
@@ -95,6 +99,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       await current.connect(transport, { timeout, signal: lifetime.signal });
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
+      if (ctx.mode === 'tui' && ctx.hasUI) {
+        liveJobs = new LiveJobs(current, ctx, timeout);
+        await liveJobs.start();
+      }
     } catch (error) { await close(); throw error; }
   });
   pi.on('session_shutdown', close);
