@@ -93,11 +93,31 @@ These values override caller/config attempts to replace them; tool arguments are
 
 Identity is a correlation label, **not authentication or a sandbox**. All configured servers execute with your OS permissions, and only trusted executables should be configured. Tool annotations are upstream hints, not security guarantees.
 
+## Logs
+
+Gateway and child-server diagnostics go to **both stderr and an append-only file**.
+The default is `gateway.log` beside your config. Set a top-level `"logFile": "logs/gateway.log"`
+to choose another path; relative paths resolve beside the config, not the working directory.
+The parent directory must already exist and be writable. New files use owner-only permissions (`0600`).
+
+Monitor the default log:
+
+```bash
+tail -F /absolute/path/to/config-directory/gateway.log
+```
+
+Restarts and concurrent gateway runs append without truncation. Writes are immediately
+visible; external rotation is supported because each append reopens the path. No automatic
+rotation or size limit is provided. Child stderr is copied verbatim; stdout remains MCP-only.
+Tool arguments/results are not logged by the gateway, but child diagnostics may contain
+sensitive data. Config/argument errors before logging is initialized appear only on stderr.
+An unwritable log prevents startup; a later write failure reports to stderr and triggers cleanup.
+
 ## Lifecycle and validation
 
 All configured servers must initialize successfully. Startup fails and awaits child cleanup if any server fails. Upstream EOF is observed during startup; incoming initialization messages are buffered up to 1 MiB until services are ready. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed.
 
-Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and inherited child diagnostics use stderr; stdout is reserved for MCP messages. A failed gateway diagnostic stream triggers cleanup and suppresses further diagnostics.
+Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). Final bounded drains allow up to 100 ms each for remaining child diagnostics and buffered gateway stderr. This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and child diagnostics use stderr and the log file; stdout is reserved for MCP messages. A failed gateway stderr stream triggers cleanup and suppresses further stderr output; file logging remains available during cleanup.
 
 ```bash
 npm run check

@@ -2,7 +2,7 @@
 import { PassThrough } from 'node:stream';
 import { loadConfig } from './config.js';
 import { Gateway } from './gateway.js';
-import { silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
+import { flushDiagnostics, openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
 
 let stopForStderrError = (): void => { process.exitCode = 1; };
 process.stderr.on('error', () => {
@@ -17,18 +17,23 @@ async function main(): Promise<void> {
     process.exitCode = args.length === 1 && args[0] === '--help' ? 0 : 1;
     return;
   }
-  const gateway = new Gateway(await loadConfig(args[1]));
+  const config = await loadConfig(args[1]);
+  openDiagnosticLog(config.logFile, () => { stopForStderrError(); });
+  const gateway = new Gateway(config);
   let stopping = false;
+  let exitCode = 0;
   const stop = async (code = 0): Promise<void> => {
+    exitCode = Math.max(exitCode, code);
     if (stopping) return;
     stopping = true;
     try {
       await gateway.close();
     } catch (error) {
       writeDiagnostic(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
-      code = 1;
+      exitCode = 1;
     }
-    process.exit(code);
+    await flushDiagnostics();
+    process.exit(exitCode);
   };
   stopForStderrError = () => { void stop(1); };
   if (process.stderr.destroyed) {
@@ -68,6 +73,7 @@ async function main(): Promise<void> {
     for (const chunk of pending) input.write(chunk);
     pending.length = 0;
   } catch (error) {
+    if (stopping) return; // Upstream EOF/signal may cancel initialization normally.
     writeDiagnostic(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
     await stop(1);
   }

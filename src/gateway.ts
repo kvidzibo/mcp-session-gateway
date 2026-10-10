@@ -31,7 +31,7 @@ export class Gateway {
   readonly sessionId = randomUUID();
   onclose?: () => void;
   private readonly server = new Server(
-    { name: 'local-stdio-mcp-gateway', version: '0.1.0' },
+    { name: 'local-stdio-mcp-gateway', version: '0.2.0' },
     { capabilities: { tools: { listChanged: true } } },
   );
   private readonly services: Service[] = [];
@@ -148,7 +148,7 @@ export class Gateway {
   }
 
   private async startService(config: ServiceConfig): Promise<void> {
-    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.1.0' });
+    const client = new Client({ name: 'local-stdio-mcp-gateway', version: '0.2.0' });
     const transport = new ServiceTransport({
       command: config.command,
       args: config.args,
