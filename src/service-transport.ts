@@ -30,6 +30,8 @@ export class ServiceTransport implements Transport {
   private readonly buffer = new ReadBuffer();
   private closing?: Promise<void>;
   private exit: Promise<void> = Promise.resolve();
+  private stderrDone: Promise<void> = Promise.resolve();
+  private releaseStderr?: () => void;
   private exited = false;
   private notified = false;
 
@@ -58,7 +60,23 @@ export class ServiceTransport implements Transport {
     child.stdin?.on('error', (error) => { this.onerror?.(error); });
     child.stdout?.on('error', (error) => { this.onerror?.(error); });
     child.stderr?.on('error', (error) => { this.onerror?.(error); });
-    child.stderr?.on('data', (chunk: Buffer) => { writeDiagnostic(chunk); });
+    this.stderrDone = new Promise<void>((resolve) => {
+      child.stderr!.once('end', resolve);
+      child.stderr!.once('close', resolve);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (writeDiagnostic(chunk)) return;
+      child.stderr!.pause();
+      const resume = (): void => {
+        process.stderr.off('drain', resume);
+        process.stderr.off('error', resume);
+        this.releaseStderr = undefined;
+        if (!child.stderr!.destroyed) child.stderr!.resume();
+      };
+      this.releaseStderr = resume;
+      process.stderr.once('drain', resume);
+      process.stderr.once('error', resume);
+    });
     child.stdout?.on('data', (chunk: Buffer) => {
       try {
         this.buffer.append(chunk);
@@ -101,10 +119,13 @@ export class ServiceTransport implements Transport {
           child.kill('SIGKILL');
           await waitUntil(this.exit, 1000);
         }
-        // Don't wait on descriptors inherited by unmanaged descendants.
+        // Process exit may precede final stderr data; drain within a bounded budget.
+        await waitUntil(this.stderrDone, 100);
+        // Don't wait indefinitely on descriptors inherited by unmanaged descendants.
         child.stdin?.destroy();
         child.stdout?.destroy();
         child.stderr?.destroy();
+        this.releaseStderr?.();
         if (!this.exited) throw new Error('Service process did not exit after SIGKILL');
       }
       this.buffer.clear();

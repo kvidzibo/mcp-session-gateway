@@ -15,7 +15,7 @@ export function silenceDiagnostics(): void {
   enabled = false;
 }
 
-export function writeDiagnostic(message: string | Buffer): void {
+export function writeDiagnostic(message: string | Buffer): boolean {
   if (logFile !== undefined) {
     try {
       // Synchronous appends are immediately visible to tail, including on exit.
@@ -29,5 +29,6 @@ export function writeDiagnostic(message: string | Buffer): void {
       onLogError?.();
     }
   }
-  if (enabled && !process.stderr.destroyed) process.stderr.write(message);
+  if (enabled && !process.stderr.destroyed) return process.stderr.write(message);
+  return true;
 }

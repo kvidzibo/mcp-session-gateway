@@ -13,7 +13,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(root, 'src/cli.ts');
 const service = pathToFileURL(path.join(root, 'tests/service.ts')).href;
 
-test('file diagnostics append across runs, mirror child stderr, and fail before spawning on an invalid path', { timeout: 20_000 }, async () => {
+test('file diagnostics append across runs, preserve shutdown stderr, and fail before spawning on an invalid path', { timeout: 20_000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'gateway-logging-'));
   const configPath = path.join(directory, 'config.json');
   const defaultLog = path.join(directory, 'gateway.log');
@@ -22,7 +22,9 @@ test('file diagnostics append across runs, mirror child stderr, and fail before 
     fixture: {
       command: process.execPath,
       args: ['--import', 'tsx', '--input-type=module', '-e',
-        `process.stderr.write('child-diagnostic\\n'); await import(${JSON.stringify(service)});`],
+        `process.stderr.write('child-diagnostic\\n');
+         process.stdin.on('end', () => process.stderr.write('shutdown-diagnostic\\n'.repeat(5000)));
+         await import(${JSON.stringify(service)});`],
       cwd: root,
     },
   };
@@ -53,6 +55,9 @@ test('file diagnostics append across runs, mirror child stderr, and fail before 
       }
       assert.match(stderr, /child-diagnostic\n/);
       assert.match(stderr, /Started with 1 service/);
+      const finalLog = await readFile(logFile ? customLog : defaultLog, 'utf8');
+      const runs = finalLog.match(/Started with 1 service/g)?.length ?? 0;
+      assert.equal(finalLog.match(/shutdown-diagnostic/g)?.length, runs * 5000);
     }
     const log = await readFile(defaultLog, 'utf8');
     assert.ok(log.startsWith('existing-log\n'));

@@ -21,16 +21,18 @@ async function main(): Promise<void> {
   openDiagnosticLog(config.logFile, () => { stopForStderrError(); });
   const gateway = new Gateway(config);
   let stopping = false;
+  let exitCode = 0;
   const stop = async (code = 0): Promise<void> => {
+    exitCode = Math.max(exitCode, code);
     if (stopping) return;
     stopping = true;
     try {
       await gateway.close();
     } catch (error) {
       writeDiagnostic(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
-      code = 1;
+      exitCode = 1;
     }
-    process.exit(code);
+    process.exit(exitCode);
   };
   stopForStderrError = () => { void stop(1); };
   if (process.stderr.destroyed) {
