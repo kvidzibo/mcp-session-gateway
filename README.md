@@ -117,8 +117,12 @@ Gateway resource forwarding is generic: `resources/subscribe` and
 `resources/unsubscribe` route to the owning service, and updates are forwarded
 only for subscribed URIs. Resource-list changes and service disconnects propagate
 upstream. Clients must subscribe before reading and reread after each update.
-Services without subscription support keep manual reads. Resource templates are
-not forwarded. Pi rendering is isolated in `pi/live-jobs.ts`; the gateway does not
+Services without subscription support keep manual reads. Resource observation
+requests that supply a progress token receive standard progress heartbeats while
+queued or aggregating pages. The live adapter resets its request timeout on those
+heartbeats; healthy children are not cancelled merely because total discovery
+exceeds one child-request timeout. Each actual child request retains its normal
+timeout and retirement policy. Resource templates are not forwarded. Pi rendering is isolated in `pi/live-jobs.ts`; the gateway does not
 interpret delegate JSON. The adapter validates the declared format and caps it at
 32 sources, 256 jobs per source and 1 MB per snapshot.
 

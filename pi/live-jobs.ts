@@ -39,6 +39,7 @@ export class LiveJobs {
   private stopped = false;
   private disconnected = false;
   private mounted = false;
+  private uiFailed = false;
   private repaint?: () => void;
   private clock?: ReturnType<typeof setInterval>;
 
@@ -53,6 +54,12 @@ export class LiveJobs {
     await this.discover();
   }
 
+  private options() {
+    // Gateway progress accounts for per-service queue time and multi-page discovery.
+    // A UI refresh must not cancel healthy workers merely because the aggregate is slow.
+    return { signal: this.lifetime.signal, timeout: this.timeout, resetTimeoutOnProgress: true, onprogress: () => {} };
+  }
+
   private async discover(): Promise<void> {
     if (this.stopped || this.disconnected) return;
     if (this.discovering) { this.discoverAgain = true; return; }
@@ -60,7 +67,7 @@ export class LiveJobs {
     try {
       do {
         this.discoverAgain = false;
-        const result = await this.client.listResources(undefined, { signal: this.lifetime.signal, timeout: this.timeout });
+        const result = await this.client.listResources(undefined, this.options());
         if (this.stopped || this.disconnected) return;
         const uris = new Set(result.resources.filter(resource => resource.mimeType === JOBS_MIME).map(resource => resource.uri));
         for (const [uri, source] of this.sources) {
@@ -82,7 +89,7 @@ export class LiveJobs {
           this.sources.set(uri, source);
           try {
             // Subscribe before reading so changes during the initial read cannot be lost.
-            await this.client.subscribeResource({ uri }, { signal: this.lifetime.signal, timeout: this.timeout });
+            await this.client.subscribeResource({ uri }, this.options());
             this.schedule(source);
           } catch { source.error = 'Live subscription unavailable'; source.frozenAt ??= Date.now(); }
         }
@@ -91,7 +98,10 @@ export class LiveJobs {
     } catch {
       for (const source of this.sources.values()) { source.error = 'Resource discovery unavailable'; source.frozenAt ??= Date.now(); }
       this.paint();
-    } finally { this.discovering = false; }
+    } finally {
+      this.discovering = false;
+      if (this.discoverAgain && !this.stopped && !this.disconnected) void this.discover();
+    }
   }
 
   private schedule(source: Source): void {
@@ -107,7 +117,7 @@ export class LiveJobs {
     source.busy = true;
     source.dirty = false;
     try {
-      const result = await this.client.readResource({ uri: source.uri }, { signal: this.lifetime.signal, timeout: this.timeout });
+      const result = await this.client.readResource({ uri: source.uri }, this.options());
       if (this.stopped || this.disconnected || !source.present) return;
       const content = result.contents.find(item => item.uri === source.uri && item.mimeType === JOBS_MIME && 'text' in item);
       if (!content || !('text' in content) || content.text.length > 1_000_000) throw new Error('Invalid job resource');
@@ -131,13 +141,27 @@ export class LiveJobs {
   }
 
   private paint(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.uiFailed) return;
+    try { this.paintWidget(); }
+    catch {
+      this.uiFailed = true;
+      if (this.clock) clearInterval(this.clock);
+      this.clock = undefined;
+      this.repaint = undefined;
+      // A broken/dead UI cannot escape into a timer or connection ownership.
+    }
+  }
+
+  private paintWidget(): void {
     const entries = this.entries(Date.now());
     if (!this.mounted && entries.length) {
       this.ctx.ui.setWidget('gateway-live-jobs', (tui, theme) => {
         this.repaint = () => tui.requestRender();
         return {
-          render: width => this.render(width, Math.max(0, Math.min(12, Math.floor(tui.terminal.rows / 2))), theme),
+          render: width => {
+            try { return this.render(width, Math.max(0, Math.min(12, Math.floor(tui.terminal.rows / 2))), theme); }
+            catch { return []; }
+          },
           invalidate() {},
         };
       }, { placement: 'aboveEditor' });
@@ -174,7 +198,7 @@ export class LiveJobs {
       const activity = source.error ? 'Last known state; worker outcome unknown' : job.status === 'queued' ? `Waiting: ${job.queueReason ?? 'slot'}`
         : !active(job) ? 'Worker stopped; collect the result to inspect it' : job.phase === 'thinking' ? 'Thinking'
         : tool ? `${tool.name}${tool.args ? ` ${tool.args}` : ''}` : 'Working';
-      lines.push(row(`${job.jobId.slice(0, 8)} · ${singleLine(activity)}${job.wrapped && active(job) ? ' · wrap requested' : ''}`));
+      lines.push(row(`${singleLine(job.jobId).slice(0, 8)} · ${singleLine(activity)}${job.wrapped && active(job) ? ' · wrap requested' : ''}`));
     }
     if (entries.length > capacity) lines.push(row(`${entries.length - capacity} more · /gateway-panel for full job data`));
     return lines.slice(0, maxRows);
@@ -196,7 +220,8 @@ export class LiveJobs {
     for (const source of this.sources.values()) if (source.timer) clearTimeout(source.timer);
     this.client.removeNotificationHandler('notifications/resources/updated');
     this.client.removeNotificationHandler('notifications/resources/list_changed');
-    if (this.mounted) this.ctx.ui.setWidget('gateway-live-jobs', undefined);
     this.sources.clear();
+    try { if (this.mounted || this.uiFailed) this.ctx.ui.setWidget('gateway-live-jobs', undefined); }
+    catch { /* Connection teardown must continue even when its UI is already gone. */ }
   }
 }

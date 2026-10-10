@@ -17,6 +17,7 @@ import {
   ToolListChangedNotificationSchema,
   type Tool,
   type RequestId,
+  type ServerNotification,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
@@ -109,7 +110,7 @@ export class Gateway {
         ),
       ] };
     }));
-    this.server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
       await this.ready;
       const resources = [];
       for (const service of this.services.filter((item) => item.connected && item.client.getServerCapabilities()?.resources)) {
@@ -127,7 +128,7 @@ export class Gateway {
       }
       return { resources };
     }));
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
       await this.ready;
       const parsed = this.parseResourceUri(request.params.uri);
       const service = this.services.find((item) => item.config.name === parsed.service && item.connected);
@@ -137,7 +138,7 @@ export class Gateway {
       return { ...result, contents: result.contents.map((content) => ({ ...content, uri: this.resourceUri(parsed.service, content.uri) })) };
     }));
     for (const schema of [SubscribeRequestSchema, UnsubscribeRequestSchema]) {
-      this.server.setRequestHandler(schema, async (request, extra) => this.withRequest(extra, async () => {
+      this.server.setRequestHandler(schema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
         await this.ready;
         const { service: name, uri } = this.parseResourceUri(request.params.uri);
         const service = this.services.find((item) => item.config.name === name && item.connected);
@@ -228,6 +229,26 @@ export class Gateway {
       extra.signal.throwIfAborted();
       return await run();
     } finally { this.requests?.finish(extra.requestId); }
+  }
+
+  /** Keep observation timeouts from counting aggregate listing/queue time as a dead child.
+   * Only clients requesting progress receive these heartbeats. Child requests retain their
+   * own timeout and cancellation/retirement policy; no worker deadline is extended.
+   */
+  private async withResourceRequest<T>(
+    params: { _meta?: { progressToken?: string | number } } | undefined,
+    extra: { requestId: RequestId; signal: AbortSignal; sendNotification: (notification: ServerNotification) => Promise<void> },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const progressToken = params?._meta?.progressToken;
+    let progress = 0;
+    const timer = progressToken === undefined ? undefined : setInterval(() => {
+      if (extra.signal.aborted || this.closing) return;
+      void extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: ++progress } }).catch(() => {});
+    }, Math.max(10, Math.floor(this.config.timeoutMs / 3)));
+    timer?.unref();
+    try { return await this.withRequest(extra, run); }
+    finally { if (timer) clearInterval(timer); }
   }
 
   // Stdio has no wire-level parent request ID. Serializing service requests
