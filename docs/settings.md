@@ -61,13 +61,18 @@ operator envelope. The editor is for ordinary values, not credential entry.
 Schemas use inline nested object properties and primitive fields. `enum` and
 primitive `oneOf` constant choices become selectors even without an explicit `type`.
 TUI selectors use single-row, scrolling lists in isolated overlays, independent
-of editor widgets and footers. Long labels are truncated in selection lists; save
+of editor widgets and footers. Typing filters immediately by case-insensitive words
+anywhere in a label (including provider/model IDs). Backspace edits the query;
+Escape goes back. An empty result cannot be selected. Long labels are truncated in selection lists; save
 previews show the complete values. Strings/numbers use a focused, single-line JSON
 input overlay (quote strings, use JSON escapes for newlines/control characters).
 Spaces and all non-ASCII characters in values/paths are escaped as `\uXXXX` in
 previews, preserving whitespace and exposing invisible/bidirectional characters. `readOnly` propagates to descendants.
 Complex unions, arrays, `$ref` controls and unsupported types remain view-only;
-full JSON Schema 2020-12 validation still runs before saving. Property paths use
+full JSON Schema 2020-12 validation still runs before saving, not when opening the
+editor. Large, distinct constant-only `oneOf` choices compile as equivalent `enum`
+constraints; titles remain in the UI, while referenced, duplicate or constrained
+alternatives retain their original schema. Property paths use
 JSON Pointer escaping. Unsafe prototype property names are refused. Object nesting
 is limited to 16 levels and 500 leaf fields. Schema defaults are not silently applied,
 and there is no field deletion/reset API.
