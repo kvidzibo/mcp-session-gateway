@@ -39,6 +39,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let managerWork: Promise<void> | undefined;
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
+  let configurationLoaded = false;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
@@ -117,6 +118,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const config = await loadConfig(configPath);
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
+    configurationLoaded = true;
     if (shuttingDown) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
@@ -292,6 +294,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.events.on('gateway:query-service-tool', (request: unknown) => {
     const query = request as { service?: string; tool?: string; arguments?: Record<string, unknown>; respond?: (reply: unknown) => void };
     if (!query || typeof query.respond !== 'function') return;
+    if (!configurationLoaded && pi.getFlag('gateway-config')) {
+      query.respond({ handled: true, error: 'Gateway configuration is not ready' }); return;
+    }
     if (typeof query.service !== 'string' || !configuredServices.includes(query.service)) { query.respond({ handled: false }); return; }
     if (typeof query.tool !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(query.tool)) { query.respond({ handled: true, error: 'Invalid tool name' }); return; }
     // A failed/disconnected owned service must never fall back to unrelated cwd selection.

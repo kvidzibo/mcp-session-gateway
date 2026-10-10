@@ -8,11 +8,14 @@ const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 test('generic footer actions, tool state and /new retention stay scoped, serialized and replay-safe', async () => {
   const statuses = new Map<string, string>();
   let entries: any[] = [{ type: 'custom', customType: 'gateway-native-ui-v1', data: { scope: '/config', service: 'beta', state: {} } }], session = 'first', file = '/tmp/footer-session-first';
-  let busy = false, actions = 0;
+  let busy = false, actions = 0, failSave = false;
   const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => entries, getSessionId: () => session, getSessionFile: () => file }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify() {}, confirm: async () => true,
   } };
-  const pi: any = { appendEntry: (customType: string, data: any) => entries.push({ type: 'custom', customType, data }) };
+  const pi: any = { appendEntry: (customType: string, data: any) => {
+    if (failSave) throw new Error('Persistence failed');
+    entries.push({ type: 'custom', customType, data });
+  } };
   const view = (service: string, state: any) => ({ version: 1, title: service, revision: JSON.stringify(state), state, retainOnNew: service === 'alpha',
     controls: [{ id: 'increment', label: 'Increment', kind: 'action' }], footer: [{ text: `${service} +`, action: 'increment' }] });
   const uri = (service: string) => `gateway-resource://${service}/root`;
@@ -74,8 +77,11 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
     host.transfer('/tmp/footer-session-next');
     await host.stop();
     entries = []; session = 'next'; file = '/tmp/footer-session-next';
-    await host.start(ctx, '/config', 'new');
-    assert.equal(state('alpha').count, 10);
+    failSave = true;
+    await assert.rejects(host.start(ctx, '/config', 'new'), /Persistence failed/);
+    failSave = false;
+    await host.start(ctx, '/config', 'reload');
+    assert.equal(state('alpha').count, 10, 'Failed /new transfer persists on the next start of its exact destination');
     assert.deepEqual(state('beta'), {});
     assert.equal((host.meta('alpha')['native-ui/context'] as any).contextId, contextId);
     await host.start(ctx, '/config', 'reload');

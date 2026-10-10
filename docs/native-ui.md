@@ -88,7 +88,9 @@ entries, scoped by config path and service. Resume, reload, and tree navigation
 restore active-branch state. By default new conversations start empty. Services
 opting into `retainOnNew: true` carry their opaque state and `contextId` into an
 accepted `/new`; the actual `conversationId` changes. The transfer is keyed to the
-exact destination session file, consumed once, and persisted there. Cancelled
+exact destination session file and consumed only after persistence there. If the
+first gateway launch fails, a later reload/restart of that same destination can
+finish the transfer. Cancelled
 switches and unrelated fresh launches do not inherit it; nothing is shared by cwd.
 Forks inherit only their copied branch entries, not a `/new` transfer. Services
 must independently invalidate consumed consent (for example with durable receipts)
@@ -131,7 +133,9 @@ Other trusted Pi extensions may emit `gateway:query-service-tool` with
 `{handled:true, result: Promise<CallToolResult>}` (or `error` for an invalid request).
 The promise uses the normal MCP request timeout and current native context; only
 model-visible tools explicitly advertising `readOnlyHint:true` are allowed.
-It rejects when an owned service is unavailable. Consumers must not substitute
+It rejects when an owned service is unavailable. While a selected gateway's
+configuration is still loading (or failed to load), queries return a handled
+error rather than claiming a service is absent. Consumers must not substitute
 an unrelated selection on that failure or on a null result. No transcript/model
 turn is created. This event is a trusted extension API, not a security boundary.
 

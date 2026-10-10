@@ -99,12 +99,18 @@ export class NativeUI {
     }
     const file = ctx.sessionManager?.getSessionFile?.();
     const carried = file ? transfers.get(file) : undefined;
-    if (file) transfers.delete(file);
-    if (reason === 'new') for (const data of carried ?? []) {
+    // Shutdown creates transfers only for accepted /new destinations. A failed
+    // gateway launch may reach this same file later via /reload or Restart.
+    for (const data of carried ?? []) {
       if (data.scope !== scope) continue;
       this.states.set(data.service, data.state);
       if (data.contextId) this.contexts.set(data.service, data.contextId);
       this.retained.add(data.service); this.save(data.service);
+    }
+    // Do not consume the transfer before persistence: appendEntry can fail.
+    if (file && carried) {
+      const remaining = carried.filter((data) => data.scope !== scope);
+      if (remaining.length) transfers.set(file, remaining); else transfers.delete(file);
     }
     const epoch = this.epoch;
     if (ctx.mode === 'tui') {
