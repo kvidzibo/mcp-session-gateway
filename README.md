@@ -53,9 +53,9 @@ Add an entry to your Pi `mcp.json`, merging it with existing entries. Replace pa
     "gateway": {
       "command": "node",
       "args": [
-        "/home/tomas/AI/MCP/dist/cli.js",
+        "/absolute/path/to/mcp-session-gateway/dist/cli.js",
         "--config",
-        "/home/tomas/AI/MCP/gateway.json"
+        "/absolute/path/to/mcp-session-gateway/gateway.json"
       ],
       "description": "Local service tools with a per-run gateway identity"
     }
