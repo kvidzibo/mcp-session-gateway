@@ -9,10 +9,15 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  SubscribeRequestSchema,
+  UnsubscribeRequestSchema,
+  ResourceUpdatedNotificationSchema,
+  ResourceListChangedNotificationSchema,
   McpError,
   ToolListChangedNotificationSchema,
   type Tool,
   type RequestId,
+  type ServerNotification,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { GatewayConfig, ServiceConfig } from './config.js';
 import { ServiceTransport } from './service-transport.js';
@@ -34,6 +39,7 @@ interface Service {
   connected: boolean;
   settingsToken?: string;
   settingsEnabled?: boolean;
+  subscriptions: Set<string>;
   queue: Promise<void>;
   closed: AbortController;
   active?: { id: RequestId; signal: AbortSignal; tool: string };
@@ -49,7 +55,7 @@ export class Gateway {
   onclose?: () => void;
   private readonly server = new Server(
     gatewayIdentity,
-    { capabilities: { tools: { listChanged: true }, resources: {}, experimental: { 'native-ui-v1': {} } } },
+    { capabilities: { tools: { listChanged: true }, resources: { subscribe: true, listChanged: true }, experimental: { 'native-ui-v1': {} } } },
   );
   private readonly services: Service[] = [];
   private initialized = false;
@@ -103,7 +109,7 @@ export class Gateway {
         ),
       ] };
     }));
-    this.server.setRequestHandler(ListResourcesRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
       await this.ready;
       const resources = [];
       for (const service of this.services.filter((item) => item.connected && item.client.getServerCapabilities()?.resources)) {
@@ -121,7 +127,7 @@ export class Gateway {
       }
       return { resources };
     }));
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
       await this.ready;
       const parsed = this.parseResourceUri(request.params.uri);
       const service = this.services.find((item) => item.config.name === parsed.service && item.connected);
@@ -140,6 +146,30 @@ export class Gateway {
           _meta: { ...request.params._meta, [SESSION_META]: this.sessionId, [SERVICE_META]: parsed.service } },
       }, ActionResultSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
     }));
+    for (const schema of [SubscribeRequestSchema, UnsubscribeRequestSchema]) {
+      this.server.setRequestHandler(schema, async (request, extra) => this.withResourceRequest(request.params, extra, async () => {
+        await this.ready;
+        const { service: name, uri } = this.parseResourceUri(request.params.uri);
+        const service = this.services.find((item) => item.config.name === name && item.connected);
+        if (!service?.client.getServerCapabilities()?.resources?.subscribe) {
+          throw new McpError(ErrorCode.InvalidParams, 'Resource subscriptions unavailable for this service');
+        }
+        return this.withService(service, extra.signal, async () => {
+          const options = { signal: extra.signal, timeout: this.config.timeoutMs };
+          if (request.method === 'resources/subscribe') {
+            if (service.subscriptions.has(uri)) return {};
+            // Accept a notification emitted before the child's subscribe reply.
+            service.subscriptions.add(uri);
+            try { await service.client.subscribeResource({ uri }, options); }
+            catch (error) { service.subscriptions.delete(uri); throw error; }
+          } else if (service.subscriptions.has(uri)) {
+            await service.client.unsubscribeResource({ uri }, options);
+            service.subscriptions.delete(uri);
+          }
+          return {};
+        });
+      }));
+    }
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       if (request.params.name === 'gateway__identity') {
@@ -208,6 +238,26 @@ export class Gateway {
     } finally { this.requests?.finish(extra.requestId); }
   }
 
+  /** Keep observation timeouts from counting aggregate listing/queue time as a dead child.
+   * Only clients requesting progress receive these heartbeats. Child requests retain their
+   * own timeout and cancellation/retirement policy; no worker deadline is extended.
+   */
+  private async withResourceRequest<T>(
+    params: { _meta?: { progressToken?: string | number } } | undefined,
+    extra: { requestId: RequestId; signal: AbortSignal; sendNotification: (notification: ServerNotification) => Promise<void> },
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const progressToken = params?._meta?.progressToken;
+    let progress = 0;
+    const timer = progressToken === undefined ? undefined : setInterval(() => {
+      if (extra.signal.aborted || this.closing) return;
+      void extra.sendNotification({ method: 'notifications/progress', params: { progressToken, progress: ++progress } }).catch(() => {});
+    }, Math.max(10, Math.floor(this.config.timeoutMs / 3)));
+    timer?.unref();
+    try { return await this.withRequest(extra, run); }
+    finally { if (timer) clearInterval(timer); }
+  }
+
   // Stdio has no wire-level parent request ID. Serializing service requests
   // lets ordinary MCP services elicit without custom correlation metadata.
   private async withService<T>(service: Service, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
@@ -256,6 +306,10 @@ export class Gateway {
 
   private async notifyToolsChanged(): Promise<void> {
     if (this.initialized && !this.closing) await this.server.sendToolListChanged();
+  }
+
+  private async notifyResourcesChanged(): Promise<void> {
+    if (this.initialized && !this.closing) await this.server.sendResourceListChanged();
   }
 
   private async refreshTools(service: Service): Promise<void> {
@@ -309,7 +363,7 @@ export class Gateway {
         MCP_GATEWAY_SERVICE_ID: config.name,
       },
     });
-    const service: Service = { config, client, transport, settingsToken, tools: new Map(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
+    const service: Service = { config, client, transport, settingsToken, tools: new Map(), subscriptions: new Set(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };
     if (supportsForms) handleElicitation(client, transport, async (params, elicitationSignal) => {
       const active = service.active;
       if (!active || active.signal.aborted || params.mode === 'url') return { action: 'cancel' };
@@ -329,14 +383,21 @@ export class Gateway {
       service.connected = false;
       service.closed.abort();
       service.tools.clear();
+      service.subscriptions.clear();
       void this.notifyToolsChanged().catch((error: unknown) => this.log(errorMessage(error)));
       if (this.initialized && !this.closing) void this.server.notification({ method: 'notifications/native-ui/invalidated', params: { service: config.name } }).catch((error: Error) => this.log(error.message));
+      void this.notifyResourcesChanged().catch((error: unknown) => this.log(errorMessage(error)));
     };
     client.setNotificationHandler(ChangedSchema, async ({ params }) => {
       if (service.connected && this.initialized && !this.closing) {
         await this.server.notification({ method: 'notifications/native-ui/changed', params: { uri: this.resourceUri(config.name, params.uri) } });
       }
     });
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (notification) => {
+      if (!service.connected || !service.subscriptions.has(notification.params.uri) || this.closing) return;
+      await this.server.sendResourceUpdated({ uri: this.resourceUri(config.name, notification.params.uri) });
+    });
+    client.setNotificationHandler(ResourceListChangedNotificationSchema, () => this.notifyResourcesChanged());
     client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
       try {
         await this.queueRefresh(service);
@@ -361,7 +422,7 @@ export class Gateway {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
     const transport = new StdioServerTransport(input);
-    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, 'native-ui/action']);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', 'resources/subscribe', 'resources/unsubscribe', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, 'native-ui/action']);
     await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;

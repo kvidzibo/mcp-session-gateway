@@ -16,6 +16,7 @@ import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 import { clean, editSettings, selectSettingsOption } from './settings.js';
+import { LiveJobs } from './live-jobs.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -33,10 +34,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
+  let liveJobs: LiveJobs | undefined;
 
   async function close(): Promise<void> {
     if (closing) return closing;
     connected = false;
+    liveJobs?.stop();
+    liveJobs = undefined;
     lifetime.abort();
     operatorToken = undefined;
     native.stop();
@@ -88,7 +92,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     timeout = (await loadConfig(configPath)).timeoutMs;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { connected = false; lifetime.abort(); native.stop(); };
+    current.onclose = () => { connected = false; liveJobs?.disconnect(); lifetime.abort(); native.stop(); };
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     current.setNotificationHandler(InvalidatedSchema, ({ params }) => { native.invalidate(params.service); });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
@@ -104,6 +108,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
       await native.start(ctx, resolve(configPath));
+      if (ctx.mode === 'tui' && ctx.hasUI) {
+        liveJobs = new LiveJobs(current, ctx, timeout);
+        await liveJobs.start();
+      }
     } catch (error) { await close(); throw error; }
   });
   pi.on('session_shutdown', close);

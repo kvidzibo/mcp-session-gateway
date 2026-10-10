@@ -25,6 +25,12 @@ export class NativeUI {
 
   constructor(private pi: ExtensionAPI, private client: () => Client, private options: () => { signal: AbortSignal; timeout: number }) {}
 
+  private observationOptions() {
+    // Listing aggregates services; reads can queue behind tools. Gateway progress
+    // excludes that waiting from observer deadlines without extending child RPCs.
+    return { ...this.options(), resetTimeoutOnProgress: true, onprogress: () => {} };
+  }
+
   async start(ctx: ExtensionContext, scope: string): Promise<void> {
     this.stop();
     this.ctx = ctx; this.scope = scope; this.states.clear();
@@ -34,7 +40,7 @@ export class NativeUI {
       if (data?.scope === scope && typeof data.service === 'string' && data.state && typeof data.state === 'object') this.states.set(data.service, data.state);
     }
     const epoch = this.epoch;
-    const result = await this.client().listResources(undefined, this.options());
+    const result = await this.client().listResources(undefined, this.observationOptions());
     if (epoch !== this.epoch) return;
     for (const resource of result.resources) {
       if (resource.mimeType !== UI_MIME) continue;
@@ -87,7 +93,7 @@ export class NativeUI {
       do {
         this.dirty.delete(uri);
         try {
-          const result = await this.client().readResource({ uri, _meta: this.meta(serviceOf(uri)) }, this.options());
+          const result = await this.client().readResource({ uri, _meta: this.meta(serviceOf(uri)) }, this.observationOptions());
           if (epoch !== this.epoch || this.resources.get(serviceOf(uri)) !== uri) return;
           const content = result.contents.find((item) => item.mimeType === UI_MIME && 'text' in item);
           if (!content || !('text' in content) || content.text.length > 256_000) throw new Error('Invalid or oversized native UI resource');
