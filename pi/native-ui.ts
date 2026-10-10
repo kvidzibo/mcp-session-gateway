@@ -185,7 +185,8 @@ export class NativeUI {
             if (tui.terminal.rows < 8) return [truncateToWidth('Enlarge terminal · Esc close', w)];
             const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8));
             if (!list || rows !== visibleRows) makeList(rows);
-            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close')].map((line) => truncateToWidth(line, w));
+            const hint = w < 40 ? '↑↓ Enter · Esc close' : w < 70 ? '↑↓ Enter · Ctrl+R refresh · Esc close' : '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close';
+            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', hint)].map((line) => truncateToWidth(line, w));
           },
           handleInput(data: string) {
             if (matchesKey(data, Key.escape)) done(undefined);

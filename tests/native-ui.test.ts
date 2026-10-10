@@ -65,6 +65,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
         assert.equal(result, true);
       } else {
         assert.match(rendered, /Remote settings/);
+        assert.match(component.render(54).join('\n'), /Esc close/);
         assert.ok(component.render(8).every((line: string) => [...clean(line)].length <= 8));
         component.handleInput(rounds++ === 0 ? '\r' : '\x1b');
       }
