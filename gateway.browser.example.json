@@ -8,7 +8,7 @@
         "branch": "main"
       },
       "managed": {
-        "build": [{ "command": "npm", "args": ["ci", "--ignore-scripts"] }],
+        "build": [{ "command": "npm", "args": ["ci", "--ignore-scripts"] }, { "command": "npm", "args": ["run", "build:mcp"] }],
         "validate": [{ "command": "npm", "args": ["run", "typecheck"] }, { "command": "npm", "args": ["run", "test:mcp"] }],
         "timeoutMs": 300000
       }

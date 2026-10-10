@@ -42,7 +42,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   const entries: any[] = [];
   const statuses = new Map();
   let rounds = 0, confirms = 0;
-  const updated = ' \tUpdated\n ';
+  const updated = ' \tUpdated\n ' + ' '.repeat(80) + 'tail';
   let inputValue: string | undefined = JSON.stringify(updated);
   let onInput = () => {};
   const ctx: any = { mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'conversation', getBranch: () => entries }, ui: {
@@ -58,6 +58,8 @@ test('native UI routes privately, renders safely, persists host state, and rejec
         component.handleInput('\r');
       } else if (rendered.includes('Save label?')) {
         confirms++;
+        const disclosed = rendered.replace(/\n/g, '');
+        assert.ok(disclosed.includes('\\u0020'.repeat(80)), 'Every significant space must remain explicit across wrapping');
         assert.match(rendered, /Enter confirm/);
         component.handleInput('\r');
         assert.equal(result, true);

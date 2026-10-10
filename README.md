@@ -141,7 +141,8 @@ rollback and recovery](docs/packages.md) before enabling management.
 [pi-browser 0.6.0+](https://github.com/kvidzibo/pi-browser/blob/main/docs/mcp.md)
 provides isolated Chromium as a stdio service. Use `gateway.browser.example.json`
 for managed installation after that version is available on its `main` branch,
-or launch a tested checkout with `node /absolute/path/to/pi-browser/mcp/cli.mjs`.
+or run `npm ci && npm run build:mcp` in a tested browser checkout, then launch
+`node /absolute/path/to/pi-browser/mcp/cli.mjs`.
 Merge entries into your existing configuration; do not replace other services.
 Preparation, activation and gateway restart each remain explicit operator actions.
 

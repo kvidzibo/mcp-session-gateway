@@ -223,7 +223,7 @@ export class NativeUI {
       }
       if (epoch !== this.epoch) return;
       if (picked.confirm) {
-        const proposed = JSON.stringify(value)?.replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+        const proposed = JSON.stringify(value)?.replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
         const disclosure = clean(picked.confirm) + (picked.kind === 'action' ? '' : `\n${proposed}`);
         if (!await confirmSettings(ctx, disclosure, { ...dialogOptions, title, actionLabel: 'confirm' })) continue;
       }
