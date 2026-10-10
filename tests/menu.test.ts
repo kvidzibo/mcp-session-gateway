@@ -57,7 +57,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const notices: string[] = [];
   const navigation = ['Connection', 'Restart gateway services…', 'Connection', 'Restart gateway services…', 'Back', 'Packages', 'Installed versions', 'Back', 'Close'];
-  let restartAttempts = 0, rootVisits = 0;
+  let restartAttempts = 0, rootVisits = 0, appsOpened = 0;
   gatewayExtension({
     registerFlag() {}, getFlag: () => config,
     registerTool() {}, registerCommand: (name: string, command: any) => commands.set(name, command),
@@ -74,7 +74,8 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
         const render = () => panel.render(98) as string[];
         try {
           const lines = render();
-          if (lines[1] === 'Restart gateway services?') {
+          if (lines[0] === 'Healthy app') { appsOpened++; panel.handleInput(escape); }
+          else if (lines[1] === 'Restart gateway services?') {
             restartAttempts++;
             if (restartAttempts === 2) {
               await writeFile(config, JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname] } } }));
@@ -106,7 +107,38 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     assert.ok(rootVisits >= 3);
     assert.ok(notices.some((text) => text.startsWith('Gateway:')), 'Failed startup reports an error');
     assert.ok(notices.includes('Gateway services restarted'));
-    assert.deepEqual(navigation, []);
+    assert.equal(navigation.length, 0);
+    await handlers.get('session_shutdown')!({}, ctx);
+
+    // Two individually healthy listings exceed one adapter deadline in aggregate.
+    // Later beta fails discovery; alpha's independent app must remain usable.
+    const fixture = `
+      import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+      import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+      import {ListToolsRequestSchema,ListResourcesRequestSchema,ReadResourceRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+      const name = process.env.MCP_GATEWAY_SERVICE_ID;
+      const mime = 'application/vnd.mcp-native-ui+json';
+      const server = new Server({name,version:'1'}, {capabilities:{tools:{},resources:{},experimental:{'native-ui-v1':{}}}});
+      let listings = 0;
+      server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[]}));
+      server.setRequestHandler(ListResourcesRequestSchema,async()=>{
+        await new Promise(resolve=>setTimeout(resolve,600));
+        if(name==='beta' && ++listings>3) throw Error('Unrelated service discovery failed');
+        return {resources:[{uri:'test://data',name:'Slow resource'},...(name==='alpha'?[{uri:'test://app',name:'App',mimeType:mime}]:[])]};
+      });
+      server.setRequestHandler(ReadResourceRequestSchema,async request=>({contents:[request.params.uri==='test://app' ?
+        {uri:'test://app',mimeType:mime,text:JSON.stringify({version:1,title:'Healthy app',revision:'r1',state:{},controls:[]})} :
+        {uri:'test://data',text:'Healthy data'}]}));
+      await server.connect(new StdioServerTransport());
+    `;
+    const service = { command: process.execPath, args: ['--input-type=module', '-e', fixture], cwd: new URL('../', import.meta.url).pathname };
+    await writeFile(config, JSON.stringify({ timeoutMs: 1000, mcpServers: { alpha: service, beta: service } }));
+    await handlers.get('session_start')!({}, ctx);
+    navigation.push('Services', 'alpha', 'Resources', 'Back', 'Resources', 'Open app', 'Back', 'Back', 'Close');
+    await commands.get('gateway').handler('', ctx);
+    assert.deepEqual(navigation, [], 'Slow aggregate listing must reach Resources without retiring healthy children');
+    assert.ok(notices.some((text) => text.includes('Resources unavailable:') && text.includes('Unrelated service discovery failed')));
+    assert.equal(appsOpened, 1, 'An unrelated resource-list error cannot block a healthy service app');
     await handlers.get('session_shutdown')!({}, ctx);
     const count = notices.length;
     await commands.get('gateway').handler('', { ...ctx, mode: 'rpc' });

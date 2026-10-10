@@ -67,6 +67,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (!connected || !client) throw new Error('Gateway disconnected; use --gateway-config <file> and /reload to reconnect');
     return client;
   }
+  const observationOptions = () => ({ signal: lifetime.signal, timeout, resetTimeoutOnProgress: true, onprogress: () => {} });
   async function tools(signal?: AbortSignal): Promise<Tool[]> {
     const result = await connection().listTools(undefined, { signal, timeout });
     return result.tools.filter(modelVisible);
@@ -167,25 +168,34 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                 if (!service) break;
                 while (!signal.aborted && connected) {
                   const options = { signal: lifetime.signal, timeout };
-                  const resources = (await connection().listResources(undefined, options)).resources.filter((r) => new URL(r.uri).hostname === service);
-                  const settings = operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
-                  const editable = settings.services.some((s) => s.name === service);
+                  let editable = false, settingsError = '';
+                  try {
+                    const settings = operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
+                    editable = settings.services.some((s) => s.name === service);
+                  } catch (error) { settingsError = clean(`Settings discovery failed: ${String(error)}`); }
                   const app = native.has(service);
                   const selected = await menu.choose(['Gateway', 'Services', service], 'Available service features', [
                     { id: 'app', label: 'Open app', description: app ? 'Open the service-provided interactive menu.' : 'This service has no available native app.', disabled: !app },
-                    { id: 'settings', label: 'Settings', description: editable ? 'Edit a draft; review and confirm before saving.' : 'Settings are not enabled or advertised by this service.', disabled: !editable },
-                    { id: 'resources', label: 'Resources', description: resources.length ? 'Read service data privately, without sending it to the model.' : 'This service advertises no resources.', disabled: !resources.length },
+                    { id: 'settings', label: 'Settings', description: editable ? 'Edit a draft; review and confirm before saving.' : settingsError || 'Settings are not enabled or advertised by this service.', disabled: !editable },
+                    { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.' },
                   ]);
                   if (!selected) break;
                   if (selected === 'app') await native.open(service, ctx);
                   if (selected === 'settings') await openSettings(service, ctx);
                   if (selected === 'resources') {
                     while (!signal.aborted && connected) {
-                      const available = (await connection().listResources(undefined, { signal: lifetime.signal, timeout })).resources.filter((r) => new URL(r.uri).hostname === service);
-                      const uri = await menu.choose(['Gateway', 'Services', service, 'Resources'], 'Read-only · contents are not added to the conversation',
-                        available.map((r) => ({ id: r.uri, label: r.name, description: r.uri })));
-                      if (!uri) break;
-                      await openResource(uri, ctx, signal);
+                      try {
+                        // Discover lazily: an unrelated child's resource failure must
+                        // never prevent opening this service's app or settings.
+                        const available = (await connection().listResources(undefined, observationOptions())).resources.filter((r) => new URL(r.uri).hostname === service);
+                        const uri = await menu.choose(['Gateway', 'Services', service, 'Resources'], available.length ? 'Read-only · contents are not added to the conversation' : 'No resources advertised by this service',
+                          available.map((r) => ({ id: r.uri, label: r.name, description: r.uri })));
+                        if (!uri) break;
+                        await openResource(uri, ctx, signal);
+                      } catch (error) {
+                        if (!signal.aborted) ctx.ui.notify(clean(`Resources unavailable: ${String(error)}`), 'error');
+                        break;
+                      }
                     }
                   }
                 }
@@ -287,7 +297,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         const current = controller;
         loading = true; error = ''; offset = 0;
         tui.requestRender();
-        void connection().readResource({ uri }, { signal: AbortSignal.any([current.signal, lifetime.signal]), timeout }).then((result) => {
+        void connection().readResource({ uri }, { ...observationOptions(), signal: AbortSignal.any([current.signal, lifetime.signal]) }).then((result) => {
           if (!current.signal.aborted && !disposed) content = clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
         }).catch((cause: unknown) => {
           if (!current.signal.aborted && !disposed) error = clean(String(cause));
