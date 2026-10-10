@@ -17,6 +17,7 @@ import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 import { clean, editSettings, selectSettingsOption } from './settings.js';
 import { LiveJobs } from './live-jobs.js';
+import { openManager } from './manager.js';
 const modelVisible = (tool: Tool) => {
   const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
   return !ui?.visibility || ui.visibility.includes('model');
@@ -31,12 +32,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
   let uiBusy = false;
+  let managerController: AbortController | undefined;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
   let liveJobs: LiveJobs | undefined;
 
   async function close(): Promise<void> {
+    managerController?.abort();
     if (closing) return closing;
     connected = false;
     liveJobs?.stop();
@@ -117,6 +120,20 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.on('session_shutdown', close);
   pi.on('session_tree', async (_event, ctx) => {
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
+  });
+  pi.registerCommand('gateway-manager', {
+    description: 'Inspect package versions privately; remote checks are explicit and read-only.',
+    handler: async (_args, ctx) => {
+      if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway manager requires TUI mode', 'warning'); return; }
+      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
+      const configPath = pi.getFlag('gateway-config');
+      if (typeof configPath !== 'string' || !configPath) { ctx.ui.notify('Use --gateway-config <file> to select a configuration', 'warning'); return; }
+      uiBusy = true;
+      managerController = new AbortController();
+      try { await openManager(ctx, await loadConfig(configPath), managerController.signal); }
+      catch { ctx.ui.notify('Cannot open manager; check the gateway configuration', 'error'); }
+      finally { managerController = undefined; uiBusy = false; }
+    },
   });
   pi.registerCommand('gateway-ui', {
     description: 'Open a server-provided native UI (optional service name). No model turn.',
