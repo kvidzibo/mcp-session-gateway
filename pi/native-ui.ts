@@ -136,9 +136,11 @@ export class NativeUI {
   }
 
   async open(service: string, ctx: ExtensionContext): Promise<void> {
+    // Human interaction has no RPC deadline; shutdown still cancels dialogs.
+    const dialogOptions = { signal: this.options().signal };
     if (ctx.mode !== 'tui') throw new Error('Native UI requires TUI mode');
     const epoch = this.epoch;
-    if (!service) service = await ctx.ui.select('Gateway apps', [...this.resources.keys()], this.options()) ?? '';
+    if (!service) service = await ctx.ui.select('Gateway apps', [...this.resources.keys()], dialogOptions) ?? '';
     const uri = this.resources.get(service);
     if (!uri) return;
     await this.refresh(uri);
@@ -195,7 +197,7 @@ export class NativeUI {
         // Pi's multiline editor trims and expands tabs. JSON input preserves
         // exact strings while making whitespace and terminal controls explicit.
         const encoded = JSON.stringify(value ?? (picked.kind === 'number' ? 0 : '')).replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
-        const entered = await inputSettings(ctx, title, encoded, this.options());
+        const entered = await inputSettings(ctx, title, encoded, dialogOptions);
         if (entered === undefined) continue;
         try { value = JSON.parse(entered); }
         catch { ctx.ui.notify('Enter a JSON value (quote strings)', 'error'); continue; }
@@ -206,12 +208,12 @@ export class NativeUI {
       else if (picked.kind === 'select') {
         const options = picked.options ?? [];
         const labels = options.map((o, i) => `${i + 1}. ${oneLine(o.label)}`);
-        const choice = await ctx.ui.select(title, labels, this.options());
+        const choice = await ctx.ui.select(title, labels, dialogOptions);
         if (!choice) continue;
         value = options[labels.indexOf(choice)].value;
       }
       if (epoch !== this.epoch) return;
-      if (picked.confirm && !await ctx.ui.confirm(title, clean(picked.confirm + (picked.kind === 'action' ? '' : `\n${String(value)}`)), this.options())) continue;
+      if (picked.confirm && !await ctx.ui.confirm(title, clean(picked.confirm + (picked.kind === 'action' ? '' : `\n${String(value)}`)), dialogOptions)) continue;
       if (epoch !== this.epoch) return;
       try {
         // Drain in-flight notification reads before acting; never replay a failed write.
@@ -231,7 +233,7 @@ export class NativeUI {
         await this.refresh(uri);
         if (epoch !== this.epoch || !this.views.has(uri)) return;
         if (result.preview) await this.preview(result.preview, ctx);
-        if (result.draft && await ctx.ui.confirm('Insert draft?', clean(result.draft), this.options()) && epoch === this.epoch) {
+        if (result.draft && await ctx.ui.confirm('Insert draft?', clean(result.draft), dialogOptions) && epoch === this.epoch) {
           if (ctx.ui.getEditorText().trim()) ctx.ui.notify('Draft preserved; clear the editor before inserting a server draft', 'warning');
           else ctx.ui.setEditorText(editorText(result.draft));
         }

@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { NativeUI } from '../pi/native-ui.js';
+import { inputSettings } from '../pi/settings.js';
 import { ActionResultSchema, clean, editorText, footerText, InvalidatedSchema, ViewSchema } from '../src/native-ui.js';
 
 // One fixture covers the transport plus the actual generic renderer/action loop.
-test('native UI routes privately, renders safely, persists host state, and rejects malformed views', async () => {
+test('native UI routes privately, renders safely, persists host state, and rejects malformed views', async (t) => {
   const dir = await mkdtemp(path.join(tmpdir(), 'native-ui-'));
   const root = fileURLToPath(new URL('../', import.meta.url));
   const config = path.join(dir, 'gateway.json');
@@ -136,5 +137,19 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     assert.throws(() => ViewSchema.parse({ ...base, version: 2 }));
     assert.throws(() => ViewSchema.parse({ ...base, controls: [{ id: 'a', label: 'A', kind: 'action' }, { id: 'a', label: 'B', kind: 'action' }] }));
     assert.equal(footerText(ViewSchema.parse({ ...base, footer: [{ text: '\x1b[31mUnsafe', url: 'javascript:alert(1)' }] })), 'Unsafe');
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let input: any, completed = false;
+      const controller = new AbortController();
+      const pendingInput = inputSettings({ ui: { custom: async (factory: Function) => new Promise((resolve) => {
+        input = factory({ terminal: { rows: 24, columns: 80 }, requestRender() {} }, { fg: (_: string, s: string) => s }, {}, (value: unknown) => { completed = true; resolve(value); });
+        input.render(80);
+      }) } } as any, 'Long edit', JSON.stringify(updated), { signal: controller.signal });
+      t.mock.timers.tick(60_000);
+      assert.equal(completed, false, 'RPC timeouts must not discard an interactive edit');
+      input.handleInput('\r');
+      assert.equal(JSON.parse((await pendingInput)!), updated);
+      input.dispose();
+    } finally { t.mock.timers.reset(); }
   } finally { host.stop(); await client.close(); await transport.close(); await rm(dir, { recursive: true, force: true }); }
 });
