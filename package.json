@@ -1,0 +1,20 @@
+{
+  "name": "local-stdio-mcp-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small stdio MCP gateway with per-run service identity",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "local-mcp-gateway": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": { "@modelcontextprotocol/sdk": "^1.32.1" },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
