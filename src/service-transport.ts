@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { writeDiagnostic } from './diagnostics.js';
 import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -45,7 +46,7 @@ export class ServiceTransport implements Transport {
     const child = spawn(this.config.command, this.config.args, {
       cwd: this.config.cwd,
       env: { ...getDefaultEnvironment(), ...this.config.env },
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     });
@@ -56,6 +57,8 @@ export class ServiceTransport implements Transport {
     child.once('close', () => { this.notifyClose(); });
     child.stdin?.on('error', (error) => { this.onerror?.(error); });
     child.stdout?.on('error', (error) => { this.onerror?.(error); });
+    child.stderr?.on('error', (error) => { this.onerror?.(error); });
+    child.stderr?.on('data', (chunk: Buffer) => { writeDiagnostic(chunk); });
     child.stdout?.on('data', (chunk: Buffer) => {
       try {
         this.buffer.append(chunk);
@@ -101,6 +104,7 @@ export class ServiceTransport implements Transport {
         // Don't wait on descriptors inherited by unmanaged descendants.
         child.stdin?.destroy();
         child.stdout?.destroy();
+        child.stderr?.destroy();
         if (!this.exited) throw new Error('Service process did not exit after SIGKILL');
       }
       this.buffer.clear();

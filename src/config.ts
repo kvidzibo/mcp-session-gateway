@@ -12,6 +12,7 @@ export interface ServiceConfig {
 export interface GatewayConfig {
   services: ServiceConfig[];
   timeoutMs: number;
+  logFile: string;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -35,6 +36,10 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   const timeoutMs = data.timeoutMs ?? 30_000;
   if (typeof timeoutMs !== 'number' || !Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 300_000) {
     throw new Error('timeoutMs must be an integer between 100 and 300000');
+  }
+  const logFile = data.logFile ?? 'gateway.log';
+  if (typeof logFile !== 'string' || logFile.trim() === '') {
+    throw new Error('logFile must be a non-empty path string');
   }
   const services = Object.entries(data.servers).map(([name, value]): ServiceConfig => {
     if (!/^[a-z][a-z0-9-]*$/.test(name) || name === 'gateway') {
@@ -62,5 +67,5 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
       cwd: resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });
-  return { services, timeoutMs };
+  return { services, timeoutMs, logFile: resolve(dirname(absolute), logFile) };
 }
