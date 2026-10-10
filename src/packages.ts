@@ -52,7 +52,14 @@ async function git(args: string[], cwd: string, signal: AbortSignal): Promise<st
   const { stdout } = await exec('git', ['--no-lazy-fetch', '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${devNull}`,
     '-c', 'core.askPass=', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', ...args], {
     cwd, signal, timeout: 10_000, maxBuffer: 256_000,
-    env: { ...env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull },
+    env: {
+      ...env,
+      // libcurl reads netrc independently of Git credential helpers/askpass.
+      // A non-directory home also prevents fallback to the user's home files.
+      HOME: devNull, USERPROFILE: devNull, CURL_HOME: devNull, NETRC: devNull,
+      GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '',
+      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull,
+    },
   });
   return stdout.trim();
 }

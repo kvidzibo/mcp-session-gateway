@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { devNull, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
@@ -167,15 +167,16 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     await mkdir(bin);
     const proxy = join(bin, 'git');
     await writeFile(proxy, `#!${process.execPath}\nconst fs = require('fs');
-fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({args:process.argv.slice(2), askpass:process.env.GIT_ASKPASS, sshAskpass:process.env.SSH_ASKPASS})+'\\n');
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({args:process.argv.slice(2), askpass:process.env.GIT_ASKPASS, sshAskpass:process.env.SSH_ASKPASS, homes:[process.env.HOME,process.env.USERPROFILE,process.env.CURL_HOME], netrc:process.env.NETRC})+'\\n');
 if (fs.existsSync(${JSON.stringify(join(dir, 'old-git'))})) process.exit(129);
 const result = require('child_process').spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), {stdio:'inherit'});
 process.exit(result.status ?? 1);\n`);
     await chmod(proxy, 0o700);
-    const originalPath = process.env.PATH, originalAskpass = process.env.SSH_ASKPASS;
+    const originalPath = process.env.PATH, originalAskpass = process.env.SSH_ASKPASS, originalNetrc = process.env.NETRC;
     try {
       process.env.PATH = `${bin}:${originalPath}`;
       process.env.SSH_ASKPASS = '/must-not-execute';
+      process.env.NETRC = '/must-not-read';
       assert.equal((await inspectPackage(gitPkg, false, signal)).installed, commit);
       const observed = (await readFile(calls, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
       assert.ok(observed.length > 0);
@@ -184,6 +185,8 @@ process.exit(result.status ?? 1);\n`);
         assert.ok(call.args.includes('core.askPass='));
         assert.equal(call.askpass, '');
         assert.equal(call.sshAskpass, '');
+        assert.deepEqual(call.homes, [devNull, devNull, devNull]);
+        assert.equal(call.netrc, devNull);
       }
       await writeFile(join(dir, 'old-git'), 'unsupported');
       const unsupported = await inspectPackage(gitPkg, false, signal);
@@ -193,6 +196,7 @@ process.exit(result.status ?? 1);\n`);
     } finally {
       if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
       if (originalAskpass === undefined) delete process.env.SSH_ASKPASS; else process.env.SSH_ASKPASS = originalAskpass;
+      if (originalNetrc === undefined) delete process.env.NETRC; else process.env.NETRC = originalNetrc;
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

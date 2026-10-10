@@ -83,7 +83,9 @@ Git **2.45+** is required for Git inspection. Every Git command uses
 `--no-lazy-fetch`: partial-clone metadata cannot silently fetch missing objects,
 and older Git fails closed rather than ignoring an unfamiliar environment flag.
 Git checks suppress credential helpers, askpass programs, terminal prompts, hooks,
-fsmonitor and optional index writes; they do not fetch,
+fsmonitor and optional index writes. Git subprocess home-directory and netrc
+lookups point to the null device, not your personal authentication files.
+They do not fetch,
 checkout, install, build, or change remote-tracking refs. Dirty-state inspection
 is skipped when clean/process filters are configured, since `git status` can run
 them. Submodule contents are not inspected. Configuration and local repositories
@@ -135,6 +137,6 @@ Run `npm run check`, `npm test`, and `npm run build`. The package inventory test
 uses temporary installations and mocked registry metadata, verifies local-only
 opening, version comparison, failed/unknown metadata, cancellation and rendering,
 rejects executable Git filters and non-regular/oversized manifests, and verifies
-Git lazy-fetch/askpass guards and fail-closed behavior with older Git.
+Git lazy-fetch/askpass/netrc guards and fail-closed behavior with older Git.
 For visual checks use an isolated Pi profile and project under Xvfb with private
 D-Bus; never point test launch commands at your normal task database or workers.
