@@ -9,6 +9,9 @@ import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { loadConfig } from '../src/config.js';
+import { NativeUI } from './native-ui.js';
+import { ChangedSchema } from '../src/native-ui.js';
+import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 import { clean, editSettings, selectSettingsOption } from './settings.js';
@@ -28,12 +31,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let uiBusy = false;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
+  const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
 
   async function close(): Promise<void> {
     if (closing) return closing;
     connected = false;
     lifetime.abort();
     operatorToken = undefined;
+    native.stop();
     closing = (async () => {
       try { await client?.close(); } finally { await transport?.close(); }
     })();
@@ -76,13 +81,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.on('session_start', async (_event, ctx) => {
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
-    if (connected) return;
+    if (connected) { await native.start(ctx, resolve(configPath)); return; }
     closing = undefined;
     lifetime = new AbortController();
     timeout = (await loadConfig(configPath)).timeoutMs;
     const current = new Client({ name: 'pi-gateway-adapter', version: '0.4.0' }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { connected = false; lifetime.abort(); };
+    current.onclose = () => { connected = false; lifetime.abort(); native.stop(); };
+    current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env[OPERATOR_ENV];
@@ -95,9 +101,22 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       await current.connect(transport, { timeout, signal: lifetime.signal });
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
+      await native.start(ctx, resolve(configPath));
     } catch (error) { await close(); throw error; }
   });
   pi.on('session_shutdown', close);
+  pi.on('session_tree', async (_event, ctx) => {
+    if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
+  });
+  pi.registerCommand('gateway-ui', {
+    description: 'Open a server-provided native UI (optional service name). No model turn.',
+    handler: async (args, ctx) => {
+      if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
+      uiBusy = true;
+      try { await native.open(args.trim(), ctx); }
+      finally { uiBusy = false; }
+    },
+  });
 
   pi.registerTool({
     name: 'gateway_tools', label: 'Gateway tools', description: 'Discover local gateway tools and their input schemas.', parameters: Type.Object({}),
@@ -117,7 +136,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       (addFormats as unknown as FormatsPlugin)(ajv);
       const valid = ajv.compile(tool.inputSchema);
       if (!valid(params.arguments)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
-      const result = CallToolResultSchema.parse(await connection().callTool({ name: params.name, arguments: params.arguments }, undefined, { signal, timeout }));
+      const service = params.name.split('__')[0];
+      const result = CallToolResultSchema.parse(await connection().callTool({ name: params.name, arguments: params.arguments, _meta: native.meta(service) }, undefined, { signal, timeout }));
+      await native.refreshService(service);
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
       if (!content.length && result.structuredContent) content.push({ type: 'text', text: JSON.stringify(result.structuredContent) });
       return { content, details: undefined, isError: Boolean(result.isError) };
