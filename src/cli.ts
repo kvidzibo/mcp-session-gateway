@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { loadConfig } from './config.js';
 import { OPERATOR_ENV } from './settings.js';
 import { Gateway } from './gateway.js';
-import { flushDiagnostics, openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
+import { errorMessage, flushDiagnostics, openDiagnosticLog, silenceDiagnostics, writeDiagnostic } from './diagnostics.js';
 
 let stopForStderrError = (): void => { process.exitCode = 1; };
 process.stderr.on('error', () => {
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
     try {
       await gateway.close();
     } catch (error) {
-      writeDiagnostic(`Gateway cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      writeDiagnostic(`Gateway cleanup failed: ${errorMessage(error)}\n`);
       exitCode = 1;
     }
     await flushDiagnostics();
@@ -57,12 +57,12 @@ async function main(): Promise<void> {
     await gateway.start(input);
   } catch (error) {
     if (stopping) return; // Upstream EOF/signal may cancel initialization normally.
-    writeDiagnostic(`Gateway startup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    writeDiagnostic(`Gateway startup failed: ${errorMessage(error)}\n`);
     await stop(1);
   }
 }
 
 main().catch((error: unknown) => {
-  writeDiagnostic(`Gateway failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  writeDiagnostic(`Gateway failed: ${errorMessage(error)}\n`);
   process.exitCode = 1;
 });

@@ -25,14 +25,13 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
     cwd: projectRoot,
     env: { MCP_GATEWAY_SESSION_ID: 'spoofed', MCP_GATEWAY_SERVICE_ID: 'spoofed' },
   };
-  await writeFile(configPath, JSON.stringify({
-    servers: { alpha: serverConfig, beta: serverConfig },
-    timeoutMs: 5000,
-  }));
-
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
   try {
-    for (let i = 0; i < 2; i += 1) {
+    for (const [i, configKey] of ['mcpServers', 'servers'].entries()) {
+      await writeFile(configPath, JSON.stringify({
+        [configKey]: { alpha: serverConfig, beta: serverConfig },
+        timeoutMs: 5000,
+      }));
       const transport = new StdioClientTransport({
         command: process.execPath,
         args: ['--import', 'tsx', cliPath, '--config', configPath],
@@ -83,14 +82,14 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
         assert.deepEqual(content.meta, gatewayMeta(gatewayIdentity.sessionId, serviceId));
         return content;
       }));
-      return { sessionId: gatewayIdentity.sessionId, children };
+      return { client, sessionId: gatewayIdentity.sessionId, children };
     }));
 
     assert.notEqual(identities[0].sessionId, identities[1].sessionId);
     assert.equal(identities[0].children[0].sessionId, identities[0].children[1].sessionId);
     assert.equal(identities[1].children[0].sessionId, identities[1].children[1].sessionId);
 
-    for (const { client } of clients) {
+    for (const { client, sessionId } of identities) {
       for (const serviceId of ['alpha', 'beta']) {
         const result = await client.callTool({
           name: `${serviceId}__echo`,
@@ -108,7 +107,6 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
           arguments: { value: string; extra: number };
           meta: { sessionId: string; serviceId: string };
         };
-        const sessionId = identities[clients.findIndex((entry) => entry.client === client)].sessionId;
         assert.equal(echoed.sessionId, sessionId);
         assert.equal(echoed.serviceId, serviceId);
         assert.deepEqual(echoed.arguments, { value: `routed-to-${serviceId}`, extra: 42 });
