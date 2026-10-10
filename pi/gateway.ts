@@ -57,6 +57,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
+    configurationLoaded = false;
     liveJobs?.stop();
     liveJobs = undefined;
     lifetime.abort();
@@ -115,6 +116,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (connected) { await native.start(ctx, resolve(configPath), reason); return; }
     closing = undefined;
     lifetime = new AbortController();
+    configurationLoaded = false;
     const config = await loadConfig(configPath);
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);

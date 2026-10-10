@@ -137,7 +137,11 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     `;
     const service = { command: process.execPath, args: ['--input-type=module', '-e', fixture], cwd: new URL('../', import.meta.url).pathname };
     await writeFile(config, JSON.stringify({ timeoutMs: 1000, mcpServers: { alpha: service, beta: service } }));
-    await handlers.get('session_start')!({}, ctx);
+    const launching = handlers.get('session_start')!({}, ctx);
+    events.get('gateway:query-service-tool')!({ service: 'alpha', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
+    assert.equal(queryReply.handled, true, 'Changed configuration must not reuse ownership from the previous launch');
+    assert.match(queryReply.error, /not ready/);
+    await launching;
     navigation.push('Services', 'alpha', 'Resources', 'Back', 'Resources', 'Open app', 'Back', 'Back', 'Close');
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(navigation, [], 'Slow aggregate listing must reach Resources without retiring healthy children');
