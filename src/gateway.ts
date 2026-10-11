@@ -24,6 +24,7 @@ import { ServiceTransport } from './service-transport.js';
 import { bindManagedService } from './package-manager.js';
 import { errorMessage, writeDiagnostic } from './diagnostics.js';
 import { gatewayIdentity } from './identity.js';
+import { modelVisible } from './tools.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
 import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
 import { ActionSchema, ActionResultSchema, ChangedSchema } from './native-ui.js';
@@ -44,11 +45,6 @@ interface Service {
   queue: Promise<void>;
   closed: AbortController;
   active?: { id: RequestId; signal: AbortSignal; tool: string };
-}
-
-function modelVisible(tool: Tool): boolean {
-  const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
-  return !ui?.visibility || ui.visibility.includes('model');
 }
 
 export class Gateway {
@@ -76,19 +72,18 @@ export class Gateway {
         await this.ready;
         return { services: this.services.filter((s) => s.connected && s.settingsEnabled).map((s) => ({ name: s.config.name })) };
       }));
-      this.server.setRequestHandler(OperatorGetSchema, async (request, extra) => this.withRequest(extra, async () => {
-        authorize(request.params.token, this.operatorToken);
-        await this.ready;
-        const service = this.settingsService(request.params.service);
-        return this.withService(service, extra.signal, () => service.client.request({ method: SETTINGS_GET, params: { token: service.settingsToken } }, SettingsDocumentSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
-      }));
-      this.server.setRequestHandler(OperatorUpdateSchema, async (request, extra) => this.withRequest(extra, async () => {
-        authorize(request.params.token, this.operatorToken);
-        await this.ready;
-        const service = this.settingsService(request.params.service);
-        const { revision, patch } = request.params;
-        return this.withService(service, extra.signal, () => service.client.request({ method: SETTINGS_UPDATE, params: { token: service.settingsToken, revision, patch } }, SettingsDocumentSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
-      }));
+      for (const schema of [OperatorGetSchema, OperatorUpdateSchema]) {
+        this.server.setRequestHandler(schema, async (request, extra) => this.withRequest(extra, async () => {
+          authorize(request.params.token, this.operatorToken);
+          await this.ready;
+          const service = this.settingsService(request.params.service);
+          const update = request.method === OPERATOR_UPDATE;
+          return this.withService(service, extra.signal, () => service.client.request({
+            method: update ? SETTINGS_UPDATE : SETTINGS_GET,
+            params: { token: service.settingsToken, ...(update ? { revision: request.params.revision, patch: request.params.patch } : {}) },
+          }, SettingsDocumentSchema, { signal: extra.signal, timeout: this.config.timeoutMs }));
+        }));
+      }
     }
     this.server.oninitialized = () => { this.initialized = true; this.resolveInitialized?.(); };
     this.server.onclose = () => {

@@ -4,11 +4,12 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { GatewayConfig } from '../src/config.js';
 import { PackageManager } from '../src/package-manager.js';
-import { clean, confirmSettings } from './settings.js';
+import { confirmSettings } from './settings.js';
+import { clean, literal } from '../src/native-ui.js';
 import { GatewayMenu } from './menu.js';
+import { showText } from './text-panel.js';
 
 const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 0 } };
-const literal = (value: unknown) => JSON.stringify(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 async function progress(ctx: ExtensionContext, title: string, signal: AbortSignal,
   run: (signal: AbortSignal, output: (text: string) => void) => Promise<void>): Promise<void> {
@@ -49,32 +50,7 @@ async function viewLog(ctx: ExtensionContext, path: string, signal: AbortSignal)
     const { bytesRead } = await file.read(buffer, 0, buffer.length, Math.max(0, info.size - buffer.length));
     text = clean(buffer.subarray(0, bytesRead).toString('utf8').slice(-20_000));
   } finally { await file.close(); }
-  if (signal.aborted) return;
-  await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-    let offset = 0, maxOffset = 0, page = 1;
-    const close = () => done();
-    signal.addEventListener('abort', close, { once: true });
-    return {
-      render(width: number) {
-        width = Math.max(1, width);
-        page = Math.max(1, tui.terminal.rows - 6);
-        const lines = text.split('\n').flatMap((line) => wrapTextWithAnsi(line, width));
-        maxOffset = Math.max(0, lines.length - page); offset = Math.min(offset, maxOffset);
-        return [theme.fg('accent', 'Package log · recent tail'), ...lines.slice(offset, offset + page), '',
-          theme.fg('muted', '↑↓/PgUp/PgDn scroll  Esc close')].map((line) => truncateToWidth(line, width));
-      },
-      handleInput(data: string) {
-        if (matchesKey(data, Key.escape)) close();
-        else if (matchesKey(data, Key.down)) offset = Math.min(maxOffset, offset + 1);
-        else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
-        else if (matchesKey(data, Key.pageDown)) offset = Math.min(maxOffset, offset + page);
-        else if (matchesKey(data, Key.pageUp)) offset = Math.max(0, offset - page);
-        tui.requestRender();
-      },
-      invalidate() {},
-      dispose() { signal.removeEventListener('abort', close); },
-    };
-  }, overlay);
+  await showText(ctx, 'Package log · recent tail', text, signal);
 }
 
 /** All writes require a complete, scroll-reviewed operator confirmation. */

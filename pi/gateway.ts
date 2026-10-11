@@ -1,30 +1,26 @@
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { Ajv2020 } from 'ajv/dist/2020.js';
-import addFormats, { type FormatsPlugin } from 'ajv-formats';
+import { compileSchema } from '../src/validation.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
+import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
 import { NativeUI } from './native-ui.js';
-import { ChangedSchema, InvalidatedSchema } from '../src/native-ui.js';
+import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
-import { clean, confirmSettings, editSettings } from './settings.js';
+import { confirmSettings, editSettings } from './settings.js';
 import { LiveJobs } from './live-jobs.js';
 import { openManager } from './manager.js';
 import { managePackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
-const modelVisible = (tool: Tool) => {
-  const ui = tool._meta?.ui as { visibility?: string[] } | undefined;
-  return !ui?.visibility || ui.visibility.includes('model');
-};
-
+import { showText } from './text-panel.js';
 export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   let client: Client | undefined;
@@ -290,10 +286,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const current = connection(), active = lifetime, sameContext = native.current();
     const tool = (await tools(signal)).find((tool) => tool.name === name);
     if (!tool || readOnly && tool.annotations?.readOnlyHint !== true) throw new Error('Unknown, app-only, or non-read-only tool');
-    const ajv = new Ajv2020({ allErrors: true, strict: false });
-    (addFormats as unknown as FormatsPlugin)(ajv);
-    const valid = ajv.compile(tool.inputSchema);
-    if (!valid(args)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
+    const error = compileSchema(tool.inputSchema)(args);
+    if (error) throw new Error(`Invalid arguments: ${error}`);
     if (active !== lifetime || active.signal.aborted || !sameContext()) throw new Error('Gateway context changed');
     return native.callTool(name.split('__')[0], (meta) => current.callTool({ name, arguments: args, _meta: meta }, undefined,
       { signal: signal ? AbortSignal.any([signal, active.signal]) : active.signal, timeout }).then((result) => CallToolResultSchema.parse(result)));
@@ -326,53 +320,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   }
 
   async function openResource(uri: string, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
-    if (signal.aborted) return;
-    await ctx.ui.custom<void>((tui, theme, _keys, done) => {
-      let controller = new AbortController();
-      let content = '';
-      let error = '';
-      let loading = true;
-      let offset = 0;
-      let maxOffset = 0;
-      let disposed = false;
-      const refresh = () => {
-        controller.abort();
-        controller = new AbortController();
-        const current = controller;
-        loading = true; error = ''; offset = 0;
-        tui.requestRender();
-        void connection().readResource({ uri }, { ...observationOptions(), signal: AbortSignal.any([current.signal, lifetime.signal]) }).then((result) => {
-          if (!current.signal.aborted && !disposed) content = clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
-        }).catch((cause: unknown) => {
-          if (!current.signal.aborted && !disposed) error = clean(String(cause));
-        }).finally(() => {
-          if (!current.signal.aborted && !disposed) { loading = false; tui.requestRender(); }
-        });
-      };
-      const disconnect = () => { controller.abort(); error = 'Gateway disconnected'; loading = false; tui.requestRender(); };
-      const back = () => done();
-      signal.addEventListener('abort', back, { once: true });
-      lifetime.signal.addEventListener('abort', disconnect, { once: true });
-      refresh();
-      return {
-        render(width: number) {
-          const safeWidth = Math.max(1, width);
-          const body = (loading ? 'Loading…' : error ? `Error: ${error}` : content || '(empty resource)').split('\n').flatMap((line) => wrapTextWithAnsi(line, safeWidth));
-          const height = Math.max(1, Math.min(20, tui.terminal.rows - 8));
-          maxOffset = Math.max(0, body.length - height);
-          offset = Math.min(offset, maxOffset);
-          return [theme.fg('accent', `Gateway resource: ${clean(uri)}`), ...body.slice(offset, offset + height), '', theme.fg('muted', '↑/↓ scroll   r refresh   Esc back')].map((line) => truncateToWidth(line, safeWidth));
-        },
-        handleInput(data: string) {
-          if (matchesKey(data, Key.escape)) { controller.abort(); done(); }
-          else if (data.toLowerCase() === 'r' && connected) refresh();
-          else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
-          else if (matchesKey(data, Key.down)) offset = Math.min(maxOffset, offset + 1);
-          tui.requestRender();
-        },
-        invalidate() {},
-        dispose() { disposed = true; controller.abort(); signal.removeEventListener('abort', back); lifetime.signal.removeEventListener('abort', disconnect); },
-      };
-    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
+    const current = connection(), lifetimeSignal = lifetime.signal;
+    await showText(ctx, `Gateway resource: ${uri}`, async (signal) => {
+      const result = await current.readResource({ uri }, { ...observationOptions(), signal });
+      return clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
+    }, signal, lifetimeSignal);
   }
 }

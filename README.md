@@ -102,7 +102,10 @@ Gateway
 ```
 
 Use **↑/↓** and **Enter**; **Escape** returns one level, closing only at the root.
-Menus remember your selection while open. Unavailable service features remain
+Menus remember your selection while open. Read-only details, package inventory/logs,
+and resources share a scrollable viewer: **↑/↓** or **PgUp/PgDn** scroll, **Escape**
+returns, and **r** refreshes inventory/resources (inventory refresh stays local).
+Unavailable service features remain
 visible with an explanation. Service names come from configuration and the last
 launch, not a health check. Package/recovery menus remain usable when disconnected.
 Human navigation has no inactivity deadline; shutdown still cancels dialogs.

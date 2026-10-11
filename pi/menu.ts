@@ -1,6 +1,7 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { clean } from './settings.js';
+import { clean } from '../src/native-ui.js';
+import { showText } from './text-panel.js';
 
 export interface MenuItem { id: string; label: string; description: string; disabled?: boolean }
 const oneLine = (text: string) => clean(text).replace(/\n/g, ' ');
@@ -64,35 +65,7 @@ export class GatewayMenu {
     return picked === '__back' ? undefined : picked;
   }
 
-  async info(path: string[], text: string): Promise<void> {
-    if (this.signal.aborted) return;
-    await this.ctx.ui.custom<void>((tui, theme, _keys, done) => {
-      let offset = 0, max = 0, page = 1;
-      const cancel = () => done();
-      this.signal.addEventListener('abort', cancel, { once: true });
-      return {
-        render(width: number) {
-          const height = Math.max(1, tui.terminal.rows - 2);
-          if (height < 8 || width < 20) return [truncateToWidth('Enlarge terminal · Esc back', width)];
-          const body = clean(text).split('\n').flatMap((line) => wrapTextWithAnsi(line, width));
-          page = height - 6;
-          max = Math.max(0, body.length - page); offset = Math.min(offset, max);
-          const border = theme.fg('accent', '─'.repeat(width));
-          return [border, theme.fg('accent', path.join(' › ')), '', ...body.slice(offset, offset + page), '',
-            theme.fg('muted', '↑↓/PgUp/PgDn scroll · Esc back'), border].map((line) => truncateToWidth(line, width));
-        },
-        handleInput(data: string) {
-          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
-          else if (matchesKey(data, Key.down)) offset = Math.min(max, offset + 1);
-          else if (matchesKey(data, Key.up)) offset = Math.max(0, offset - 1);
-          else if (matchesKey(data, Key.pageDown)) offset = Math.min(max, offset + page);
-          else if (matchesKey(data, Key.pageUp)) offset = Math.max(0, offset - page);
-          tui.requestRender();
-        },
-        invalidate() {},
-        dispose: () => this.signal.removeEventListener('abort', cancel),
-      };
-    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
+  info(path: string[], text: string): Promise<void> {
+    return showText(this.ctx, path.join(' › '), clean(text), this.signal);
   }
 }
-

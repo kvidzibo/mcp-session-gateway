@@ -5,7 +5,7 @@ import { FooterActions } from './footer-actions.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { confirmSettings, inputSettings } from './settings.js';
-import { ActionResultSchema, clean, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
+import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
 const transferKey = Symbol.for('gateway.native-ui.new-session');
@@ -330,8 +330,7 @@ export class NativeUI {
       }
       if (epoch !== this.epoch) return;
       if (picked.confirm) {
-        const proposed = JSON.stringify(value)?.replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
-        const disclosure = clean(picked.confirm) + (picked.kind === 'action' ? '' : `\n${proposed}`);
+        const disclosure = clean(picked.confirm) + (picked.kind === 'action' ? '' : `\n${literal(value)}`);
         if (!await confirmSettings(ctx, disclosure, { ...dialogOptions, title, actionLabel: 'confirm' })) continue;
       }
       if (epoch !== this.epoch) return;
