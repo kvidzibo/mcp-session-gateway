@@ -87,7 +87,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
             for (let i = 0; i < 100 && !render().join('\n').includes('Enter stop and restart'); i++) panel.handleInput('\x1b[6~');
             assert.match(render().join('\n'), /Enter stop and restart/);
             panel.handleInput('\r');
-          } else if (lines[1]?.includes('Packages › Versions')) panel.handleInput(escape);
+          } else if (lines[0]?.includes('Packages › Versions')) panel.handleInput(escape);
           else {
             if (lines[1] === 'Gateway') {
               rootVisits++;

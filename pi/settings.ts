@@ -1,14 +1,10 @@
-import { Ajv2020 } from 'ajv/dist/2020.js';
-import addFormats, { type FormatsPlugin } from 'ajv-formats';
+import { compileSchema } from '../src/validation.js';
+import { clean, literal as display } from '../src/native-ui.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getKeybindings, Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
 
-export const clean = (text: string) => text
-  .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-  .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '')
-  .slice(0, 20_000);
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): value is ObjectValue => typeof value === 'object' && value !== null && !Array.isArray(value);
 interface Field { path: string[]; schema: ObjectValue; readonly: boolean }
@@ -38,8 +34,6 @@ function put(value: ObjectValue, path: string[], next: unknown): void {
   }
   parent[path[path.length - 1]] = next;
 }
-const display = (value: unknown) => (JSON.stringify(value) ?? '(unset)')
-  .replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
 const pathLabel = (path: string[]) => display(path.map((key) => key.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')).slice(1, -1);
 
 const primitive = (value: unknown) => ['string', 'number', 'boolean'].includes(typeof value);
@@ -227,7 +221,7 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
     if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
     const draft = structuredClone(document.values);
     // Browsing/cancelling must not compile a potentially huge service schema.
-    let validation: { ajv: Ajv2020; valid: ReturnType<Ajv2020['compile']> } | undefined;
+    let validate: ReturnType<typeof compileSchema> | undefined;
     // Only inline primitive controls are editable. Full schema validation still applies on save.
     const editable = (field: Field) => document.writable && !document.conflict && !field.readonly &&
       supported(field.schema);
@@ -240,12 +234,9 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
       if (!choice || choice === 'Back' || signal.aborted) return;
       if (choice === save) {
         if (!changes.length || !document.writable || document.conflict) continue;
-        if (!validation) {
-          const ajv = new Ajv2020({ allErrors: true, strict: false });
-          (addFormats as unknown as FormatsPlugin)(ajv);
-          validation = { ajv, valid: ajv.compile(settingsValidationSchema(document.schema)) };
-        }
-        if (!validation.valid(draft)) { ctx.ui.notify(clean(validation.ajv.errorsText(validation.valid.errors)), 'error'); continue; }
+        validate ??= compileSchema(settingsValidationSchema(document.schema));
+        const error = validate(draft);
+        if (error) { ctx.ui.notify(clean(error), 'error'); continue; }
         const patch: ObjectValue = {};
         for (const field of changes) put(patch, field.path, at(draft, field.path));
         const preview = changes.map((f) => `${pathLabel(f.path)}: ${display(at(document.values, f.path))} → ${display(at(draft, f.path))}`).join('\n');

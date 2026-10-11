@@ -131,7 +131,7 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
         let condition: (() => boolean) | undefined;
         const terminal = { rows: 30, columns: 80 };
         const rendered = () => component.render(terminal.columns).join('\n');
-        const idleWith = (text: string) => rendered().includes(text) && rendered().includes('r refresh locally');
+        const idleWith = (text: string) => rendered().includes(text) && !rendered().includes('Reading…') && rendered().includes('r refresh');
         const requestRender = () => queueMicrotask(() => { if (component && condition?.()) { const resolve = ready; condition = undefined; ready = undefined; resolve?.(); } });
         const wait = (predicate: () => boolean) => new Promise<void>((resolve) => { ready = resolve; condition = predicate; requestRender(); });
         component = factory({ terminal, requestRender }, { fg: (_: string, value: string) => value }, {}, () => { finished = true; });

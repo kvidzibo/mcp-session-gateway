@@ -3,7 +3,7 @@ import { ResourceListChangedNotificationSchema, ResourceUpdatedNotificationSchem
 import type { ExtensionContext, Theme } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { z } from 'zod';
-import { clean } from './settings.js';
+import { clean } from '../src/native-ui.js';
 
 export const JOBS_MIME = 'application/vnd.pi-delegate.jobs+json';
 const activity = z.object({ name: z.string().max(80), args: z.string().max(240).optional() });

@@ -42,6 +42,10 @@ export function clean(text: string): string {
   return text.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 20_000);
 }
+/** Make significant whitespace and controls explicit in operator disclosures. */
+export const literal = (value: unknown) => (JSON.stringify(value) ?? '(unset)')
+  .replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
 // Editors render their contents literally; do not silently alter editable data.
 export function editorText(text: string): string {
   if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) throw new Error('Unsupported terminal controls in editor text');
