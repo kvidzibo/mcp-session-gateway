@@ -4,7 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FooterActions } from './footer-actions.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import { inputSettings } from './settings.js';
+import { confirmSettings, inputSettings } from './settings.js';
 import { ActionResultSchema, clean, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
@@ -178,7 +178,7 @@ export class NativeUI {
       try {
         const control = view.controls.find((c) => c.id === action && c.kind === 'action');
         if (!control) return false;
-        if (control.confirm && !await ctx.ui.confirm(oneLine(control.label), clean(control.confirm), { signal: this.options().signal })) return false;
+        if (control.confirm && !await confirmSettings(ctx, clean(control.confirm), { signal: this.options().signal, title: oneLine(control.label), actionLabel: 'confirm' })) return false;
         return await this.dispatch(uri, view, control, undefined, ctx, epoch);
       } finally { if (epoch === this.epoch && this.views.get(uri)) this.renderFooter(uri, this.views.get(uri)!); }
     }))));
@@ -292,7 +292,8 @@ export class NativeUI {
             if (tui.terminal.rows < 8) return [truncateToWidth('Enlarge terminal · Esc close', w)];
             const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8));
             if (!list || rows !== visibleRows) makeList(rows);
-            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close')].map((line) => truncateToWidth(line, w));
+            const hint = w < 40 ? '↑↓ Enter · Esc close' : w < 70 ? '↑↓ Enter · Ctrl+R refresh · Esc close' : '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close';
+            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', hint)].map((line) => truncateToWidth(line, w));
           },
           handleInput(data: string) {
             if (matchesKey(data, Key.escape)) done(undefined);
@@ -328,7 +329,11 @@ export class NativeUI {
         value = options[labels.indexOf(choice)].value;
       }
       if (epoch !== this.epoch) return;
-      if (picked.confirm && !await ctx.ui.confirm(title, clean(picked.confirm + (picked.kind === 'action' ? '' : `\n${String(value)}`)), dialogOptions)) continue;
+      if (picked.confirm) {
+        const proposed = JSON.stringify(value)?.replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+        const disclosure = clean(picked.confirm) + (picked.kind === 'action' ? '' : `\n${proposed}`);
+        if (!await confirmSettings(ctx, disclosure, { ...dialogOptions, title, actionLabel: 'confirm' })) continue;
+      }
       if (epoch !== this.epoch) return;
       await this.dispatch(uri, view, picked, value, ctx, epoch);
     }

@@ -7,7 +7,10 @@ code or running a model turn. The gateway remains service-agnostic.
 Use **`/gateway` → Services → service → Open app**. Use arrows/Enter to
 navigate, Ctrl+R to refresh, and Escape to return to the service menu. Controls have labels and optional
 icons/descriptions. Forms save only when their action succeeds; confirmation
-prompts show the proposed value. Text/number inputs use JSON values (quote strings;
+prompts show the proposed value in a scrollable review. Every line must be displayed
+before Enter confirms; resizing resets review and Escape cancels. Proposed values
+are JSON-escaped so whitespace/control characters cannot hide changes.
+Text/number inputs use JSON values (quote strings;
 use `\n` for line breaks), preserving tabs and boundary whitespace exactly. Footer text and HTTP(S) links use Pi's ordinary
 status area. Footer actions use the same controls and confirmations as the app menu;
 no Pinote-specific code is required. Clicks never start a model turn.

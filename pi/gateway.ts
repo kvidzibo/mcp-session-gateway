@@ -101,9 +101,16 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       if (signal.aborted || uiBusy) return { action: 'cancel' };
       uiBusy = true;
       acquired = true;
-      const choice = await ctx.ui.select(clean(params.message), ['Decline', 'Allow once', 'Cancel'], { signal, timeout });
+      const choice = await ctx.ui.select(ctx.mode === 'tui' ? 'Service requests approval — Allow once opens the full review' : clean(params.message), ['Decline', 'Allow once', 'Cancel'], { signal, timeout });
       if (signal.aborted) return { action: 'cancel' };
-      if (choice === 'Allow once') return { action: 'accept', content: { [key]: true } };
+      if (choice === 'Allow once') {
+        // Long browser origin/cookie disclosures must never be clipped into a
+        // select title. Require every line to be visible before TUI acceptance.
+        if (params.message.length > 20_000) return { action: 'cancel' };
+        if (ctx.mode === 'tui' && !await confirmSettings(ctx, clean(params.message), { signal, timeout, title: 'Allow this service request?', actionLabel: 'allow once' })) return { action: 'cancel' };
+        if (signal.aborted) return { action: 'cancel' };
+        return { action: 'accept', content: { [key]: true } };
+      }
       return { action: choice === 'Decline' ? 'decline' : 'cancel' };
     } catch { return { action: 'cancel' }; }
     finally { if (acquired) uiBusy = false; release(); }

@@ -171,6 +171,13 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
           let changed = new Promise<void>((resolve) => { renderChanged = resolve; });
           let answer: unknown;
           const panel = factory({ terminal: { rows: 24, columns: 80 }, requestRender: () => renderChanged() }, { fg: (_color: string, text: string) => text }, {}, (value: unknown) => { answer = value; });
+          if (panel.render(78)[1] === 'Allow this service request?') {
+            assert.ok(panel.render(78).some((line: string) => line.includes('Enter allow once')));
+            panel.handleInput('\r');
+            assert.equal(answer, true);
+            panel.dispose();
+            return answer;
+          }
           if (panel.render(78)[1]?.startsWith('Gateway')) {
             const target = navigation.shift();
             if (!target) panel.handleInput('\u001b');

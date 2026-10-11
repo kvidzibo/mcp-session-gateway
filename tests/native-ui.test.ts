@@ -42,12 +42,12 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   const entries: any[] = [];
   const statuses = new Map();
   let rounds = 0, confirms = 0;
-  const updated = ' \tUpdated\n ';
+  const updated = ' \tUpdated\n ' + ' '.repeat(80) + 'tail';
   let inputValue: string | undefined = JSON.stringify(updated);
   let onInput = () => {};
   const ctx: any = { mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'conversation', getBranch: () => entries }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify: (message: string) => assert.fail(message),
-    confirm: async () => { confirms++; return true; },
+    confirm: async () => assert.fail('Native action confirmations must use the scrollable review'),
     custom: async (factory: Function) => {
       let result;
       const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: unknown) => { result = value; });
@@ -56,8 +56,16 @@ test('native UI routes privately, renders safely, persists host state, and rejec
         onInput();
         if (inputValue !== undefined) { component.handleInput('\x01'); component.handleInput('\x0b'); component.handleInput(inputValue); }
         component.handleInput('\r');
+      } else if (rendered.includes('Save label?')) {
+        confirms++;
+        const disclosed = rendered.replace(/\n/g, '');
+        assert.ok(disclosed.includes('\\u0020'.repeat(80)), 'Every significant space must remain explicit across wrapping');
+        assert.match(rendered, /Enter confirm/);
+        component.handleInput('\r');
+        assert.equal(result, true);
       } else {
         assert.match(rendered, /Remote settings/);
+        assert.match(component.render(54).join('\n'), /Esc close/);
         assert.ok(component.render(8).every((line: string) => [...clean(line)].length <= 8));
         component.handleInput(rounds++ === 0 ? '\r' : '\x1b');
       }
