@@ -266,6 +266,11 @@ Services can supply menus, settings forms, previews, and footer text through the
 keyboard actions go directly to the service without a model turn. The adapter is
 generic—Pinote screens and behavior live in Pinote's MCP server, not this package.
 UI state follows the Pi conversation/branch, separately from the gateway UUID.
+Services can opt into retained state across `/new`, return state from model tools,
+and expose generic clickable footer actions. Preview actions write display-only
+transcript entries; completing a task never resets the conversation. Terminal
+clicks require the generic [protocol handler](docs/native-ui.md); the app menu is
+the keyboard fallback. Pinote MCP suggestions/actions require gateway 0.12.0+.
 
 For a checkout of Pinote with its MCP server, install its `pi/` dependencies and
 Python CLI, then register a service:

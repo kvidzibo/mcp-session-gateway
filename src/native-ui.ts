@@ -6,7 +6,8 @@ export const UI_CONTEXT = 'native-ui/context';
 export const UI_STATE = 'native-ui/state';
 const text = z.string().max(20_000);
 const scalar = z.union([text, z.number().finite(), z.boolean(), z.null()]);
-export const ContextSchema = z.object({ conversationId: z.string().min(1).max(256), state: z.record(z.string(), z.unknown()) });
+export const StateSchema = z.record(z.string(), z.unknown()).refine((state) => JSON.stringify(state).length <= 8192, 'UI state exceeds 8 KiB');
+export const ContextSchema = z.object({ conversationId: z.string().min(1).max(256), contextId: z.string().min(1).max(256).optional(), state: StateSchema });
 const control = z.object({
   id: z.string().min(1).max(256), label: text, icon: z.string().max(8).optional(), description: text.optional(),
   kind: z.enum(['action', 'text', 'number', 'toggle', 'select']),
@@ -16,12 +17,16 @@ const control = z.object({
 }).strict();
 export const ViewSchema = z.object({
   version: z.literal(1), title: text, revision: z.string().min(1).max(256),
-  state: z.record(z.string(), z.unknown()), body: text.optional(),
+  state: StateSchema, body: text.optional(), retainOnNew: z.boolean().optional(),
   controls: z.array(control).max(256),
-  footer: z.array(z.object({ text, url: z.string().max(2048).optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
+  footer: z.array(z.object({ text, url: z.string().max(2048).optional(), action: z.string().min(1).max(256).optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
 }).strict().superRefine((view, ctx) => {
   if (new Set(view.controls.map((c) => c.id)).size !== view.controls.length) ctx.addIssue({ code: 'custom', message: 'Duplicate control IDs' });
-  if (JSON.stringify(view.state).length > 8192) ctx.addIssue({ code: 'custom', message: 'UI state exceeds 8 KiB' });
+  for (const item of view.footer ?? []) {
+    if (item.action && (item.url !== undefined || !view.controls.some((c) => c.id === item.action && c.kind === 'action'))) {
+      ctx.addIssue({ code: 'custom', message: 'Footer actions must reference an action control and cannot have a URL' });
+    }
+  }
 });
 export const ActionSchema = z.object({
   method: z.literal('native-ui/action'),
@@ -42,9 +47,15 @@ export function editorText(text: string): string {
   if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) throw new Error('Unsupported terminal controls in editor text');
   return text;
 }
-export function footerText(view: NativeView, clip: (text: string, width: number) => string = (text) => text): string {
-  return (view.footer ?? []).map(({ text, url, width }) => {
+export function footerText(view: NativeView, clip: (text: string, width: number) => string = (text) => text, actionUrl?: (action: string) => string | undefined): string {
+  return (view.footer ?? []).map(({ text, url, action, width }) => {
     const label = clip(clean(text).replace(/\n/g, ' '), width ?? 60);
+    // Only the host can mint action capabilities; services cannot supply custom schemes.
+    if (action) {
+      const target = actionUrl?.(action);
+      return target && /^pi-gateway-action:\/\/[1-9][0-9]*-[0-9a-f]{8}\/[0-9a-f]{32}$/.test(target)
+        ? `\x1b]8;;${target}\x1b\\${label}\x1b]8;;\x1b\\` : label;
+    }
     if (!url || /[\s\u0000-\u001f\u007f-\u009f]/u.test(url)) return label;
     try {
       const target = new URL(url);

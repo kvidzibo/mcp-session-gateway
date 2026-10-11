@@ -54,16 +54,20 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
 
   const dir = await mkdtemp(join(tmpdir(), 'gateway-menu-'));
   const config = join(dir, 'gateway.json');
-  const commands = new Map<string, any>(), handlers = new Map<string, Function>();
+  const commands = new Map<string, any>(), handlers = new Map<string, Function>(), events = new Map<string, Function>();
   const notices: string[] = [];
   const navigation = ['Connection', 'Restart gateway services…', 'Connection', 'Restart gateway services…', 'Back', 'Packages', 'Installed versions', 'Back', 'Close'];
   let restartAttempts = 0, rootVisits = 0, appsOpened = 0;
   gatewayExtension({
-    registerFlag() {}, getFlag: () => config,
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on: (name: string, handler: Function) => events.set(name, handler) },
     registerTool() {}, registerCommand: (name: string, command: any) => commands.set(name, command),
     on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry() {},
   } as any);
   assert.deepEqual([...commands.keys()], ['gateway']);
+  let queryReply: any;
+  events.get('gateway:query-service-tool')!({ service: 'pinote', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
+  assert.equal(queryReply.handled, true, 'Unknown startup ownership must not fall through to an unrelated cwd selection');
+  assert.match(queryReply.error, /not ready/);
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true,
     sessionManager: { getBranch: () => [], getSessionId: () => 'menu-test' },
     ui: {
@@ -133,7 +137,11 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     `;
     const service = { command: process.execPath, args: ['--input-type=module', '-e', fixture], cwd: new URL('../', import.meta.url).pathname };
     await writeFile(config, JSON.stringify({ timeoutMs: 1000, mcpServers: { alpha: service, beta: service } }));
-    await handlers.get('session_start')!({}, ctx);
+    const launching = handlers.get('session_start')!({}, ctx);
+    events.get('gateway:query-service-tool')!({ service: 'alpha', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
+    assert.equal(queryReply.handled, true, 'Changed configuration must not reuse ownership from the previous launch');
+    assert.match(queryReply.error, /not ready/);
+    await launching;
     navigation.push('Services', 'alpha', 'Resources', 'Back', 'Resources', 'Open app', 'Back', 'Back', 'Close');
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(navigation, [], 'Slow aggregate listing must reach Resources without retiring healthy children');
