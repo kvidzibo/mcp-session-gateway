@@ -21,7 +21,7 @@ export async function showText(ctx: ExtensionContext, title: string,
       const publish = (value: string) => { if (!operation.aborted && !disposed) { text = value; tui.requestRender(); } };
       void Promise.resolve().then(() => { operation.throwIfAborted(); return source(operation, publish); }).then(
         (result) => { if (!operation.aborted && !disposed) text = result || '(empty resource)'; },
-        (error: unknown) => { if (!operation.aborted && !disposed) text = `Error: ${String(error)}`; },
+        (error: unknown) => { if (!operation.aborted && !disposed) text = `Error: ${clean(String(error))}`; },
       ).finally(() => { if (!operation.aborted && !disposed) tui.requestRender(); });
     };
     const close = () => { controller.abort(); done(); };

@@ -5,7 +5,7 @@ import { showText } from '../pi/text-panel.js';
 
 test('text panels ignore superseded reads and stop publishing after disconnect or disposal', async () => {
   const lifetime = new AbortController(), connection = new AbortController();
-  const reads: { signal: AbortSignal; publish: (text: string) => void; finish: (text: string) => void }[] = [];
+  const reads: { signal: AbortSignal; publish: (text: string) => void; finish: (text: string) => void; fail: (error: Error) => void }[] = [];
   const tick = () => new Promise((resolve) => setImmediate(resolve));
   await showText({ ui: { custom: async (factory: Function) => {
     let closed = false, renders = 0;
@@ -30,14 +30,19 @@ test('text panels ignore superseded reads and stop publishing after disconnect o
         assert.ok(lines.every((line: string) => visibleWidth(line) <= columns));
         if (columns >= 20) assert.match(lines.at(-1), /Esc/);
       }
+      panel.handleInput('r'); await tick();
+      reads[2].fail(new Error('x\n'.repeat(10_001) + 'oversized tail')); await tick();
+      assert.match(text(), /Error:/);
+      for (let i = 0; i < 2000; i++) panel.handleInput('\x1b[6~');
+      assert.doesNotMatch(text(), /oversized tail/, 'Errors are capped before line wrapping, not just per line');
       connection.abort();
       assert.match(text(), /Gateway disconnected/);
       panel.handleInput('r'); await tick();
-      assert.equal(reads.length, 2);
+      assert.equal(reads.length, 3);
       lifetime.abort(); assert.equal(closed, true);
     } finally { panel.dispose(); }
     const before = renders;
     reads[1].publish('disposed'); await tick();
     assert.equal(renders, before);
-  } } } as any, 'Read-only data', (signal, publish) => new Promise((finish) => reads.push({ signal, publish, finish })), lifetime.signal, connection.signal);
+  } } } as any, 'Read-only data', (signal, publish) => new Promise((finish, fail) => reads.push({ signal, publish, finish, fail })), lifetime.signal, connection.signal);
 });
