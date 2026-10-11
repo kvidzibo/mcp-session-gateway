@@ -7,7 +7,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { loadConfig } from '../src/config.js';
 import { NativeUI } from './native-ui.js';
@@ -38,25 +38,36 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let managerController: AbortController | undefined;
   let managerWork: Promise<void> | undefined;
   let launchedServices: string[] | undefined;
+  let configuredServices: string[] = [];
+  let configurationLoaded = false;
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
-  const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }));
+  const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
+    if (uiBusy || !connected || shuttingDown) return false;
+    uiBusy = true;
+    try { return await run(); } finally { uiBusy = false; }
+  });
+  pi.registerEntryRenderer<{ title: string; text: string }>('gateway-native-preview', (entry, _options, theme) => {
+    if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
+    return new Text(`${theme.fg('muted', `${clean(entry.data.title)} · display only · not sent to model`)}\n${clean(entry.data.text)}`, 0, 0);
+  });
   let liveJobs: LiveJobs | undefined;
 
   async function close(preserveMenu = false): Promise<void> {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
+    configurationLoaded = false;
     liveJobs?.stop();
     liveJobs = undefined;
     lifetime.abort();
     operatorToken = undefined;
-    native.stop();
+    const stoppingNative = native.stop();
     const pendingManager = managerWork;
     closing = (async () => {
       const results = await Promise.allSettled([
         pendingManager,
-        (async () => { try { await client?.close(); } finally { await transport?.close(); } })(),
+        (async () => { try { await client?.close(); } finally { await transport?.close(); await stoppingNative; } })(),
       ]);
       // Aborted package operations report through their own UI, but cleanup must finish.
       if (results[1].status === 'rejected') throw results[1].reason;
@@ -98,18 +109,22 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     finally { if (acquired) uiBusy = false; release(); }
   }
 
-  async function start(ctx: ExtensionContext, preserveMenu = false): Promise<void> {
+  async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string): Promise<void> {
     if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
-    if (connected) { await native.start(ctx, resolve(configPath)); return; }
+    if (connected) { await native.start(ctx, resolve(configPath), reason); return; }
     closing = undefined;
     lifetime = new AbortController();
-    timeout = (await loadConfig(configPath)).timeoutMs;
+    configurationLoaded = false;
+    const config = await loadConfig(configPath);
+    timeout = config.timeoutMs;
+    configuredServices = config.services.map((service) => service.name);
+    configurationLoaded = true;
     if (shuttingDown) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { if (client === current) { connected = false; liveJobs?.disconnect(); lifetime.abort(); native.stop(); } };
+    current.onclose = () => { if (client === current) { connected = false; liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     current.setNotificationHandler(InvalidatedSchema, ({ params }) => { native.invalidate(params.service); });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
@@ -126,15 +141,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
       connected = true;
       await tools(lifetime.signal); // Wait for child startup before declaring success.
-      await native.start(ctx, resolve(configPath));
+      await native.start(ctx, resolve(configPath), reason);
       if (ctx.mode === 'tui' && ctx.hasUI) {
         liveJobs = new LiveJobs(current, ctx, timeout);
         await liveJobs.start();
       }
     } catch (error) { await close(preserveMenu); throw error; }
   }
-  pi.on('session_start', async (_event, ctx) => { shuttingDown = false; await start(ctx); });
-  pi.on('session_shutdown', async () => { shuttingDown = true; await close(); });
+  pi.on('session_start', async (event, ctx) => { shuttingDown = false; await start(ctx, false, event.reason); });
+  pi.on('session_shutdown', async (event) => {
+    if (event.reason === 'new') native.transfer(event.targetSessionFile);
+    shuttingDown = true; await close();
+  });
   pi.on('session_tree', async (_event, ctx) => {
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
@@ -254,20 +272,39 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     name: 'gateway_call', label: 'Gateway call', description: 'Call a local gateway tool; use gateway_tools to discover names and schemas. Required confirmations go directly to the user.',
     parameters: Type.Object({ name: Type.String(), arguments: Type.Record(Type.String(), Type.Unknown()) }),
     async execute(_id, params, signal) {
-      const tool = (await tools(signal)).find(({ name }) => name === params.name);
-      if (!tool) throw new Error(`Unknown or app-only gateway tool: ${params.name}`);
-      // Fresh validator avoids stale/colliding $id registrations after discovery.
-      const ajv = new Ajv2020({ allErrors: true, strict: false });
-      (addFormats as unknown as FormatsPlugin)(ajv);
-      const valid = ajv.compile(tool.inputSchema);
-      if (!valid(params.arguments)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
-      const service = params.name.split('__')[0];
-      const result = CallToolResultSchema.parse(await connection().callTool({ name: params.name, arguments: params.arguments, _meta: native.meta(service) }, undefined, { signal, timeout }));
-      await native.refreshService(service);
+      const result = await invokeTool(params.name, params.arguments, signal);
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
       if (!content.length && result.structuredContent) content.push({ type: 'text', text: JSON.stringify(result.structuredContent) });
       return { content, details: undefined, isError: Boolean(result.isError) };
     },
+  });
+
+  async function invokeTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, readOnly = false) {
+    const current = connection(), active = lifetime, sameContext = native.current();
+    const tool = (await tools(signal)).find((tool) => tool.name === name);
+    if (!tool || readOnly && tool.annotations?.readOnlyHint !== true) throw new Error('Unknown, app-only, or non-read-only tool');
+    const ajv = new Ajv2020({ allErrors: true, strict: false });
+    (addFormats as unknown as FormatsPlugin)(ajv);
+    const valid = ajv.compile(tool.inputSchema);
+    if (!valid(args)) throw new Error(`Invalid arguments: ${ajv.errorsText(valid.errors)}`);
+    if (active !== lifetime || active.signal.aborted || !sameContext()) throw new Error('Gateway context changed');
+    return native.callTool(name.split('__')[0], (meta) => current.callTool({ name, arguments: args, _meta: meta }, undefined,
+      { signal: signal ? AbortSignal.any([signal, active.signal]) : active.signal, timeout }).then((result) => CallToolResultSchema.parse(result)));
+  }
+
+  // Synchronous ownership acknowledgement; the value is a bounded asynchronous read.
+  pi.events.on('gateway:query-service-tool', (request: unknown) => {
+    const query = request as { service?: string; tool?: string; arguments?: Record<string, unknown>; respond?: (reply: unknown) => void };
+    if (!query || typeof query.respond !== 'function') return;
+    if (!configurationLoaded && pi.getFlag('gateway-config')) {
+      query.respond({ handled: true, error: 'Gateway configuration is not ready' }); return;
+    }
+    if (typeof query.service !== 'string' || !configuredServices.includes(query.service)) { query.respond({ handled: false }); return; }
+    if (typeof query.tool !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(query.tool)) { query.respond({ handled: true, error: 'Invalid tool name' }); return; }
+    // A failed/disconnected owned service must never fall back to unrelated cwd selection.
+    const result = invokeTool(`${query.service}__${query.tool}`, query.arguments ?? {}, undefined, true);
+    void result.catch(() => {}); // Event callers may disappear during session teardown.
+    query.respond({ handled: true, result });
   });
 
   async function openSettings(service: string, ctx: ExtensionContext): Promise<void> {
