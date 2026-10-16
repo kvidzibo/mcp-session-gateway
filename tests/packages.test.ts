@@ -19,7 +19,7 @@ test('package inventory is explicit, read-only, failure-isolated, and cancellabl
     const { loadExtensions } = await import(pathToFileURL(join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js')).href);
     const loaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(loaded.errors, []);
-    assert.deepEqual([...loaded.extensions[0].commands.keys()], ['gateway']);
+    assert.deepEqual([...loaded.extensions[0].commands.keys()], ['gateway', 'pi-services']);
     assert.deepEqual([...loaded.extensions[0].tools.keys()], ['gateway_tools', 'gateway_call']);
     await mkdir(join(dir, 'installed'));
     await mkdir(join(dir, 'local'));

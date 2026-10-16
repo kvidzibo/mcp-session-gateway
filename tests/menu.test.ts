@@ -10,6 +10,59 @@ import gatewayExtension from '../pi/gateway.js';
 const down = '\x1b[B', escape = '\x1b';
 const theme = { fg: (_color: string, text: string) => text };
 
+test('/pi-services opens Services directly, preserves Back navigation, and falls back to recovery when disconnected', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gateway-services-'));
+  const config = join(dir, 'gateway.json');
+  const commands = new Map<string, any>(), handlers = new Map<string, Function>();
+  const screens: string[] = [], notices: string[] = [];
+  const navigation: string[] = [];
+  gatewayExtension({
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} }, registerTool() {},
+    registerCommand: (name: string, command: any) => commands.set(name, command),
+    on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry() {},
+  } as any);
+  const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
+    sessionManager: { getBranch: () => [], getSessionId: () => 'services-test' },
+    ui: { notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
+      custom: async (factory: Function) => {
+        let answer: unknown;
+        const panel = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; });
+        try {
+          const render = () => panel.render(98) as string[];
+          screens.push(render()[1]);
+          const target = navigation.shift();
+          assert.ok(target, 'No unexpected dialog');
+          for (let i = 0; i < 20 && !render().includes(`→ ${target}`); i++) panel.handleInput(down);
+          assert.ok(render().includes(`→ ${target}`), `Missing ${target}`);
+          panel.handleInput('\r');
+          return answer;
+        } finally { panel.dispose(); }
+      },
+    },
+  };
+  try {
+    await writeFile(config, JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname] } } }));
+    await handlers.get('session_start')!({}, ctx);
+    for (let visit = 0; visit < 2; visit++) {
+      screens.length = 0;
+      navigation.push('demo', 'Back', 'Back', 'Close');
+      await commands.get('pi-services').handler('', ctx);
+      assert.deepEqual(screens, ['Gateway › Services', 'Gateway › Services › demo', 'Gateway › Services', 'Gateway']);
+      assert.deepEqual(navigation, []);
+    }
+    await handlers.get('session_shutdown')!({}, ctx);
+    screens.length = 0;
+    navigation.push('Close');
+    await commands.get('pi-services').handler('', ctx);
+    assert.deepEqual(screens, ['Gateway'], 'Disconnected shortcut keeps package/recovery navigation available');
+    await commands.get('pi-services').handler('', { ...ctx, mode: 'rpc' });
+    assert.deepEqual(notices, ['Gateway menus require TUI mode']);
+  } finally {
+    await handlers.get('session_shutdown')!({}, ctx);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('one gateway menu preserves navigation, bounds rendering, and recovers after failed and successful restarts', async () => {
   const controller = new AbortController();
   const terminal = { rows: 24, columns: 80 };
@@ -63,7 +116,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     registerTool() {}, registerCommand: (name: string, command: any) => commands.set(name, command),
     on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry() {},
   } as any);
-  assert.deepEqual([...commands.keys()], ['gateway']);
+  assert.deepEqual([...commands.keys()], ['gateway', 'pi-services']);
   let queryReply: any;
   events.get('gateway:query-service-tool')!({ service: 'pinote', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
   assert.equal(queryReply.handled, true, 'Unknown startup ownership must not fall through to an unrelated cwd selection');

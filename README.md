@@ -83,8 +83,9 @@ Tools are named `<server>__<tool>` by the gateway, for example `files__read_file
 
 ## Operator menu
 
-The adapter registers **one command: `/gateway`**. It opens a private menu without
-starting a model turn:
+**`/gateway`** opens the private operator menu below. **`/pi-services`** opens
+**Services** directly; when disconnected, it opens the root menu for recovery.
+Neither command starts a model turn:
 
 ```text
 Gateway

@@ -159,9 +159,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.on('session_tree', async (_event, ctx) => {
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  pi.registerCommand('gateway', {
-    description: 'Open gateway services, packages and connection menus. No model turn.',
-    handler: async (_args, ctx) => {
+  const gatewayCommand = (initialAction?: 'services') => ({
+    description: initialAction ? 'Open this gateway’s Services menu. No model turn.' : 'Open gateway services, packages and connection menus. No model turn.',
+    handler: async (_args: string, ctx: ExtensionContext) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
       const configPath = pi.getFlag('gateway-config');
@@ -171,13 +171,15 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       managerController = controller;
       const signal = controller.signal;
       const menu = new GatewayMenu(ctx, signal);
+      let nextAction = connected ? initialAction : undefined;
       try {
         while (!signal.aborted) {
-          const action = await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
+          const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
             { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
+          nextAction = undefined;
           if (!action) break;
           try {
             if (action === 'services') {
@@ -263,6 +265,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       } finally { if (managerController === controller) managerController = undefined; uiBusy = false; }
     },
   });
+  pi.registerCommand('gateway', gatewayCommand());
+  pi.registerCommand('pi-services', gatewayCommand('services'));
 
   pi.registerTool({
     name: 'gateway_tools', label: 'Gateway tools', description: 'Discover local gateway tools and their input schemas.', parameters: Type.Object({}),
