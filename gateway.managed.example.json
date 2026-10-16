@@ -1,4 +1,5 @@
 {
+  "autoUpdate": false,
   "packageStore": ".gateway-packages",
   "packages": {
     "example": {

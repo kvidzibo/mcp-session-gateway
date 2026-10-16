@@ -10,6 +10,7 @@ import { Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
+import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
@@ -33,6 +34,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let shuttingDown = false;
   let managerController: AbortController | undefined;
   let managerWork: Promise<void> | undefined;
+  let startupWork: ReturnType<typeof updateManagedPackages> | undefined;
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
   let configurationLoaded = false;
@@ -47,6 +49,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
     return new Text(`${theme.fg('muted', `${clean(entry.data.title)} · display only · not sent to model`)}\n${clean(entry.data.text)}`, 0, 0);
   });
+  pi.registerEntryRenderer<{ text: string }>('gateway-package-updates', (entry, _options, theme) => {
+    if (typeof entry.data?.text !== 'string') return;
+    return new Text(theme.fg('success', clean(entry.data.text)), 0, 0);
+  });
   let liveJobs: LiveJobs | undefined;
 
   async function close(preserveMenu = false): Promise<void> {
@@ -59,7 +65,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     lifetime.abort();
     operatorToken = undefined;
     const stoppingNative = native.stop();
-    const pendingManager = managerWork;
+    const pendingManager = Promise.allSettled([managerWork, startupWork]);
     closing = (async () => {
       const results = await Promise.allSettled([
         pendingManager,
@@ -112,7 +118,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     finally { if (acquired) uiBusy = false; release(); }
   }
 
-  async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string): Promise<void> {
+  async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string, update = false): Promise<void> {
     if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
@@ -124,7 +130,19 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
     configurationLoaded = true;
-    if (shuttingDown) return;
+    if (shuttingDown || lifetime.signal.aborted) return;
+    if (update && config.autoUpdate) {
+      const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
+        ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'));
+      startupWork = work;
+      try {
+        const updates = await work;
+        if (shuttingDown || lifetime.signal.aborted) return;
+        if (updates.length) pi.appendEntry('gateway-package-updates', {
+          text: `MCP servers were updated:\n${updates.map(({ name, from, version }) => `- ${name}: ${from} → ${version}`).join('\n')}`,
+        });
+      } finally { if (startupWork === work) startupWork = undefined; }
+    }
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { if (client === current) { connected = false; liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
@@ -151,7 +169,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       }
     } catch (error) { await close(preserveMenu); throw error; }
   }
-  pi.on('session_start', async (event, ctx) => { shuttingDown = false; await start(ctx, false, event.reason); });
+  pi.on('session_start', async (event, ctx) => { shuttingDown = false; await start(ctx, false, event.reason, true); });
   pi.on('session_shutdown', async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
     shuttingDown = true; await close();

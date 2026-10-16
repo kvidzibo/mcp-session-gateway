@@ -6,7 +6,8 @@ for service configuration or imports package-specific management code.
 
 The Pi adapter's `/gateway` menu groups inventory, preparation, activation and
 rollback under **Packages**, and restart under **Connection**. These are operator actions, not
-model tools or messages. No automatic updates, builds, activation or restart occur.
+model tools or messages. Updates are manual by default; the Pi adapter also supports
+the explicit startup opt-in below.
 
 ## Git main: managed configuration
 
@@ -71,6 +72,31 @@ can create a project-local Python environment.
   expression. `packageRoot` placeholders are rejected on external services.
 - Before first activation a managed service stays stopped, so the manager remains
   usable to install it. An invalid state/missing active directory fails closed.
+
+## Automatic startup updates
+
+Set top-level `"autoUpdate": true` in the gateway config (default `false`; only a
+boolean is accepted). This authorizes the **Pi adapter** to check public sources
+on startup/reload and prepare, build, validate and activate changed versions
+without individual confirmations, before starting any child servers.
+Only already-activated managed packages linked to configured services qualify;
+first installs, unlinked packages and external/local checkouts remain manual.
+The standalone stdio gateway does not run this adapter policy.
+
+All existing pinned-version, clean-tree, ancestry/downgrade, locking, validation,
+logging and cancellation checks still apply. Failures warn, leave the current
+activation in use and do not automatically retry; other eligible packages continue.
+Shutdown cancels and awaits pending update work. No existing processes in other
+sessions are restarted; activation affects their next launch as usual.
+Manual Connection-menu restarts do not check for updates.
+
+After activation, one display-only chat entry says **MCP servers were updated**
+and lists package IDs and old/new versions. Nothing is posted when up to date,
+disabled, ineligible or entirely failed. The entry never starts a model turn.
+
+Enabling this setting grants ongoing permission to execute the configured trusted
+build/validation code with your OS permissions, not in a sandbox. Enable it only
+for trusted sources and commands; use `false` to retain per-operation approvals.
 
 ## Workflow
 

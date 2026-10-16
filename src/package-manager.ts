@@ -264,6 +264,34 @@ export class PackageManager {
   }
 }
 
+/** Explicit config opt-in authorizes updates, not first installs or external checkout writes. */
+export async function updateManagedPackages(config: GatewayConfig, signal: AbortSignal,
+  failed: (name: string, error: unknown) => void): Promise<{ name: string; from: string; version: string }[]> {
+  const updates: { name: string; from: string; version: string }[] = [];
+  if (!config.autoUpdate) return updates;
+  const manager = new PackageManager(config.packageStore);
+  for (const pkg of config.packages) {
+    if (!pkg.managed || !config.services.some((service) => service.package === pkg.name)) continue;
+    signal.throwIfAborted();
+    try {
+      if (!(await manager.state(pkg, signal)).active) continue;
+      const plan = await manager.plan(pkg, signal);
+      if (!plan.from || plan.version === plan.from) continue;
+      await manager.prepare(pkg, plan, signal, () => {});
+      const state = await manager.state(pkg, signal);
+      if (state.active?.version !== plan.from || state.prepared?.version !== plan.version) {
+        throw new Error('Package changed during startup update; inspect releases before retrying');
+      }
+      await manager.activate(pkg, state.revision, false, signal);
+      updates.push({ name: pkg.name, from: plan.from, version: plan.version });
+    } catch (error) {
+      signal.throwIfAborted();
+      failed(pkg.name, error);
+    }
+  }
+  return updates;
+}
+
 /** Called only at gateway startup. Missing activation leaves a managed service stopped. */
 export async function bindManagedService(config: GatewayConfig, service: ServiceConfig): Promise<ServiceConfig | undefined> {
   const pkg = config.packages.find((pkg) => pkg.name === service.package);
