@@ -12,12 +12,12 @@ export class GatewayMenu {
 
   constructor(private ctx: ExtensionContext, private signal: AbortSignal) {}
 
-  async choose(path: string[], summary: string, items: MenuItem[]): Promise<string | undefined> {
+  async choose(path: string[], summary: string, items: MenuItem[], tab?: { label: string; action: (id: string) => Promise<void> }): Promise<string | undefined> {
     if (this.signal.aborted) return;
     const key = path.join('/');
     const exit = path.length === 1 ? 'Close' : 'Back';
     const choices = [...items, { id: '__back', label: exit, description: path.length === 1 ? 'Return to Pi.' : `Return to ${path.at(-2)}.` }];
-    const picked = await this.ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+    const choose = () => this.ctx.ui.custom<string | { tab: string } | undefined>((tui, theme, _keys, done) => {
       const signal = this.signal;
       let list: SelectList | undefined, geometry = '', usable = false;
       const remembered = choices.findIndex((item) => item.id === this.selected.get(key));
@@ -34,8 +34,8 @@ export class GatewayMenu {
           const detail = choices[Math.max(0, selected)];
           const description = wrapTextWithAnsi(oneLine(detail.description), width).slice(0, 3);
           while (description.length < 3) description.push('');
-          const summaryLines = clean(summary).split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 12));
-          const rows = Math.max(1, Math.min(12, height - description.length - summaryLines.length - 8));
+          const summaryLines = clean(summary).split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 12 - (tab ? 1 : 0)));
+          const rows = Math.max(1, Math.min(12, height - description.length - summaryLines.length - 8 - (tab ? 1 : 0)));
           list = new SelectList(choices.map((item) => ({ value: item.id, label: `${oneLine(item.label)}${item.disabled ? ' (unavailable)' : ''}` })), rows, {
             selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg(detail.disabled ? 'dim' : 'accent', s),
             description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => s,
@@ -48,12 +48,18 @@ export class GatewayMenu {
           const border = theme.fg('accent', '─'.repeat(width));
           return [border, theme.fg('accent', (width < 60 ? path.slice(-2) : path).map(oneLine).join(' › ')), ...summaryLines.map((line) => theme.fg('muted', line)), '',
             ...list.render(width), '', ...description.map((line) => theme.fg('muted', line)), '',
+            ...(tab ? [theme.fg('muted', `Tab ${oneLine(tab.label)}`)] : []),
             theme.fg('muted', width < 50 ? `↑↓ choose · Enter · Esc ${exit.toLowerCase()}` : `↑/↓ choose · Enter open · Esc ${exit.toLowerCase()}`), border]
             .map((line) => truncateToWidth(line, width));
         },
         handleInput: (data: string) => {
           if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
-          else if (usable && geometry.endsWith(`:${tui.terminal.rows}:${tui.terminal.columns}`)) list?.handleInput(data);
+          else if (usable && geometry.endsWith(`:${tui.terminal.rows}:${tui.terminal.columns}`)) {
+            const id = list?.getSelectedItem()?.value;
+            if (tab && matchesKey(data, Key.tab)) {
+              if (id && id !== '__back' && !choices.find((item) => item.id === id)?.disabled) done({ tab: id });
+            } else list?.handleInput(data);
+          }
           const id = list?.getSelectedItem()?.value;
           if (id && id !== '__back') this.selected.set(key, id);
           tui.requestRender();
@@ -62,7 +68,12 @@ export class GatewayMenu {
         dispose: () => this.signal.removeEventListener('abort', cancel),
       };
     }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
-    return picked === '__back' ? undefined : picked;
+    while (!this.signal.aborted) {
+      const picked = await choose();
+      if (picked && typeof picked === 'object') {
+        if (!this.signal.aborted) await tab!.action(picked.tab);
+      } else return picked === '__back' ? undefined : picked;
+    }
   }
 
   info(path: string[], text: string): Promise<void> {

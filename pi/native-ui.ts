@@ -116,7 +116,7 @@ export class NativeUI {
     if (ctx.mode === 'tui') {
       const bridge = new FooterActions(); this.bridge = bridge;
       try { await bridge.start(); }
-      catch { await bridge.stop(); if (this.bridge === bridge) this.bridge = undefined; ctx.ui.notify('Footer clicks unavailable; use /gateway → Services → Open app', 'warning'); }
+      catch { await bridge.stop(); if (this.bridge === bridge) this.bridge = undefined; ctx.ui.notify('Footer clicks unavailable; select the service in /pi-services', 'warning'); }
     }
     if (epoch !== this.epoch) return;
     const result = await this.client().listResources(undefined, this.observationOptions());
@@ -251,19 +251,19 @@ export class NativeUI {
     }
   }
 
-  async open(service: string, ctx: ExtensionContext): Promise<void> {
+  async open(service: string, ctx: ExtensionContext, navigation?: { settings: () => Promise<void> }): Promise<'features' | void> {
     // Human interaction has no RPC deadline; shutdown still cancels dialogs.
     const dialogOptions = { signal: this.options().signal };
     if (ctx.mode !== 'tui') throw new Error('Native UI requires TUI mode');
     const epoch = this.epoch;
     if (!service) service = await ctx.ui.select('Gateway apps', [...this.resources.keys()], dialogOptions) ?? '';
     const uri = this.resources.get(service);
-    if (!uri) return;
+    if (!uri) return navigation ? 'features' : undefined;
     await this.refresh(uri);
     while (epoch === this.epoch) {
       const view = this.views.get(uri);
-      if (!view) return;
-      const picked = await ctx.ui.custom<NativeControl | 'refresh' | undefined>((tui, theme, _keys, done) => {
+      if (!view) return navigation ? 'features' : undefined;
+      const picked = await ctx.ui.custom<NativeControl | 'refresh' | 'settings' | 'features' | undefined>((tui, theme, _keys, done) => {
         let list: SelectList | undefined;
         let visibleRows = 0;
         const makeList = (rows: number) => {
@@ -290,13 +290,17 @@ export class NativeUI {
             const w = Math.max(1, width);
             const body = clean(view.body ?? '').split('\n').flatMap((line) => wrapTextWithAnsi(line, w)).slice(0, Math.max(0, Math.min(6, tui.terminal.rows - 18)));
             if (tui.terminal.rows < 8) return [truncateToWidth('Enlarge terminal · Esc close', w)];
-            const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8));
+            const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8 - (navigation ? 1 : 0)));
             if (!list || rows !== visibleRows) makeList(rows);
-            const hint = w < 40 ? '↑↓ Enter · Esc close' : w < 70 ? '↑↓ Enter · Ctrl+R refresh · Esc close' : '↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc close';
-            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '', theme.fg('muted', hint)].map((line) => truncateToWidth(line, w));
+            const exit = navigation ? 'back' : 'close';
+            const hint = w < 40 ? `↑↓ Enter · Esc ${exit}` : w < 70 ? `↑↓ Enter · Ctrl+R refresh · Esc ${exit}` : `↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc ${exit}`;
+            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '',
+              ...(navigation ? [theme.fg('muted', 'Tab settings · Ctrl+O features')] : []), theme.fg('muted', hint)].map((line) => truncateToWidth(line, w));
           },
           handleInput(data: string) {
             if (matchesKey(data, Key.escape)) done(undefined);
+            else if (navigation && tui.terminal.rows >= 8 && matchesKey(data, Key.tab)) done('settings');
+            else if (navigation && tui.terminal.rows >= 8 && matchesKey(data, Key.ctrl('o'))) done('features');
             else if (matchesKey(data, Key.ctrl('r'))) done('refresh');
             else if (tui.terminal.rows >= 8) list?.handleInput(data);
             tui.requestRender();
@@ -304,9 +308,11 @@ export class NativeUI {
           invalidate() { list?.invalidate(); },
           dispose: () => { if (this.changed === changed) this.changed = () => {}; },
         };
-      }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 1 } });
+      }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
       if (epoch !== this.epoch || !picked) return;
       if (picked === 'refresh') { await this.refresh(uri); continue; }
+      if (picked === 'features') return 'features';
+      if (picked === 'settings') { await navigation!.settings(); await this.refresh(uri); continue; }
       let value = picked.value;
       const title = oneLine(picked.label);
       if (picked.kind === 'text' || picked.kind === 'number') {
