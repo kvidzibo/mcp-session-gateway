@@ -16,6 +16,7 @@ export interface GatewayConfig {
   services: ServiceConfig[];
   packages: PackageConfig[];
   packageStore: string;
+  autoUpdate: boolean;
   timeoutMs: number;
   logFile: string;
 }
@@ -51,6 +52,8 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   if (typeof logFile !== 'string' || logFile.trim() === '') {
     throw new Error('logFile must be a non-empty path string');
   }
+  const autoUpdate = data.autoUpdate === undefined ? false : data.autoUpdate;
+  if (typeof autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
   const packages = parsePackages(data.packages, dirname(absolute));
   const packageStore = data.packageStore ?? '.gateway-packages';
   if (typeof packageStore !== 'string' || !packageStore.trim()) throw new Error('packageStore must be a non-empty path');
@@ -95,5 +98,5 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
       cwd: value.cwd?.includes('{{packageRoot}}') ? value.cwd : resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });
-  return { services, packages, packageStore: resolve(dirname(absolute), packageStore), timeoutMs, logFile: resolve(dirname(absolute), logFile) };
+  return { services, packages, autoUpdate, packageStore: resolve(dirname(absolute), packageStore), timeoutMs, logFile: resolve(dirname(absolute), logFile) };
 }

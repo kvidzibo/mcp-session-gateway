@@ -138,7 +138,14 @@ with your actual URL, commands and entry point. Managed services use
 `{{packageRoot}}`; before first activation they stay stopped. Existing folders
 remain externally managed and are never silently adopted or overwritten.
 
-Opening inventory stays read-only. There are no automatic updates or restarts.
+Opening inventory stays read-only. Updates remain manual unless the gateway config
+sets `"autoUpdate": true` (default `false`). On Pi adapter startup/reload, it checks
+already-activated managed packages linked to servers, prepares and validates newer
+releases, and activates them **before** launching services. A display-only chat notice
+lists actual updates; an up-to-date startup stays quiet. External checkouts and
+first installs remain manual; running services in other sessions are not restarted.
+This opt-in authorizes trusted download/build/validation commands without per-update
+confirmation. Failures warn and use the current activation; no automatic retry occurs.
 Managed builds run trusted code with user permissions and require POSIX; Git
 inspection requires Git 2.45+. See [configuration, confirmations, storage,
 rollback and recovery](docs/packages.md) before enabling management.
@@ -151,7 +158,8 @@ for managed installation after that version is available on its `main` branch,
 or run `npm ci && npm run build:mcp` in a tested browser checkout, then launch
 `node /absolute/path/to/pi-browser/mcp/cli.mjs`.
 Merge entries into your existing configuration; do not replace other services.
-Preparation, activation and gateway restart each remain explicit operator actions.
+Preparation, activation and gateway restart remain explicit operator actions unless
+you opt into the startup update policy described above.
 
 Discover `browser__browser` through `gateway_tools` and call it through
 `gateway_call`. Cookie approval uses the existing form-elicitation route; profiles,
@@ -351,7 +359,7 @@ An unwritable log prevents startup; a later write failure reports to stderr and 
 
 ## Lifecycle and validation
 
-All launched servers must initialize successfully. Managed services without an active release stay stopped until preparation, activation and a separately confirmed restart. Startup fails and awaits child cleanup if any launched server fails. The upstream handshake happens first so child clients only advertise form elicitation when the harness supports it. Tool and resource requests wait for child startup; upstream EOF is observed throughout. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed. Cancelling or timing out a started service request (including resource reads) retires that service connection and removes its tools/resources until gateway restart (`/reload` in the adapter). MCP cancellation has no completion acknowledgement; retiring prevents late confirmations being attributed to another call. Other services stay connected.
+All launched servers must initialize successfully. Managed services without an active release stay stopped until manual preparation, activation and a separately confirmed restart; startup auto-update does not install them. Startup fails and awaits child cleanup if any launched server fails. The upstream handshake happens first so child clients only advertise form elicitation when the harness supports it. Tool and resource requests wait for child startup; upstream EOF is observed throughout. A child disconnect removes its tools; reconnect the gateway to restart it. Tool calls have the configured timeout and propagate cancellation. No automatic tool-call retries are performed. Cancelling or timing out a started service request (including resource reads) retires that service connection and removes its tools/resources until gateway restart (`/reload` in the adapter). MCP cancellation has no completion acknowledgement; retiring prevents late confirmations being attributed to another call. Other services stay connected.
 
 Closing stdin or sending SIGINT/SIGTERM closes the gateway and its direct child processes. Child shutdown allows 500 ms after EOF, then 500 ms after SIGTERM, before SIGKILL (with up to 1 second to observe exit). Final bounded drains allow up to 100 ms each for remaining child diagnostics and buffered gateway stderr. This shorter budget prevents an upstream MCP client's shutdown deadline from killing the gateway before it cleans up children. Commands that detach or launch unmanaged descendants need their own cleanup; avoid such wrappers. Gateway and child diagnostics use stderr and the log file; stdout is reserved for MCP messages. A failed gateway stderr stream triggers cleanup and suppresses further stderr output; file logging remains available during cleanup.
 

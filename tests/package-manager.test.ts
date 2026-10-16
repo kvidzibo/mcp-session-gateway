@@ -12,6 +12,7 @@ import { Gateway } from '../src/gateway.js';
 import { bindManagedService, PackageManager, runPackageCommand } from '../src/package-manager.js';
 import { parsePackages } from '../src/packages.js';
 import { managePackages } from '../pi/package-actions.js';
+import gatewayExtension from '../pi/gateway.js';
 
 test('managed releases prepare, validate, activate and roll back independently of running services, with safe failure/cancellation', { timeout: 60_000 }, async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-managed-'));
@@ -114,6 +115,84 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     const rolled = await connect();
     assert.deepEqual(await version(rolled), [{ type: 'text', text: 'one' }]);
     await access(firstPath); await access(secondPath);
+
+    await t.test('startup auto-update is opt-in, activates before launch, reports only changes, and preserves activation on failure', async () => {
+      const handlers = new Map<string, Function>(), tools = new Map<string, any>();
+      const entries: { type: string; data: any }[] = [], warnings: string[] = [];
+      gatewayExtension({
+        registerFlag() {}, getFlag: () => file, registerEntryRenderer() {}, events: { on() {} },
+        registerCommand() {}, registerTool: (tool: any) => tools.set(tool.name, tool),
+        on: (event: string, handler: Function) => handlers.set(event, handler),
+        appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
+      } as any);
+      const ctx: any = { cwd: dir, mode: 'print', hasUI: false, ui: { notify: (text: string) => warnings.push(text) } };
+      const stop = () => handlers.get('session_shutdown')!({}, ctx);
+      const start = () => handlers.get('session_start')!({}, ctx);
+      const runningVersion = async () => (await tools.get('gateway_call').execute('version', { name: 'worker__version', arguments: {} })).content;
+      try {
+        assert.equal(config.autoUpdate, false);
+        await start();
+        assert.deepEqual(await runningVersion(), [{ type: 'text', text: 'one' }]);
+        assert.deepEqual(entries, [], 'Disabled startup neither updates nor posts');
+        await stop();
+        await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: 'true' }));
+        await assert.rejects(loadConfig(file), /autoUpdate must be a boolean/);
+        await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: true }));
+        await start();
+        assert.deepEqual(await runningVersion(), [{ type: 'text', text: 'two' }], 'New servers must use the updated release immediately');
+        assert.deepEqual(entries, [{ type: 'gateway-package-updates', data: {
+          text: `MCP servers were updated:\n- worker: ${first} → ${second}`,
+        } }]);
+        await stop();
+        const prepared = (await manager.state(pkg, signal)).log;
+        await start();
+        assert.equal(entries.length, 1, 'An up-to-date startup is quiet');
+        assert.equal((await manager.state(pkg, signal)).log, prepared, 'No redundant preparation');
+        await stop();
+
+        git('commit', '--allow-empty', '-m', 'three');
+        const failedDeclaration = { ...declaration, autoUpdate: true, packages: {
+          worker: { ...declaration.packages.worker, managed: { ...declaration.packages.worker.managed,
+            validate: [{ command: process.execPath, args: ['-e', 'process.exit(9)'] }],
+          } },
+        } };
+        await writeFile(file, JSON.stringify(failedDeclaration));
+        await start();
+        assert.deepEqual(await runningVersion(), [{ type: 'text', text: 'two' }], 'A failed update still launches the existing activation');
+        assert.equal((await manager.state(pkg, signal)).active?.version, second);
+        assert.equal(entries.length, 1, 'Failure must not claim an update');
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], /MCP auto-update failed for worker/);
+        await stop();
+
+        let buildStarted!: () => void;
+        const building = new Promise<void>((resolve) => { buildStarted = resolve; });
+        const prepare = PackageManager.prototype.prepare;
+        const wrapped = t.mock.method(PackageManager.prototype, 'prepare', function (this: PackageManager, ...[pkg, plan, signal]: Parameters<typeof prepare>) {
+          return prepare.call(this, pkg, plan, signal, (text) => { if (text.includes('BUILD_WAITING')) buildStarted(); });
+        });
+        try {
+          await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: true, packages: {
+            worker: { ...declaration.packages.worker, managed: { ...declaration.packages.worker.managed,
+              build: [{ command: process.execPath, args: ['-e', "process.on('SIGTERM',()=>{});console.log('BUILD_WAITING');setInterval(()=>{},1000)"] }],
+            } },
+          } }));
+          const starting = assert.rejects(start());
+          await building;
+          await stop();
+          await starting;
+          await assert.rejects(access(join(config.packageStore, pkg.name, '.lock')), { code: 'ENOENT' });
+          assert.equal((await manager.state(pkg, signal)).active?.version, second);
+          assert.equal(entries.length, 1, 'Cancelled startup must not post or start servers');
+          await assert.rejects(tools.get('gateway_tools').execute(), /disconnected/);
+        } finally { wrapped.mock.restore(); }
+      } finally {
+        await stop();
+        git('reset', '--hard', second);
+        await writeFile(file, JSON.stringify(declaration));
+        await manager.activate(pkg, (await manager.state(pkg, signal)).revision, true, signal);
+      }
+    });
 
     await writeFile(join(firstPath, 'server.mjs'), '// dirty');
     await assert.rejects(manager.prepare(pkg, await manager.plan(pkg, signal), signal, () => {}), /Dirty checkout/);
