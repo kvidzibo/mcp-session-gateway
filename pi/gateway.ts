@@ -171,6 +171,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       managerController = controller;
       const signal = controller.signal;
       const menu = new GatewayMenu(ctx, signal);
+      const serviceSettings = async (service: string) => {
+        try { await openSettings(service, ctx); }
+        catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Settings unavailable: ${String(error)}`), 'error'); }
+      };
       let nextAction = connected ? initialAction : undefined;
       try {
         while (!signal.aborted) {
@@ -187,9 +191,16 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                 const config = await loadConfig(configPath);
                 const names = [...new Set([...config.services.map((s) => s.name), ...(launchedServices ?? [])])];
                 const service = await menu.choose(['Gateway', 'Services'], 'Choose a service · listed does not mean running',
-                  names.map((name) => ({ id: name, label: name, description: 'Open this service’s app, settings and resources. Listed does not mean running.' })));
+                  names.map((name) => ({ id: name, label: name, description: 'Enter opens the app when available; Tab opens settings. Listed does not mean running.' })),
+                  { label: 'settings', action: serviceSettings });
                 if (!service) break;
+                let openApp = native.has(service);
                 while (!signal.aborted && connected) {
+                  if (openApp) {
+                    openApp = false;
+                    if (await native.open(service, ctx, { settings: () => serviceSettings(service) }) !== 'features') break;
+                    if (signal.aborted || !connected) break;
+                  }
                   const options = { signal: lifetime.signal, timeout };
                   let editable = false, settingsError = '';
                   try {
@@ -203,8 +214,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                     { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.' },
                   ]);
                   if (!selected) break;
-                  if (selected === 'app') await native.open(service, ctx);
-                  if (selected === 'settings') await openSettings(service, ctx);
+                  if (selected === 'app') openApp = true;
+                  if (selected === 'settings') await serviceSettings(service);
                   if (selected === 'resources') {
                     while (!signal.aborted && connected) {
                       try {

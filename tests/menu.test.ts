@@ -63,6 +63,81 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
   }
 });
 
+test('service selection opens its app directly; Tab opens private settings and returns to the caller', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gateway-app-tab-'));
+  const config = join(dir, 'gateway.json');
+  const commands = new Map<string, any>(), handlers = new Map<string, Function>();
+  const screens: string[] = [], notices: string[] = [];
+  const steps = [
+    ['Gateway › Services', '\t'], ['Service settings', escape],
+    ['Gateway › Services', '\r'], ['Service app', '\t'], ['Service settings', escape],
+    ['Service app', '\x0f'], ['Gateway › Services › demo', escape],
+    ['Gateway › Services', '\r'], ['Service app', escape],
+    ['Gateway › Services', escape], ['Gateway', escape],
+  ];
+  const fixture = `
+    import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+    import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+    import {ListToolsRequestSchema,ListResourcesRequestSchema,ReadResourceRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+    import {z} from 'zod';
+    const contract = {version:1,getMethod:'kvidzibo/settings/get',updateMethod:'kvidzibo/settings/update',authorization:'token',audience:'operator'};
+    const token = process.env.SERVICE_SETTINGS_TOKEN;
+    delete process.env.SERVICE_SETTINGS_TOKEN;
+    const server = new Server({name:'demo',version:'1'}, {capabilities:{tools:{},resources:{},experimental:{'native-ui-v1':{},'com.kvidzibo/settings':contract}}});
+    server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[]}));
+    server.setRequestHandler(ListResourcesRequestSchema,async()=>({resources:[{uri:'test://app',name:'App',mimeType:'application/vnd.mcp-native-ui+json'}]}));
+    server.setRequestHandler(ReadResourceRequestSchema,async()=>({contents:[{uri:'test://app',mimeType:'application/vnd.mcp-native-ui+json',text:JSON.stringify({version:1,title:'Service app',revision:'r1',state:{},controls:[]})}]}));
+    server.setRequestHandler(z.object({method:z.literal('kvidzibo/settings/get'),params:z.object({token:z.string()})}),async r=>{
+      if(r.params.token!==token) throw Error('Unauthorized');
+      return {schemaVersion:1,title:'Service settings',revision:'r1',writable:true,schema:{type:'object',properties:{enabled:{type:'boolean'}}},values:{enabled:true}};
+    });
+    await server.connect(new StdioServerTransport());
+  `;
+  gatewayExtension({
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} }, registerTool() {},
+    registerCommand: (name: string, command: any) => commands.set(name, command),
+    on: (event: string, handler: Function) => handlers.set(event, handler), appendEntry() {},
+  } as any);
+  const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
+    sessionManager: { getBranch: () => [], getSessionId: () => 'app-tab-test' },
+    ui: { notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
+      custom: async (factory: Function) => {
+        let answer: unknown, finished = false;
+        const terminal = { rows: 30, columns: 100 };
+        const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; finished = true; });
+        try {
+          const lines: string[] = panel.render(98);
+          const step = steps.shift();
+          assert.ok(step, `Unexpected dialog: ${lines.join('\n')}`);
+          assert.ok(lines.includes(step[0]), `Expected ${step[0]}: ${lines.join('\n')}`);
+          screens.push(step[0]);
+          for (const columns of [38, 80, 100]) {
+            terminal.columns = columns;
+            const rendered: string[] = panel.render(columns - 2);
+            assert.ok(rendered.length <= terminal.rows - 2);
+            assert.ok(rendered.every((line) => visibleWidth(line) <= columns - 2));
+            if (step[0] === 'Gateway › Services' || step[0] === 'Service app') assert.match(rendered.join('\n'), /Tab settings/);
+          }
+          panel.handleInput(step[1]);
+          assert.ok(finished, 'Shortcut must complete the current overlay before opening another');
+          return answer;
+        } finally { panel.dispose(); }
+      },
+    },
+  };
+  try {
+    await writeFile(config, JSON.stringify({ mcpServers: { demo: { command: process.execPath, args: ['--input-type=module', '-e', fixture], cwd: new URL('../', import.meta.url).pathname, settings: { tokenEnv: 'SERVICE_SETTINGS_TOKEN' } } } }));
+    await handlers.get('session_start')!({}, ctx);
+    await commands.get('pi-services').handler('', ctx);
+    assert.deepEqual(steps, []);
+    assert.equal(screens.filter((screen) => screen === 'Service settings').length, 2);
+    assert.deepEqual(notices, [], 'Navigation does not issue writes, actions, or model turns');
+  } finally {
+    await handlers.get('session_shutdown')!({}, ctx);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('one gateway menu preserves navigation, bounds rendering, and recovers after failed and successful restarts', async () => {
   const controller = new AbortController();
   const terminal = { rows: 24, columns: 80 };
@@ -131,7 +206,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
         const render = () => panel.render(98) as string[];
         try {
           const lines = render();
-          if (lines[0] === 'Healthy app') { appsOpened++; panel.handleInput(escape); }
+          if (lines[0] === 'Healthy app') { appsOpened++; panel.handleInput('\x0f'); }
           else if (lines[1] === 'Restart gateway services?') {
             restartAttempts++;
             if (restartAttempts === 2) {
@@ -199,7 +274,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(navigation, [], 'Slow aggregate listing must reach Resources without retiring healthy children');
     assert.ok(notices.some((text) => text.includes('Resources unavailable:') && text.includes('Unrelated service discovery failed')));
-    assert.equal(appsOpened, 1, 'An unrelated resource-list error cannot block a healthy service app');
+    assert.equal(appsOpened, 2, 'Selection opens the app directly, and unrelated resource-list errors cannot block reopening it');
     await handlers.get('session_shutdown')!({}, ctx);
     const count = notices.length;
     await commands.get('gateway').handler('', { ...ctx, mode: 'rpc' });

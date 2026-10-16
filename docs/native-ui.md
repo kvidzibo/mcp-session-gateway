@@ -4,8 +4,11 @@ This is a **private extension over MCP**, not HTML MCP Apps. A service supplies
 validated JSON screens; the Pi adapter renders them without importing service
 code or running a model turn. The gateway remains service-agnostic.
 
-Use **`/gateway` → Services → service → Open app**. Use arrows/Enter to
-navigate, Ctrl+R to refresh, and Escape to return to the service menu. Controls have labels and optional
+Use **`/pi-services` → service** (or **`/gateway` → Services → service**)
+to open an available app directly. Use arrows/Enter to navigate, Ctrl+R to refresh,
+Tab to open service settings, Ctrl+O for the service feature menu (including
+Resources), and Escape to return to Services. Closing settings returns to the app.
+Services without an app open their feature menu instead. Controls have labels and optional
 icons/descriptions. Forms save only when their action succeeds; confirmation
 prompts show the proposed value in a scrollable review. Every line must be displayed
 before Enter confirms; resizing resets review and Escape cancels. Proposed values
@@ -19,7 +22,7 @@ For terminal clicks, append [`pi/kitty/open-actions.conf`](../pi/kitty/open-acti
 to Kitty's existing open-actions file, replacing its absolute helper path. Reload
 Kitty with Ctrl+Shift+F5. Regular mode uses normal link clicks; fullscreen uses
 Ctrl+Shift+click so Kitty, not Pi's URL opener, handles the link. Other terminals
-can install an equivalent protocol handler or use **Open app** as a keyboard fallback.
+can install an equivalent protocol handler or select the service in **`/pi-services`** as a keyboard fallback.
 The helper signals a private local socket; it never runs a service command itself.
 Installation does not change terminal configuration.
 

@@ -89,10 +89,9 @@ Neither command starts a model turn:
 
 ```text
 Gateway
-├─ Services → service
-│  ├─ Open app
-│  ├─ Settings
-│  └─ Resources → resource
+├─ Services → service → app (when available)
+│  ├─ Tab → Settings (also from the service list)
+│  └─ Ctrl+O → service features → Open app / Settings / Resources
 ├─ Packages
 │  ├─ Installed versions
 │  ├─ Check for updates
@@ -103,6 +102,10 @@ Gateway
 ```
 
 Use **↑/↓** and **Enter**; **Escape** returns one level, closing only at the root.
+Selecting a service opens its app immediately when available; otherwise it opens
+its feature menu. **Tab** opens settings for the highlighted service or current
+app; closing settings returns to that list/app. In an app, **Ctrl+O** opens the
+feature menu (including Resources), and **Escape** returns to Services.
 Menus remember your selection while open. Read-only details, package inventory/logs,
 and resources share a scrollable viewer: **↑/↓** or **PgUp/PgDn** scroll, **Escape**
 returns, and **r** refreshes inventory/resources (inventory refresh stays local).
@@ -153,7 +156,7 @@ Preparation, activation and gateway restart each remain explicit operator action
 Discover `browser__browser` through `gateway_tools` and call it through
 `gateway_call`. Cookie approval uses the existing form-elicitation route; profiles,
 manual login, cookie-site selection, display modes and logout use **`/gateway` →
-Services → browser → Open app**. No browser-specific host code or private socket
+Services → browser**. No browser-specific host code or private socket
 is needed. Approvals and native UI actions are not model tool results.
 
 Set `timeoutMs` high enough for consent plus browser startup (the example uses
@@ -186,7 +189,7 @@ parent activity. Cards show role, model/reasoning, task preview, elapsed/queue t
 job ID and current/recent tool activity. Completed jobs remain for eight seconds;
 finished means **unverified**, not successful. Disconnects retain a stale warning
 and freeze the last-known clock instead of claiming completion. **`/gateway` →
-Services → service → Resources** opens the full resource JSON; the compact widget shows overflow counts on small
+Services → service → Ctrl+O → Resources** opens the full resource JSON; the compact widget shows overflow counts on small
 terminals. Settings and approval dialogs remain usable while the widget is visible.
 
 The adapter owns one gateway connection for both tools and UI. It does not load
@@ -212,7 +215,9 @@ interpret delegate JSON. The adapter validates the declared format and caps it a
 
 ## Child-server settings
 
-With the optional Pi adapter, use **`/gateway` → Services → service → Settings**. Settings are discovered from the
+With the optional Pi adapter, use **`/pi-services`**, highlight a service and press
+**Tab**, or press **Tab** in its app. The service feature menu also offers Settings.
+Settings are discovered from the
 child's schema, not hardcoded service names or the parent Pi model catalogue.
 Edits stay in a local draft until **Save changes** shows the exact changes and you
 confirm. Escape/Back discards the draft; declining a save leaves it editable.
