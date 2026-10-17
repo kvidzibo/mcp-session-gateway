@@ -23,7 +23,8 @@ controls/confirmations without model turns.
 Click normally; double-click invokes the declared double action. Action titles are not
 terminal hyperlinks, so they add no hyperlink underline or hand pointer and do not take
 keyboard focus. Hover hints name actions when space permits. A fast double-click waits
-for its single-click preview; one accepting gesture cannot complete the newly selected
+for its single-click preview without collapsing the service counters or moving the title;
+one accepting gesture cannot complete the newly selected
 task. The app launcher opens the service menu; Escape returns to the editor. Safe external
 URLs remain terminal links. No Kitty handler or saved terminal setting is needed for these
 native actions. Try a separate Pi process with `--tui-mode fullscreen`; regular mode is unchanged.

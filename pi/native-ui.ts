@@ -9,6 +9,7 @@ import { GatewayMenu } from './menu.js';
 import { confirmSettings, inputSettings } from './settings.js';
 import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, FooterStylesFeaturesSchema, FooterDoubleFeaturesSchema, FooterNativeFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
+type Interaction = (showDialog: () => void) => Promise<boolean>;
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
 const transferKey = Symbol.for('gateway.native-ui.new-session');
 const transfers = ((globalThis as any)[transferKey] ??= new Map<string, Entry[]>()) as Map<string, Entry[]>;
@@ -37,7 +38,7 @@ export class NativeUI {
   private fullscreen = false;
   private repaint = () => {};
 
-  constructor(private pi: ExtensionAPI, private client: () => Client, private options: () => { signal: AbortSignal; timeout: number }, private interact: (run: () => Promise<boolean>) => Promise<boolean> = (run) => run()) {}
+  constructor(private pi: ExtensionAPI, private client: () => Client, private options: () => { signal: AbortSignal; timeout: number }, private interact: (run: Interaction) => Promise<boolean> = (run) => run(() => {})) {}
 
   current(): () => boolean {
     const epoch = this.epoch;
@@ -125,7 +126,7 @@ export class NativeUI {
         return new NativeFooter(() => [...this.views].map(([uri, view]) => ({ uri, view })), theme,
           async ({ uri, view }, item, action) => {
             if (epoch !== this.epoch || !this.resources.has(serviceOf(uri))) return false;
-            if (item.openApp) return this.interact(async () => { await this.open(serviceOf(uri), ctx); return true; });
+            if (item.openApp) return this.interact(async (showDialog) => { showDialog(); await this.open(serviceOf(uri), ctx); return true; });
             return action ? this.footerAction(uri, view, action, epoch) : false;
           }, this.repaint);
       }, { placement: 'belowEditor' });
@@ -210,14 +211,17 @@ export class NativeUI {
   }
 
   private footerAction(uri: string, view: NativeView, action: string, epoch: number): Promise<boolean> {
-    return this.interact(async () => {
+    return this.interact(async (showDialog) => {
       const ctx = this.ctx;
       if (!ctx || epoch !== this.epoch || this.resources.get(serviceOf(uri)) !== uri) return false;
       try {
         const control = view.controls.find((c) => c.id === action && c.kind === 'action');
         if (!control) return false;
-        if (control.confirm && !await confirmSettings(ctx, clean(control.confirm), { signal: this.options().signal, title: oneLine(control.label), actionLabel: 'confirm' })) return false;
-        return await this.dispatch(uri, view, control, undefined, ctx, epoch);
+        if (control.confirm) {
+          showDialog();
+          if (!await confirmSettings(ctx, clean(control.confirm), { signal: this.options().signal, title: oneLine(control.label), actionLabel: 'confirm' })) return false;
+        }
+        return await this.dispatch(uri, view, control, undefined, ctx, epoch, showDialog);
       } finally { if (epoch === this.epoch && this.views.get(uri)) this.renderFooter(uri, this.views.get(uri)!); }
     });
   }
@@ -269,7 +273,7 @@ export class NativeUI {
       : picked.revision === control.revision && current.revision === view.revision;
   }
 
-  private async dispatch(uri: string, view: NativeView, picked: NativeControl, value: NativeControl['value'], ctx: ExtensionContext, epoch: number): Promise<boolean> {
+  private async dispatch(uri: string, view: NativeView, picked: NativeControl, value: NativeControl['value'], ctx: ExtensionContext, epoch: number, showDialog = () => {}): Promise<boolean> {
     const service = serviceOf(uri);
     let attempted = false;
     try {
@@ -287,6 +291,7 @@ export class NativeUI {
       await this.refresh(uri);
       if (epoch !== this.epoch || !this.views.has(uri)) return false;
       if (result.preview) this.pi.appendEntry('gateway-native-preview', { title: oneLine(view.title), text: clean(result.preview) });
+      if (result.draft) showDialog();
       if (result.draft && await ctx.ui.confirm('Insert draft?', clean(result.draft), { signal: this.options().signal }) && epoch === this.epoch) {
         if (ctx.ui.getEditorText().trim()) ctx.ui.notify('Draft preserved; clear the editor before inserting a server draft', 'warning');
         else ctx.ui.setEditorText(editorText(result.draft));

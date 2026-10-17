@@ -128,3 +128,89 @@ test('gateway footer counts configuration, opens Services repeatedly, and keeps 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('note preview preserves full counter rows through double-click completion, but dialogs still compact', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gateway-footer-layout-'));
+  const config = join(dir, 'gateway.json');
+  const fixture = `
+    import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+    import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+    import {ListResourcesRequestSchema,ReadResourceRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+    import {z} from 'zod';
+    const server = new Server({name:'footer',version:'1'}, {capabilities:{resources:{},experimental:{'native-ui-v1':{}}}});
+    const view = (state={}, native=false) => ({version:1,title:'Tasks',revision:'r1',state,
+      controls:['preview','done'].map(id => ({id,kind:'action',label:id,revision:id})),
+      footer:[...(native ? [{text:'▤ ',openApp:true}] : []),
+        {text:state.done ? 'No task' : 'Task title',...(state.done ? {} : {action:'preview',doubleAction:'done'})}]});
+    const current = r => view(r.params._meta['native-ui/context'].state,
+      r.params._meta['native-ui/features']?.footerNativeActions);
+    server.setRequestHandler(ListResourcesRequestSchema,async()=>({resources:[{uri:'test://root',name:'Tasks',mimeType:'application/vnd.mcp-native-ui+json'}]}));
+    server.setRequestHandler(ReadResourceRequestSchema,async r=>({contents:[{uri:'test://root',mimeType:'application/vnd.mcp-native-ui+json',text:JSON.stringify(current(r))}]}));
+    server.setRequestHandler(z.object({method:z.literal('native-ui/action'),params:z.any()}),async r=>{
+      const result = current(r);
+      if(r.params.action==='done') result.state = {done:true};
+      return {view:result,...(r.params.action==='preview' ? {preview:'Task details'} : {})};
+    });
+    await server.connect(new StdioServerTransport());
+  `;
+  await writeFile(config, JSON.stringify({ display: 'full', mcpServers: {
+    demo: { command: process.execPath, args: ['--input-type=module', '-e', fixture], cwd: new URL('../', import.meta.url).pathname },
+  } }));
+  try {
+    for (const mode of ['regular', 'fullscreen']) {
+      const handlers = new Map<string, Function>(), commands = new Map<string, any>();
+      const widgets = new Map<string, any>(), statuses = new Map<string, string>();
+      const previews: number[][] = [], dialogs: number[] = [], notices: string[] = [];
+      const theme = { fg: (_: string, text: string) => text };
+      const heights = () => [24, 140].map(width => widgets.get('gateway-call-counts').render(width).length);
+      const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
+        sessionManager: { getBranch: () => [], getSessionId: () => mode },
+        ui: { theme, notify: (message: string) => notices.push(message),
+          setStatus: (key: string, value: string) => statuses.set(key, value),
+          setWidget: (key: string, factory: any) => widgets.set(key, factory?.({ mode, requestRender() {} }, theme)),
+          custom: async (factory: Function) => {
+            dialogs.push(heights()[1]);
+            let answer: unknown;
+            const panel = factory({ terminal: { rows: 30, columns: 140 }, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; });
+            try { panel.render(138); panel.handleInput('\x1b'); return answer; }
+            finally { panel.dispose(); }
+          },
+        },
+      };
+      gatewayExtension({
+        registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, registerTool() {}, events: { on() {} },
+        registerCommand: (name: string, command: any) => commands.set(name, command),
+        appendEntry: (type: string) => { if (type === 'gateway-native-preview') previews.push(heights()); },
+        on: (event: string, handler: Function) => handlers.set(event, handler),
+      } as any);
+      try {
+        await handlers.get('session_start')!({}, ctx);
+        const before = heights();
+        assert.ok(before.every(height => height > 1));
+        const native = widgets.get('gateway-native-footers');
+        const act = async (count: number) => {
+          if (mode === 'fullscreen') {
+            const text = native.render(140).join('\n');
+            native.handleMouse({ type: 'click', button: 'left', x: text.indexOf('Task title'), y: 0, clickCount: count });
+            await native.queue;
+          } else {
+            const url = statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b\x07]+/)![0];
+            await click(url, count === 2 ? 'double' : false);
+          }
+        };
+        await act(1);
+        assert.deepEqual(previews, [before], `${mode}: even transient preview renders must keep the title in place`);
+        assert.deepEqual(heights(), before);
+        await act(2);
+        assert.match(mode === 'fullscreen' ? native.render(140).join('') : statuses.get('gateway-ui:demo')!, /No task/);
+        if (mode === 'fullscreen') {
+          native.handleMouse({ type: 'click', button: 'left', x: 0, y: 0, clickCount: 1 });
+          await native.queue;
+        } else await commands.get('gateway').handler('', ctx);
+        assert.ok(dialogs.length && dialogs.every(height => height === 1), 'Actual menus still reserve room for controls');
+        assert.deepEqual(heights(), before);
+        assert.deepEqual(notices, []);
+      } finally { await handlers.get('session_shutdown')!({}, ctx); }
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
