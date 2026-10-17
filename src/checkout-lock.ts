@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, readlink, realpath, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -29,26 +29,35 @@ async function lockPath(root: string): Promise<string> {
   return join(root, 'dist/.gateway-build.lock');
 }
 
-/** Snapshot adapter sources, dependency metadata and the update receipt while holding the mutex. */
-export async function checkoutIdentity(root: string): Promise<string> {
+/** Fingerprint runtime inputs while holding the mutex; lockfiles alone cannot detect repaired dependencies. */
+export async function checkoutIdentity(root: string, signal?: AbortSignal): Promise<string> {
   const hash = createHash('sha256');
-  const file = async (path: string) => {
-    hash.update(JSON.stringify(path));
-    try { hash.update(await readFile(path)); }
+  const file = async (path: string, link = false) => {
+    signal?.throwIfAborted();
+    hash.update(JSON.stringify([path, link]));
+    try {
+      hash.update(String((await lstat(path)).mode & 0o777));
+      hash.update(link ? await readlink(path) : await readFile(path));
+    }
     catch (error) { if (!missing(error)) throw error; hash.update('missing'); }
     hash.update('\0');
   };
   const tree = async (path: string): Promise<void> => {
+    signal?.throwIfAborted();
     let entries;
-    try { entries = await readdir(path, { withFileTypes: true }); }
+    try {
+      hash.update(JSON.stringify([path, (await lstat(path)).mode & 0o777]));
+      entries = await readdir(path, { withFileTypes: true });
+    }
     catch (error) { if (missing(error)) return; throw error; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (join(path, entry.name) === join(root, 'dist/.gateway-build.lock')) continue;
       if (entry.isDirectory()) await tree(join(path, entry.name));
-      else if (entry.isFile()) await file(join(path, entry.name));
+      else if (entry.isFile() || entry.isSymbolicLink()) await file(join(path, entry.name), entry.isSymbolicLink());
     }
   };
-  for (const path of ['src', 'pi']) await tree(join(root, path));
-  for (const path of ['package.json', 'package-lock.json', 'node_modules/.package-lock.json']) await file(join(root, path));
+  for (const path of ['src', 'pi', 'examples', 'node_modules', 'dist']) await tree(join(root, path));
+  for (const path of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json']) await file(join(root, path));
   const git = await gitDirectories(root);
   if (git) await file(join(git.gitDir, 'mcp-gateway-local.json'));
   return hash.digest('hex');

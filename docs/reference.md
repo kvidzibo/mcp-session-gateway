@@ -71,18 +71,18 @@ behavior's introduction also builds to record a fingerprint. Fresh builds are re
 Requires `npm ci` development dependencies and **POSIX process-group support**. The build check
 itself never installs dependencies or updates sources; the separate [gateway startup update
 policy](packages.md#gateway-self-updates) can do both. Standalone/built-in launches need manual builds. Concurrent
-launches, dependency imports and automatic updates share a **five-minute lock-wait limit**;
-builds also have a five-minute deadline. The dependency-light adapter loader waits before importing
-packages that an update may be replacing. On a fresh Pi, automatic updates run in a disposable
-worker before runtime imports, so successful updates need no second launch. Discovery only registers
+launches and automatic updates have a **five-minute lock-wait limit**; builds also have a
+five-minute deadline. The dependency-light loader runs automatic updates in a disposable worker
+before importing a versioned runtime copy, including on `/reload`. Copying holds the checkout
+lock; compilation and the child handshake hold the copy's build lock. Discovery only registers
 lightweight tools/commands; runtime imports happen at session startup or on demand for recovery
-commands. The launch lock stays held through the child handshake.
-Readiness and loaded-installation identity are rechecked under that lock. Shutdown cancels compilation; already-running gateways
-are never rebuilt/restarted.
+commands. Readiness blocks service startup, not recovery menus. Shutdown cancels copying and compilation;
+already-running gateway copies are never replaced or restarted.
 
 Failure leaves the gateway disconnected, not stale. Finish gateway jobs and wait for all updates
 and builds before manually running `npm ci --include=dev`; manual npm commands do not take the
-gateway lock. Start a fresh Pi with Auto update on to rebuild/validate an interrupted self-update.
+gateway lock. Run `/reload` with Auto update on to rebuild/validate an interrupted self-update.
+A Pi process still using the old loader may need one full restart during migration.
 Do not delete failed-build receipts.
 
 Git checkouts use `mcp-gateway-build.lock` in the Git common directory (shared by linked worktrees);

@@ -98,7 +98,9 @@ Concurrency defaults to `min(4, max(1, floor(available CPU cores / 2)))`, using 
 `availableParallelism()` for affinity. `"autoUpdateConcurrency"` accepts integers **1–128**; `1` is
 sequential. It limits whole package operations, whose steps remain sequential. Builds/tests may use
 more cores; higher limits increase RAM/disk contention. Canonical Git-common-directory peers
-serialize; locks held elsewhere are refused. Results retain config order.
+serialize. Competing automatic managed updates wait up to five minutes, then re-plan under the
+package lock; preparation and activation share that lock (including confirmed bulk updates). Only one session builds a given update.
+Manual release previews still reject contention or changed revisions. Results retain config order.
 
 No same-startup retries. Managed failures warn and retain activation. Refused local updates may
 launch existing files if guards pass: dirtiness/feature branches alone do not block launch. Local
@@ -124,35 +126,41 @@ main/master upstream, including feature/detached branches, skip self-checks/upda
 With Auto update on, startup/reload uses the local-update safeguards below: clean main/master,
 fast-forward only, serialized updates, and no hooks, executable filters, submodules or credentials.
 Shared/out-of-checkout `node_modules` or `dist` directories are refused before commands run.
-Dependency imports, launch builds and local updates use the same Git-common-directory build lock,
-so automatic dependency installation cannot overlap adapter loading, compilation or the child
-startup handshake. Each process remembers its loaded installation; a changed source/dependency
-snapshot requires a fresh Pi, including after another session updates it. Reload cannot reset this guard.
+Local updates and runtime-copy creation use the same Git-common-directory build lock. Each
+adapter loads a separate copy of its sources, dependencies and compiled gateway, so another
+session's checkout update cannot replace its files or mix cached modules.
 It runs `npm ci --include=dev`, `npm run build`, then `npm run check`. The first enabled launch also
 builds/validates the current revision; later unchanged launches reuse that receipt. This updates
 the installation shared by configurations/sessions using this checkout—not just one config.
 
-**A fresh Pi updates before loading the adapter.** A disposable TypeScript worker imports the
-updater under the dependency lock, then installs/builds/validates and exits. Pi imports the resulting
-adapter under that same lock and starts services in the same launch; no second restart is needed.
-Extension discovery/help starts no updater or services. Opening a recovery command before session
-startup loads the adapter without updating or connecting.
+**Startup and `/reload` update before loading the adapter.** A disposable TypeScript worker
+imports the updater under the dependency lock, then installs/builds/validates and exits. Pi copies
+the completed installation under the same lock and loads that version's unique module paths.
+Copies are keyed by source/configuration, compiled output, dependency contents, permissions and symlink identities; unchanged
+copies are reused. Extension discovery/help starts no updater or services. Opening a
+recovery command before session startup loads a copy without updating or connecting.
 
-**Updates after the adapter is loaded still require a fresh Pi.** The adapter stays disconnected
-rather than mix cached modules with replaced sources/dependencies. `/reload` cannot reset that
-guard. Running sessions are never restarted automatically; finish their work before enabling updates. Connection-menu restarts check but do not self-update. Direct CLI/built-in MCP
-launches remain manual; this is the Pi adapter's startup policy.
+Runtime copies live under `$XDG_CACHE_HOME/mcp-gateway/runtimes` (default `~/.cache`), keyed
+by checkout and fingerprint. The cache must be outside the checkout so module/compiler lookup
+cannot fall back to mutable source dependencies. They contain real dependency copies (reflinks where supported), not hard links or external symlinks,
+and can consume substantial disk space. Incomplete copies are never loaded. Copies captured
+from an unready installation allow recovery menus only; `/reload` after repair adopts a validated copy. There is no automatic
+pruning: remove old copies only after all Pi processes using them have exited. Existing sessions
+stay pinned; `/reload` adopts current sources without restarting Pi. The first migration from the
+old loader may require one fresh Pi process. Connection-menu restarts retain the loaded copy and
+only check for updates. Direct CLI/built-in MCP launches remain manual.
 
 Pre-mutation refusals warn and may launch existing files. Incomplete/failed builds block adapter
-launches even with Auto update off; retry a fresh Pi with Auto update on to repair, or inspect
+launches even with Auto update off; retry `/reload` with Auto update on to repair, or inspect
 `mcp-gateway-local.log`/`mcp-gateway-local.json` in the checkout's Git directory. Keep receipts;
 [local-update recovery](#local-git-packages) applies. Notifications are display-only, not model turns.
 
 ### Effects on running sessions
 
 **Updates never restart services. Finish affected jobs in all sessions first.** Managed activation
-changes future launches throughout the shared store; local updates immediately change shared
-files/dependencies/outputs that running services may read. Completed changes are not rolled back.
+changes future launches throughout the shared store. The Pi gateway's isolated runtime stays
+unchanged; other local service updates immediately change shared files/dependencies/outputs
+that running services may read. Completed changes are not rolled back.
 Restart separately through [Workflow](#workflow).
 
 ## Local Git packages

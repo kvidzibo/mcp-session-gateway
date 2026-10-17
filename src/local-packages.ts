@@ -64,7 +64,6 @@ export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal
   progress: (stage: 'checking' | 'updating') => void): Promise<{ name: string; from: string; version: string } | undefined> {
   progress('checking');
   const paths = await checkout(pkg, signal);
-  if (await exists(paths.lock)) throw new Error(`Local checkout is locked; never delete a live lock: ${paths.lock}`);
   return withCheckoutLock(paths.root, signal, (recordGroup) => updateLocked(pkg, signal, progress, recordGroup));
 }
 

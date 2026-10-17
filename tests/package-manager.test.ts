@@ -13,6 +13,7 @@ import { bindManagedService, PackageManager, runPackageCommand } from '../src/pa
 import { parsePackages } from '../src/packages.js';
 import { managePackages } from '../pi/package-actions.js';
 import registerGateway from '../pi/runtime.js';
+import { ensureGatewayBuild } from '../pi/build.js';
 
 // Service/UI tests must never fetch or install into the checkout hosting this test.
 const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
@@ -20,8 +21,10 @@ const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => register
 test('managed releases prepare, validate, activate and roll back independently of running services, with safe failure/cancellation', { timeout: 60_000 }, async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-managed-'));
   const root = fileURLToPath(new URL('../', import.meta.url));
+  await ensureGatewayBuild(root, new AbortController().signal);
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
-  const originalPath = process.env.PATH;
+  const originalPath = process.env.PATH, oldCache = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = join(dir, 'runtime-cache');
   const connections: { client: Client; transport: StdioClientTransport }[] = [];
   const signal = new AbortController().signal;
   let shutdownExtension: (() => Promise<void>) | undefined;
@@ -192,9 +195,10 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
 
         let buildStarted!: () => void;
         const building = new Promise<void>((resolve) => { buildStarted = resolve; });
-        const prepare = PackageManager.prototype.prepare;
-        const wrapped = t.mock.method(PackageManager.prototype, 'prepare', function (this: PackageManager, ...[pkg, plan, signal]: Parameters<typeof prepare>) {
-          return prepare.call(this, pkg, plan, signal, (text) => { if (text.includes('BUILD_WAITING')) buildStarted(); });
+        const prototype = PackageManager.prototype as any;
+        const prepare = prototype.prepareLocked;
+        const wrapped = t.mock.method(prototype, 'prepareLocked', function (this: PackageManager, pkg: unknown, plan: unknown, signal: AbortSignal, _output: unknown, state: unknown, record: unknown) {
+          return prepare.call(this, pkg, plan, signal, (text: string) => { if (text.includes('BUILD_WAITING')) buildStarted(); }, state, record);
         });
         try {
           await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: true, packages: {
@@ -218,6 +222,28 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
         await writeFile(file, JSON.stringify(declaration));
         await manager.activate(pkg, (await manager.state(pkg, signal)).revision, true, signal);
       }
+    });
+
+    await t.test('competing startup updates wait and re-plan without duplicate preparation or activation', async () => {
+      const manager2 = new PackageManager(config.packageStore);
+      const before = await manager.state(pkg, signal);
+      const progress: string[] = [];
+      const updates = await Promise.all([manager, manager2].map((owner) => owner.update(pkg, signal, (stage) => progress.push(stage))));
+      assert.equal(updates.filter(Boolean).length, 1);
+      assert.deepEqual(updates.find(Boolean), { name: pkg.name, from: first, version: second });
+      assert.equal(progress.filter((stage) => stage === 'updating').length, 1);
+      const after = await manager.state(pkg, signal);
+      assert.equal(after.active?.version, second);
+      assert.deepEqual(after.previous, before.active, 'A waiting startup must not overwrite rollback history');
+      await manager.activate(pkg, after.revision, true, signal);
+      const lock = join(config.packageStore, pkg.name, '.lock');
+      await writeFile(lock, 'held by a live operation');
+      const cancelled = new AbortController();
+      const waiting = manager2.update(pkg, cancelled.signal, () => {});
+      cancelled.abort(new Error('shutdown while waiting'));
+      await assert.rejects(waiting, /shutdown while waiting/);
+      assert.equal(await readFile(lock, 'utf8'), 'held by a live operation', 'Cancellation never removes another owner’s lock');
+      await rm(lock);
     });
 
     await writeFile(join(firstPath, 'server.mjs'), '// dirty');
@@ -401,6 +427,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     await shutdownExtension?.();
     await Promise.allSettled(connections.map(async ({ client, transport }) => { try { await client.close(); } finally { await transport.close(); } }));
     if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    if (oldCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = oldCache;
     await rm(dir, { recursive: true, force: true });
   }
 });

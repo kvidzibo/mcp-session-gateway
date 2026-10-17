@@ -1,19 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { localPackageRoot, updateLocalPackage } from '../src/local-packages.js';
 import { inspectPackage, localGitSource, type PackageConfig } from '../src/packages.js';
-
-// Pi recreates extension modules/factories on /reload, but replaced dependencies require
-// a new process. Keep this flag on the process rather than in an extension instance.
-const restartKey = Symbol.for('local-stdio-mcp-gateway.restart-required');
-const processState = process as NodeJS.Process & { [restartKey]?: Set<string> };
-export function gatewayNeedsRestart(root: string): boolean {
-  return processState[restartKey]?.has(resolve(root)) ?? false;
-}
-
-export function requireGatewayRestart(root: string): void {
-  (processState[restartKey] ??= new Set()).add(resolve(root));
-}
 
 function gatewayPackage(root: string): PackageConfig {
   const step = (...args: string[]) => ({ command: 'npm', args, cwd: '.' });
@@ -71,10 +59,7 @@ export async function checkGatewayUpdate(root: string, autoUpdate: boolean, sign
     }
     try {
       if (autoUpdate) {
-        const updated = await updateLocalPackage(pkg, signal, (stage) => {
-          if (stage === 'updating') requireGatewayRestart(root);
-          progress(stage);
-        });
+        const updated = await updateLocalPackage(pkg, signal, progress);
         if (updated) notify(`Gateway updated to ${updated.version.slice(0, 12)}.`, 'info');
       } else {
         progress('checking');

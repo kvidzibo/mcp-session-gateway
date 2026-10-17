@@ -95,15 +95,15 @@ test('Update all packages confirms once, updates unlinked active packages with A
     ...(pkg.name === 'inactive' ? {} : { active: { id: 'old', version: '1.0.0' } }),
     ...(prepared.includes(pkg.name) ? { prepared: { id: 'new', version: '2.0.0' } } : {}),
   }));
-  t.mock.method(PackageManager.prototype, 'plan', async () => ({ version: '2.0.0', from: '1.0.0', revision: 'test', definition: '' }));
-  t.mock.method(PackageManager.prototype, 'prepare', async (pkg: any, _plan: unknown, signal: AbortSignal) => {
+  t.mock.method(PackageManager.prototype, 'update', async (pkg: any, signal: AbortSignal) => {
+    if (pkg.name === 'inactive') return;
     if (pkg.name === 'broken') {
       if (cancel) { cancelReady(); if (!signal.aborted) await once(signal, 'abort'); signal.throwIfAborted(); }
       throw new Error('validation failed');
     }
-    prepared.push(pkg.name);
+    prepared.push(pkg.name); activated.push(pkg.name);
+    return { name: pkg.name, from: '1.0.0', version: '2.0.0' };
   });
-  t.mock.method(PackageManager.prototype, 'activate', async (pkg: any) => { activated.push(pkg.name); });
   gatewayExtension({
     registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} }, registerTool() {}, on() {},
     registerCommand: (name: string, command: any) => commands.set(name, command),

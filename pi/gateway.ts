@@ -1,13 +1,13 @@
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import type { EntryRenderer, ExtensionAPI, ExtensionContext, SessionStartEvent, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
+import { withCheckoutLock } from '../src/checkout-lock.js';
+import { snapshotInstallation } from './installation.js';
 import { gatewayCommands, gatewayEntries, gatewayTools } from './definitions.js';
 import { readStartupAutoUpdate, updateBeforeLoad } from './startup-update.js';
 import type { GatewayLifecycle } from './runtime.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const identityKey = Symbol.for('local-stdio-mcp-gateway.loaded-installations');
-const state = process as NodeJS.Process & { [identityKey]?: Map<string, string> };
 
 /** Register only dependency-free forwarding interfaces until the session actually starts. */
 export default function gatewayExtension(pi: ExtensionAPI): void {
@@ -23,7 +23,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     ...definition,
     execute: (...args) => {
       const tool = tools.get(definition.name);
-      if (!tool) throw new Error('Gateway is not ready; check its startup error and restart Pi');
+      if (!tool) throw new Error('Gateway is not ready; check its startup error and /reload');
       return tool(...args);
     },
   });
@@ -32,7 +32,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       await load(ctx);
       const command = commands.get(name);
-      if (!command) { ctx.ui.notify('Gateway is not ready; check its startup error and restart Pi', 'warning'); return; }
+      if (!command) { ctx.ui.notify('Gateway is not ready; check its startup error and /reload', 'warning'); return; }
       await command.handler(args, ctx);
     },
   });
@@ -73,9 +73,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const config = pi.getFlag('gateway-config');
     let checked = false;
     let updateFailure: unknown;
-    // A fresh process can update in a disposable worker before importing any runtime dependencies.
-    // Reloads keep the old behavior: already-imported code must never adopt a new installation.
-    if (event && !state[identityKey]?.has(root) && typeof config === 'string' && config) {
+    // Every new runtime, including /reload, updates in a disposable worker first.
+    if (event && typeof config === 'string' && config) {
       try {
         if (await readStartupAutoUpdate(config)) {
           await updateBeforeLoad(root, signal, (stage) => ctx.ui.setStatus('gateway', `MCP · ${stage}`),
@@ -90,16 +89,25 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     }
     await withCheckoutLock(root, signal, async () => {
       try {
-        const identity = await checkoutIdentity(root);
-        const loaded = state[identityKey]?.get(root);
-        if (loaded !== undefined && loaded !== identity) throw new Error('Gateway installation changed. Restart Pi; /reload cannot replace already-loaded dependencies.');
-        (state[identityKey] ??= new Map()).set(root, identity);
-        const { default: register } = await import('./runtime.js');
-        const checkUpdate: typeof import('./self-update.js').checkGatewayUpdate | undefined = checked ? async (...args) => {
-          if (checked) { checked = false; if (updateFailure) throw updateFailure; return; }
-          const { checkGatewayUpdate } = await import('./self-update.js');
-          return checkGatewayUpdate(...args);
-        } : undefined;
+        const installation = await snapshotInstallation(root, signal);
+        const { assertGatewayReady, checkGatewayUpdate } = await import(pathToFileURL(join(installation, 'pi/self-update.ts')).href);
+        let readinessFailure: unknown;
+        try { await assertGatewayReady(root, signal); }
+        catch (error) { signal.throwIfAborted(); readinessFailure = error; }
+        const { default: register } = await import(pathToFileURL(join(installation, 'pi/runtime.ts')).href);
+        const checkUpdate: typeof import('./self-update.js').checkGatewayUpdate = async (_root, _autoUpdate, operation, progress, notify) => {
+          // Repairing the source cannot repair this already-copied runtime. Recovery menus
+          // remain usable, but only a new /reload may adopt the validated installation.
+          if (readinessFailure) throw new Error(`Gateway runtime was copied from an unready installation; /reload after repair. ${String(readinessFailure)}`);
+          if (checked) {
+            checked = false;
+            if (updateFailure) throw updateFailure;
+            await withCheckoutLock(root, operation, () => assertGatewayReady(root, operation));
+            return;
+          }
+          // Already-loaded runtimes stay pinned. Connection-menu restarts only check the source.
+          await withCheckoutLock(root, operation, () => checkGatewayUpdate(root, false, operation, progress, notify));
+        };
         const runtimePi: ExtensionAPI = {
           ...pi,
           registerFlag() {},
@@ -108,11 +116,11 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
           registerEntryRenderer: (type, renderer) => { renderers.set(type, renderer as EntryRenderer); },
         };
         signal.throwIfAborted();
-        register(runtimePi, checkUpdate, identity, lifecycle);
+        register(runtimePi, checkUpdate, undefined, lifecycle);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'MODULE_NOT_FOUND' && code !== 'ERR_MODULE_NOT_FOUND') throw error;
-        throw new Error(`Gateway dependencies are missing after an interrupted installation. After all gateway updates/builds finish, run npm ci --include=dev in ${root}, then start a fresh Pi with Auto update on to rebuild and validate. ${String(error)}`, { cause: error });
+        throw new Error(`Gateway dependencies are missing after an interrupted installation. After all gateway updates/builds finish, run npm ci --include=dev in ${root}, then /reload with Auto update on to rebuild and validate. ${String(error)}`, { cause: error });
       }
     });
     signal.throwIfAborted();

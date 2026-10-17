@@ -20,7 +20,7 @@ import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ensureGatewayBuild } from './build.js';
 import { awaitTransportExit } from './transport.js';
-import { checkGatewayUpdate, gatewayNeedsRestart } from './self-update.js';
+import { checkGatewayUpdate } from './self-update.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -173,7 +173,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let liveJobs: LiveJobs | undefined;
 
   async function showStartup(ctx: ExtensionContext, reason?: string): Promise<void> {
-    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || gatewayNeedsRestart(gatewayRoot) || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
+    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
     const scope = resolve(String(pi.getFlag('gateway-config')));
     if (ctx.sessionManager?.getBranch().some((entry) => entry.type === 'custom' && entry.customType === 'gateway-startup' && (entry.data as { scope?: string })?.scope === scope)) return;
     const data = connected && !lifetime.signal.aborted ? startupStatus : { services: [], unavailable: true };
@@ -274,14 +274,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     connectionClosing = undefined;
     lifetime = new AbortController();
     configurationLoaded = false;
-    if (gatewayNeedsRestart(gatewayRoot)) {
-      renderFooter('off');
-      ctx.ui.notify('Gateway restart required. Restart Pi to load the updated adapter; services were not started.', 'warning');
-      return;
-    }
     {
-      const autoUpdate = await readAutoUpdate(configPath).catch((error) => { renderFooter('off'); throw error; });
-      const work = checkUpdate(gatewayRoot, update && autoUpdate, lifetime.signal,
+      // Loaded runtimes never replace their own dependencies; bootstrap owns self-updates.
+      const work = checkUpdate(gatewayRoot, false, lifetime.signal,
         (stage) => startupProgress(ctx, stage === 'updating' ? 'Updating gateway' : 'Checking gateway updates'),
         (text, level) => ctx.ui.notify(clean(text), level));
       selfUpdateWork = work;
@@ -289,11 +284,6 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       catch (error) { renderFooter('off'); throw error; }
       finally { if (selfUpdateWork === work) selfUpdateWork = undefined; }
       if (shuttingDown || lifetime.signal.aborted) return;
-      if (gatewayNeedsRestart(gatewayRoot)) {
-        renderFooter('off');
-        ctx.ui.notify('Gateway updated. Restart Pi to load the adapter and dependencies together; services were not started.', 'warning');
-        return;
-      }
     }
     startupProgress(ctx, 'reading service configuration');
     const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });

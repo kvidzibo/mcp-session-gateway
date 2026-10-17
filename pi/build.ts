@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 import { runPackageCommand } from '../src/package-manager.js';
-import { assertGatewayReady, requireGatewayRestart } from './self-update.js';
+import { assertGatewayReady } from './self-update.js';
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
@@ -36,8 +36,7 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal,
   await withCheckoutLock(root, bounded, async (recordGroup) => {
     await assertGatewayReady(root, bounded);
     if (options.identity !== undefined && options.identity !== await checkoutIdentity(root)) {
-      requireGatewayRestart(root);
-      throw new Error('Gateway installation changed after adapter loading. Restart Pi to load matching sources and dependencies.');
+      throw new Error('Gateway installation changed after adapter loading; reload to load a matching runtime.');
     }
     await buildGateway(root, bounded, recordGroup);
     bounded.throwIfAborted();
