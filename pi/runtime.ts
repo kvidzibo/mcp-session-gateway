@@ -49,7 +49,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
   let connectionClosing: Promise<void> | undefined;
-  let uiBusy = false;
+  let uiBusy: false | 'action' | 'dialog' = false;
   let shuttingDown = false;
   let managerController: AbortController | undefined;
   let managerWork: Promise<void> | undefined;
@@ -128,7 +128,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
         render: (width: number) => {
           const header = `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`;
           // Wrapped counters must not push an active dialog's controls offscreen.
-          return uiBusy ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
+          return uiBusy === 'dialog' ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
             footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks);
         },
         invalidate() {},
@@ -155,8 +155,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
     if (uiBusy || !connected || shuttingDown) return false;
-    uiBusy = true;
-    try { return await run(); } finally { uiBusy = false; renderFooter(); }
+    uiBusy = 'action';
+    try { return await run(() => { uiBusy = 'dialog'; renderFooter(); }); }
+    finally { uiBusy = false; renderFooter(); }
   });
   pi.registerEntryRenderer<{ title: string; text: string }>('gateway-native-preview', (entry, _options, theme) => {
     if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
@@ -239,7 +240,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     let acquired = false;
     try {
       if (signal.aborted || uiBusy) return { action: 'cancel' };
-      uiBusy = true;
+      uiBusy = 'dialog';
       acquired = true;
       const choice = await ctx.ui.select(ctx.mode === 'tui' ? 'Service requests approval — Allow once opens the full review' : clean(params.message), ['Decline', 'Allow once', 'Cancel'], { signal, timeout });
       if (signal.aborted) return { action: 'cancel' };
@@ -415,7 +416,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
       const configPath = pi.getFlag('gateway-config');
       if (typeof configPath !== 'string' || !configPath) { ctx.ui.notify('Use --gateway-config <file> to select a configuration', 'warning'); return; }
-      uiBusy = true;
+      uiBusy = 'dialog';
       const controller = new AbortController();
       managerController = controller;
       const signal = controller.signal;

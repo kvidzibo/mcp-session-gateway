@@ -48,7 +48,7 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
   };
   const host = new NativeUI(pi, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => {
     if (busy) return false;
-    busy = true; try { return await run(); } finally { busy = false; }
+    busy = true; try { return await run(() => {}); } finally { busy = false; }
   });
   const state = (service: string) => (host.meta(service)['native-ui/context'] as any).state;
   const link = (service: string) => statuses.get(`gateway-ui:${service}`)!.match(/pi-gateway-action:[^\x1b]+/)![0];
@@ -154,7 +154,7 @@ test('right-click dispatches only the alternate control and shares single-use co
       actions.push(request.params.action); return { view };
     },
   };
-  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => run());
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => run(() => {}));
   const link = () => statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b]+/)![0];
   const bridge = new FooterActions();
   try {
@@ -210,7 +210,7 @@ test('styled double-click titles accept then complete only on fresh capabilities
       return { view: view() };
     },
   };
-  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => !busy && run());
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => !busy && run(() => {}));
   const link = () => statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b]+/)![0];
   const bridge = new FooterActions();
   try {
