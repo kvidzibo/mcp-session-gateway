@@ -29,19 +29,20 @@ async function fingerprint(root: string, paths: string[]): Promise<string> {
 
 /** Check/build only at launch, never at extension load or while a gateway is running. */
 export async function ensureGatewayBuild(root: string, signal: AbortSignal,
-  launch?: () => Promise<void>, identity?: string): Promise<void> {
+  options: { launch?: () => Promise<void>; dispose?: () => Promise<void>; identity?: string } = {}): Promise<void> {
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(300_000)]);
   bounded.throwIfAborted();
   await mkdir(join(root, 'dist'), { recursive: true });
   await withCheckoutLock(root, bounded, async (recordGroup) => {
     await assertGatewayReady(root, bounded);
-    if (identity !== undefined && identity !== await checkoutIdentity(root)) {
+    if (options.identity !== undefined && options.identity !== await checkoutIdentity(root)) {
       requireGatewayRestart(root);
       throw new Error('Gateway installation changed after adapter loading. Restart Pi to load matching sources and dependencies.');
     }
     await buildGateway(root, bounded, recordGroup);
     bounded.throwIfAborted();
-    await launch?.();
+    try { await options.launch?.(); }
+    catch (error) { await options.dispose?.(); throw error; }
   });
 }
 

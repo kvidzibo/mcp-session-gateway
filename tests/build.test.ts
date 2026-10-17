@@ -67,7 +67,7 @@ test('launch builds missing/stale output once, detects content changes, and neve
     let enter!: () => void, release!: () => void;
     const entered = new Promise<void>((resolve) => { enter = resolve; });
     const handshake = new Promise<void>((resolve) => { release = resolve; });
-    const launching = ensureGatewayBuild(root, signal, async () => { enter(); await handshake; });
+    const launching = ensureGatewayBuild(root, signal, { launch: async () => { enter(); await handshake; } });
     await entered;
     let installing = false;
     const installer = withCheckoutLock(root, signal, async () => { installing = true; });
@@ -76,10 +76,25 @@ test('launch builds missing/stale output once, detects content changes, and neve
       assert.equal(installing, false, 'Dependency replacement must wait for the child handshake');
     } finally { release(); await Promise.all([launching, installer]); }
     assert.equal(installing, true);
+    let cleaning!: () => void, finishCleanup!: () => void;
+    const cleanupEntered = new Promise<void>((resolve) => { cleaning = resolve; });
+    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+    const failing = assert.rejects(ensureGatewayBuild(root, signal, {
+      launch: async () => { throw new Error('failed handshake'); },
+      dispose: async () => { cleaning(); await cleanup; },
+    }), /failed handshake/);
+    await cleanupEntered;
+    installing = false;
+    const afterFailure = withCheckoutLock(root, signal, async () => { installing = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(installing, false, 'A failed handshake retains the lock until child disposal finishes');
+    } finally { finishCleanup(); await Promise.all([failing, afterFailure]); }
+    assert.equal(installing, true);
 
     const identity = await checkoutIdentity(root);
     await withCheckoutLock(root, signal, async () => {
-      pending = ensureGatewayBuild(root, signal, async () => assert.fail('An outdated adapter launched'), identity);
+      pending = ensureGatewayBuild(root, signal, { launch: async () => assert.fail('An outdated adapter launched'), identity });
       await writeFile(source, 'four');
     });
     await assert.rejects(pending!, /Restart Pi/, 'A successful queued update requires a fresh adapter process');

@@ -40,6 +40,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let timeout = 30_000;
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
+  let connectionClosing: Promise<void> | undefined;
   let uiBusy = false;
   let shuttingDown = false;
   let managerController: AbortController | undefined;
@@ -168,6 +169,16 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     pi.appendEntry('gateway-startup', { scope, ...data });
   }
 
+  function closeConnection(): Promise<void> {
+    if (!connectionClosing) {
+      const stoppingNative = native.stop();
+      connectionClosing = (async () => {
+        try { await client?.close(); }
+        finally { try { await transport?.close(); } finally { await stoppingNative; } }
+      })();
+    }
+    return connectionClosing;
+  }
   async function close(preserveMenu = false): Promise<void> {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
@@ -180,12 +191,12 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     liveJobs = undefined;
     lifetime.abort();
     operatorToken = undefined;
-    const stoppingNative = native.stop();
+    const stoppingConnection = closeConnection();
     const pendingManager = Promise.allSettled([managerWork, startupWork, startupBuild, selfUpdateWork]);
     closing = (async () => {
       const results = await Promise.allSettled([
         pendingManager,
-        (async () => { try { await client?.close(); } finally { await transport?.close(); await stoppingNative; } })(),
+        stoppingConnection,
       ]);
       // Aborted package operations report through their own UI, but cleanup must finish.
       if (results[1].status === 'rejected') throw results[1].reason;
@@ -249,6 +260,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     startupStatus = { services: [], unavailable: true };
     renderFooter('starting');
     closing = undefined;
+    connectionClosing = undefined;
     lifetime = new AbortController();
     configurationLoaded = false;
     if (gatewayNeedsRestart(gatewayRoot)) {
@@ -300,7 +312,10 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       } finally { if (startupWork === work) startupWork = undefined; }
     }
     startupProgress(ctx, 'checking gateway build');
-    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal, () => connectGateway(ctx, configPath, reason), identity);
+    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal, {
+      identity, launch: () => connectGateway(ctx, configPath, reason),
+      dispose: async () => { lifetime.abort(); await closeConnection(); },
+    });
     startupBuild = build;
     try { await build; }
     catch (error) {
