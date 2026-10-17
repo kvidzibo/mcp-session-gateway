@@ -22,7 +22,7 @@ menu](#operator-menu) · [Troubleshooting](#troubleshooting) · [Documentation](
 ## Setup
 
 Requires **Node.js 22+** and the child servers' runtimes. The adapter is tested with **Pi 1.1.0**,
-which requires **Node.js 22.19+**.
+which requires **Node.js 22.19+**. In a Git checkout, the adapter also requires **Git 2.45+**.
 
 ```bash
 npm ci
