@@ -130,14 +130,17 @@ model.
 | Escape | Back; close at root; return from an app to Services |
 
 Use arrows/Enter to navigate; viewers support Arrow/Page keys and **r** refresh (inventory refresh
-is local). Navigation uses Pi's native list/layout components inline, not a centered overlay.
-Menus remember selection, explain unavailable features and follow Pi's selection keybindings, with
-no inactivity deadline; shutdown cancels dialogs. Settings editors and service apps are unchanged.
+is local). Navigation and settings lists/inputs use Pi's compact native components inline, not
+centered overlays. Settings choices support typing to filter; service-app text/number inputs also
+edit inline. Confirmations stay isolated and require reviewing every change. Menus remember selection, explain
+unavailable features and follow Pi's selection keybindings, with no inactivity deadline;
+shutdown cancels dialogs.
 
 The footer's ` MCP 3 services` excludes disabled/unactivated services at the last startup,
 **not a health check**. Click it to open Services/recovery; Kitty needs the
 [click handler](docs/native-ui.md#terminal-clicks). **Display: Minimal / Full** saves immediately;
-Full adds clickable service counters. See [counter
+Full adds clickable service counters, collapsed to one summary row while a gateway dialog is open
+to keep controls visible. See [counter
 semantics](docs/reference.md#display-and-call-counts) and the historical [startup
 snapshot](docs/reference.md#startup-snapshot).
 

@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Loader, Text } from '@earendil-works/pi-tui';
+import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
@@ -118,9 +118,12 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       }
       ctx.ui.setStatus('gateway', undefined);
       ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
-        render: (width: number) => callCountLines(width, theme,
-          `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`,
-          footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks),
+        render: (width: number) => {
+          const header = `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`;
+          // Wrapped counters must not push an active dialog's controls offscreen.
+          return uiBusy ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
+            footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks);
+        },
         invalidate() {},
       }), { placement: 'belowEditor' });
     } else {
@@ -146,7 +149,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
     if (uiBusy || !connected || shuttingDown) return false;
     uiBusy = true;
-    try { return await run(); } finally { uiBusy = false; }
+    try { return await run(); } finally { uiBusy = false; renderFooter(); }
   });
   pi.registerEntryRenderer<{ title: string; text: string }>('gateway-native-preview', (entry, _options, theme) => {
     if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
@@ -243,7 +246,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       }
       return { action: choice === 'Decline' ? 'decline' : 'cancel' };
     } catch { return { action: 'cancel' }; }
-    finally { if (acquired) uiBusy = false; release(); }
+    finally { if (acquired) { uiBusy = false; renderFooter(); } release(); }
   }
 
   async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string, update = false): Promise<void> {
@@ -553,7 +556,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
             }
           } catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Gateway: ${String(error)}`), 'error'); }
         }
-      } finally { if (managerController === controller) managerController = undefined; uiBusy = false; }
+      } finally { if (managerController === controller) managerController = undefined; uiBusy = false; renderFooter(); }
     },
   });
   pi.registerCommand('gateway', gatewayCommand());
@@ -611,7 +614,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     const options = { signal, timeout };
     const document = await current.request({ method: OPERATOR_GET, params: { token, service } }, SettingsDocumentSchema, options);
     await editSettings(ctx, document, (revision, patch) =>
-      current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal, timeout);
+      current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal);
   }
 
   async function openResource(uri: string, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {
