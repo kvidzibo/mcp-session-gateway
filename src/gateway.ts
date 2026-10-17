@@ -377,6 +377,7 @@ export class Gateway {
         ...env,
         MCP_GATEWAY_SESSION_ID: this.sessionId,
         MCP_GATEWAY_SERVICE_ID: config.name,
+        MCP_GATEWAY_WORKSPACE: process.cwd(),
       },
     });
     const service: Service = { config, client, transport, settingsToken, tools: new Map(), subscriptions: new Set(), refresh: Promise.resolve(), connected: false, queue: Promise.resolve(), closed: new AbortController() };

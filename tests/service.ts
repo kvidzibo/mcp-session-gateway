@@ -29,6 +29,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const identity = {
     sessionId: process.env.MCP_GATEWAY_SESSION_ID,
     serviceId: process.env.MCP_GATEWAY_SERVICE_ID,
+    workspace: process.env.MCP_GATEWAY_WORKSPACE,
+    cwd: process.cwd(),
   };
   const observedMeta = extra._meta ?? {};
 

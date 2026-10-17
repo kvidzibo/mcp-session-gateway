@@ -93,7 +93,7 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     const settings = value.settings;
     if (settings !== undefined && (!object(settings) || Object.keys(settings).some((key) => key !== 'tokenEnv') ||
         typeof settings.tokenEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.tokenEnv) ||
-        ['MCP_GATEWAY_SETTINGS_TOKEN', 'MCP_GATEWAY_SESSION_ID', 'MCP_GATEWAY_SERVICE_ID'].includes(settings.tokenEnv))) {
+        ['MCP_GATEWAY_SETTINGS_TOKEN', 'MCP_GATEWAY_SESSION_ID', 'MCP_GATEWAY_SERVICE_ID', 'MCP_GATEWAY_WORKSPACE'].includes(settings.tokenEnv))) {
       throw new Error(`Server ${name}: settings requires a non-reserved tokenEnv variable name`);
     }
     return {
