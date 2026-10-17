@@ -1,51 +1,73 @@
 # Native terminal UI v1
 
-This is a **private extension over MCP**, not HTML MCP Apps. A service supplies
-validated JSON screens; the Pi adapter renders them without importing service
-code or running a model turn. The gateway remains service-agnostic.
+A **private MCP extension**, not HTML MCP Apps. Services supply validated JSON screens;
+the Pi adapter renders them without importing service code or starting a model turn. The
+gateway stays service-agnostic.
 
-Use **`/pi-services` → service** (or **`/gateway` → Services → service**)
-to open an available app directly. Use arrows/Enter to navigate, Ctrl+R to refresh,
-Tab to open service settings, Ctrl+O for the service feature menu (including
-Resources), and Escape to return to Services. Closing settings returns to the app.
-Services without an app open their feature menu instead. Controls have labels and optional
-icons/descriptions. Forms save only when their action succeeds; confirmation
-prompts show the proposed value in a scrollable review. Every line must be displayed
-before Enter confirms; resizing resets review and Escape cancels. Proposed values
-are JSON-escaped so whitespace/control characters cannot hide changes.
-Text/number inputs use JSON values (quote strings;
-use `\n` for line breaks), preserving tabs and boundary whitespace exactly. Footer text and HTTP(S) links use Pi's ordinary
-status area. Footer actions use the same controls and confirmations as the app menu;
-no Pinote-specific code is required. Clicks never start a model turn.
+## Operator workflow
 
-<a id="terminal-clicks"></a>
+Open **`/pi-services` → service** or **`/gateway` → Services → service**. An available
+app opens directly; otherwise the service feature menu opens.
 
-The gateway's own ` MCP N services` footer segment uses this same click transport
-to open Services directly, or recovery when disconnected. Its count describes the
-configuration loaded at the last start/restart, not service health. This segment
-remains available after a gateway disconnect; session shutdown clears its links.
+| Key | Action |
+|---|---|
+| Arrows / Enter | Navigate / select |
+| Ctrl+R | Refresh |
+| Tab | Open service settings; closing them returns to the app |
+| Ctrl+O | Open service features, including Resources |
+| Escape | Return to Services |
 
-For terminal clicks, append [`pi/kitty/open-actions.conf`](../pi/kitty/open-actions.conf)
-to Kitty's existing open-actions file, replacing its absolute helper path. Reload
-Kitty with Ctrl+Shift+F5. Regular mode uses normal link clicks; fullscreen uses
-Ctrl+Shift+click so Kitty, not Pi's URL opener, handles the link. Other terminals
-can install an equivalent protocol handler or select the service in **`/pi-services`** as a keyboard fallback.
-The helper signals a private local socket; it never runs a service command itself.
-Installation does not change terminal configuration.
+Controls have labels and optional icons/descriptions. Text/number inputs use JSON
+values: quote strings and use `\n` for line breaks. Tabs and boundary whitespace are
+preserved exactly.
 
-For alternate footer actions, also include [`pi/kitty/mouse.conf`](../pi/kitty/mouse.conf)
-in `kitty.conf`, replacing its absolute kitten path, then reload Kitty. Right-click
-invokes the alternate action in regular and fullscreen mode. It does nothing on
-ordinary links or controls without an alternate; it never falls back to the primary
-action. The mapping reserves right-button press for this helper (including outside
-links); omit it if that conflicts with your terminal/application bindings. App-menu
-actions remain available without the mapping.
+Confirmation shows the proposed value in a scrollable review, JSON-escaped so
+whitespace/control characters cannot hide changes. Every line must display before Enter
+confirms; resizing resets review and Escape cancels. Forms save only when their action
+succeeds; see [action recovery](#definite-rejection-versus-uncertain-completion) for
+failures after dispatch.
+
+Footer text and HTTP(S) links use Pi's ordinary status area. Footer actions use the app
+menu's controls and confirmations; no Pinote-specific code is needed. Clicks never start
+a model turn.
+
+### Terminal clicks
+
+The gateway's ` MCP N services` footer segment opens Services, or recovery when
+disconnected. Its count reflects the last start/restart configuration, **not service
+health**. Links survive gateway disconnect but clear on session shutdown.
+
+#### Install primary clicks
+
+1. Append [`pi/kitty/open-actions.conf`](../pi/kitty/open-actions.conf) to Kitty's
+   existing open-actions file; replace its absolute helper path.
+2. Reload Kitty with **Ctrl+Shift+F5**.
+3. Use normal link clicks in regular mode; in fullscreen, use **Ctrl+Shift+click** so
+   Kitty, not Pi's URL opener, handles the link.
+
+Other terminals can install an equivalent protocol handler. **`/pi-services` → service**
+is the keyboard fallback. The helper signals a private local socket; it never runs
+service commands. Installation does not change terminal configuration.
+
+#### Install alternate clicks
+
+Also include [`pi/kitty/mouse.conf`](../pi/kitty/mouse.conf) in `kitty.conf`, replace
+its absolute kitten path, and reload Kitty.
+
+- Right-click invokes the alternate action in regular and fullscreen modes.
+- Ordinary links and controls without an alternate do nothing; there is **no
+  primary-action fallback**.
+- The mapping reserves right-button press even outside links. Omit it if it conflicts
+  with terminal/application bindings.
+- App-menu actions remain available without the mapping.
 
 ## Service contract
 
+### Root resource and controls
+
 Advertise `capabilities.experimental["native-ui-v1"] = {}`. List exactly one root
 resource per service with MIME type `application/vnd.mcp-native-ui+json`.
-`resources/read` returns a textual JSON document:
+`resources/read` returns textual JSON:
 
 ```json
 {
@@ -64,138 +86,198 @@ resource per service with MIME type `application/vnd.mcp-native-ui+json`.
 }
 ```
 
-Control kinds: `action`, `text`, `number`, `toggle`, `select`. Text can specify
-`multiline: true` as a hint (this host still uses escaped JSON input); selects supply `options: [{label, value}]`. Optional `icon` and
-`description` provide presentation hints. Values are string, number, boolean, or
-null. IDs must be unique. The exact schemas and limits live in
-[`src/native-ui.ts`](../src/native-ui.ts): 256 controls, 20,000-character strings,
-8 KiB opaque state, and 256,000-character resource documents. Unknown document
-properties, unknown versions, duplicate IDs, and unsupported controls fail closed.
+| Control property | Contract |
+|---|---|
+| `kind` | `action`, `text`, `number`, `toggle`, `select` |
+| `value` | String, number, boolean or null |
+| `id` | Unique |
+| `multiline: true` | Text hint; this host still uses escaped JSON input |
+| `options: [{label, value}]` | Select choices |
+| `icon`, `description` | Optional presentation hints |
 
-A footer item may specify `action` referencing an existing `kind: "action"`
-control, or `url` for a safe HTTP(S) link, never both. An optional `secondaryAction`
-references another action control and requires a primary `action`; right-click uses
-that control's own confirmation and revision. Both choices share one single-use
-capability, so selecting either invalidates both. Labels/icons remain service
-owned. The host mints single-use links tied to the displayed revision and current
-session; no service can inject a socket path or executable link. Refresh, tree
-navigation, disconnect and shutdown invalidate old links. Multiple services can
-render actions independently. A busy gateway menu/confirmation rejects a click;
-finish that dialog and refresh the app before retrying. Accepted operations drain
-if the helper disconnects; there is no automatic replay.
+Exact schemas: [`src/native-ui.ts`](../src/native-ui.ts). Limits: **256 controls,
+20,000-character strings, 8 KiB opaque state, 256,000-character resource documents**.
+Unknown properties/versions, duplicate IDs and unsupported controls fail closed.
 
-The host sends `native-ui/action` with `{uri, revision, action, value?, _meta}`.
-The gateway unwraps the resource URI, routes only to that service, and validates
-`{view, draft?, preview?}` responses. These requests are **not model tools**.
-A service must verify the revision and allowed action before writing, validate
-values itself, and use atomic persistence/concurrency checks. Host validation and
-confirmation hints are not authorization against other clients or local OS tools.
-There are no retries of actions; after an unknown error, inspect refreshed state
-because the write may have committed.
+### Footer actions and link lifetime
 
-Gateways accepting scoped validation advertise
-`capabilities.experimental["native-ui-v1"].actionRevisions = true`. Only when this
-capability is present do supporting hosts send
-`_meta["native-ui/features"] = {"actionRevisions": true}` on reads, actions, and
-tools. An older gateway therefore retains legacy behavior. Only for such requests,
-a service may add `revision` (1–256 characters) to each control. The host sends
-that control revision instead of the view revision and permits an in-progress
-edit across unrelated view changes when the control ID, kind, and revision still
-match. Without a control revision, the full-view guard remains. Services must bind
-scoped revisions to the action's target, displayed values/options, confirmation
-semantics, and relevant persistence dependencies, then validate atomically before
-writing. Read-only actions can use fresh data. Omit control revisions for legacy
-hosts, including in action-result views, so their strict schemas remain valid.
+| Footer field | Contract |
+|---|---|
+| `action` | References an existing `kind: "action"` control |
+| `url` | Safe HTTP(S) link; never combined with `action` |
+| `secondaryAction` | References another action control; requires primary `action` and [negotiation](#alternate-footer-negotiation) |
 
-Gateways supporting alternate footer actions advertise
-`capabilities.experimental["native-ui-v1"].footerSecondaryActions = true`.
-Supporting hosts independently negotiate
-`_meta["native-ui/features"].footerSecondaryActions = true`. Services must omit
-`secondaryAction` without this feature, including in action responses, because
-older strict schemas reject unknown fields. Keep alternate actions in the app menu
-as a keyboard/older-host fallback. This flag indicates protocol support, not that a
-terminal mouse mapping is installed.
+Right-click uses the secondary control's own confirmation and revision. Primary and
+secondary share one single-use capability: either invalidates both. Labels/icons remain
+service-owned.
 
-A service that rejects a stale action **before any persistent effect** may throw
-MCP error `-33003` with data
-`{"native-ui/action":{"status":"not-applied","reason":"stale-view"}}`.
-The host refreshes and reports **Action not applied**, without the uncertain-commit
-warning. Local pre-dispatch failures are also definite rejections. Do not attach
-this marker to failures after any write or receipt consumption; ordinary errors,
-timeouts, and disconnects retain the possible-commit warning. Error text alone
-never establishes that an action was rejected.
+Host-minted links bind to the displayed revision and current session; services cannot
+inject socket paths or executable links. Refresh, tree navigation, disconnect and
+shutdown invalidate links. Services render actions independently.
 
-`preview` appends a display-only text entry to the transcript, including while an
-agent is running. It is excluded from model context and never starts a turn. `draft` requests a separately
-confirmed editor insertion; existing drafts are never overwritten or submitted.
-Arbitrary shell commands, executable UI, session reset, and reload effects are
-unsupported. Do not put secrets in drafts; submitted drafts become model context.
+A busy gateway menu/confirmation rejects clicks: finish the dialog and refresh before
+retrying. Accepted operations drain even if the helper disconnects; nothing replays
+automatically.
+
+### Action dispatch and persistence
+
+The host sends `native-ui/action` with `{uri, revision, action, value?, _meta}`. The
+gateway unwraps the URI, routes only to its service and validates `{view, draft?,
+preview?}` responses. These are **not model tools**.
+
+Before writing, services must verify revisions and allowed actions, validate values, and
+use atomic persistence/concurrency checks. Host validation and confirmation hints do not
+authorize access against other clients or local OS tools. Actions are never retried;
+after uncertain completion, inspect refreshed state because writes may have committed.
+
+#### Scoped revision negotiation
+
+Gateways accepting scoped validation advertise:
+
+```text
+capabilities.experimental["native-ui-v1"].actionRevisions = true
+```
+
+Only then do supporting hosts send `_meta["native-ui/features"] = {"actionRevisions":
+true}` on reads, actions and tools. Older gateways retain legacy behavior.
+
+For negotiated requests only, services may add a **1–256-character** `revision` to each
+control. The host sends it instead of the view revision and permits an in-progress edit
+across unrelated view changes when control ID, kind and revision still match. Without
+it, the full-view guard remains.
+
+Services must bind scoped revisions to the action target, displayed values/options,
+confirmation semantics and relevant persistence dependencies, then validate atomically
+before writing. Read-only actions may use fresh data. Omit control revisions for legacy
+hosts, including action-result views, to satisfy their strict schemas.
+
+#### Alternate footer negotiation
+
+Gateways advertise `capabilities.experimental["native-ui-v1"].footerSecondaryActions =
+true`; supporting hosts independently negotiate
+`_meta["native-ui/features"].footerSecondaryActions = true`.
+
+Without this feature, services must omit `secondaryAction`, including action responses:
+older strict schemas reject unknown fields. Keep alternates in the app menu for
+keyboard/older-host access. The flag means protocol support, not an installed mouse
+mapping.
+
+#### Definite rejection versus uncertain completion
+
+A service rejecting a stale action **before any persistent effect** may throw MCP error
+`-33003` with data:
+
+```json
+{"native-ui/action":{"status":"not-applied","reason":"stale-view"}}
+```
+
+The host refreshes and reports **Action not applied**, without a possible-commit
+warning. Local pre-dispatch failures are also definite rejections.
+
+Never attach this marker after any write or receipt consumption. Ordinary errors,
+timeouts and disconnects retain the possible-commit warning; error text alone does not
+establish rejection.
+
+### Preview and draft results
+
+- `preview`: appends display-only transcript text, even while an agent runs. Excluded
+  from model context; never starts a turn.
+- `draft`: requests separately confirmed editor insertion. Existing drafts are never
+  overwritten or submitted. **Do not include secrets:** submitted drafts become model
+  context.
+
+Arbitrary shell commands, executable UI, session reset and reload effects are
+unsupported.
 
 ## Conversation state and updates
 
-Reads, actions, and model tool calls receive:
+Reads, actions and model tool calls receive:
 
 ```json
 {"_meta":{"native-ui/context":{"conversationId":"current-pi-session-id","contextId":"retained-service-context-id","state":{"selectedId":12}}}}
 ```
 
-The generic host persists the returned opaque `state` in display-only Pi custom
-entries, scoped by config path and service. Resume, reload, and tree navigation
-restore active-branch state. By default new conversations start empty. Services
-opting into `retainOnNew: true` carry their opaque state and `contextId` into an
-accepted `/new`; the actual `conversationId` changes. The transfer is keyed to the
-exact destination session file and consumed only after persistence there. If the
-first gateway launch fails, a later reload/restart of that same destination can
-finish the transfer. Cancelled
-switches and unrelated fresh launches do not inherit it; nothing is shared by cwd.
-Forks inherit only their copied branch entries, not a `/new` transfer. Services
-must independently invalidate consumed consent (for example with durable receipts)
-so an old branch cannot replay a completed action. Pi normally saves a
-new session after the first submitted message; unsaved/no-session conversations
-cannot promise durable state. No previous Pinote-extension selection is imported.
-State, context and conversation IDs are correlation labels, not authentication.
-The gateway run UUID remains ephemeral and is never the durable selection key.
-No session-reset effect exists: completing a service action leaves the Pi
-conversation and editor intact.
+### State lifetime and `/new`
 
-The service should be stateless with respect to selection: always use the supplied
-host state. Return canonical state and compute the revision over that same state.
-Do not key selection by cwd or gateway-run UUID. A reconnect gets a new gateway
-UUID but receives the restored conversation context.
+The host persists returned opaque `state` in display-only Pi custom entries, scoped by
+config path and service.
 
-A successful model tool can return `_meta["native-ui/state"]` containing the
-new opaque state (same 8 KiB limit). The host validates and persists it **before**
-refreshing that service. Failed tools cannot update state. Calls and actions for
-a service serialize around this update; late results cannot cross session/tree
-boundaries. Metadata is not added to model-facing content. Only services with an
-advertised native app may return UI state.
+| Event | State behavior |
+|---|---|
+| Resume, reload, tree navigation | Restore active-branch state |
+| New conversation | Empty by default |
+| Accepted `/new` with `retainOnNew: true` | Carries state and `contextId`; `conversationId` changes |
+| Fork | Inherits copied branch entries only, not a `/new` transfer |
+| Reconnect | New gateway UUID; restored conversation context |
 
-Emit `notifications/native-ui/changed` with `{uri}` after mutations. The gateway
-wraps that URI for the host, which rereads the view. Notifications cannot perform
-actions. Services can observe their own shared storage to notify external changes;
-otherwise external writers need to emit an update or the user must refresh. The
-generic host installs no file watcher or background polling. The host also refreshes after model
-tool calls. Missing/invalid views clear the service's footer and show an error;
-gateway disconnect clears native views. Child disconnect emits a gateway-owned
-`notifications/native-ui/invalidated` with `{service}` and clears that service's
-view/controls/footer. In-flight refresh notifications queue a follow-up read;
-invalidated views cannot dispatch a pending edit. Lifetime guards discard late responses
-after navigation or shutdown.
+A `/new` transfer targets the exact destination session file and is consumed only after
+persistence there. If its first gateway launch fails, a later reload/restart of that
+destination can finish the transfer. Cancelled switches and unrelated fresh launches
+inherit nothing; cwd shares nothing.
+
+Pi normally saves new sessions after the first submitted message; unsaved/no-session
+conversations cannot promise durable state. No old Pinote-extension selection is
+imported.
+
+Services must independently invalidate consumed consent, for example with durable
+receipts, to prevent completed-action replay from old branches. State,
+context/conversation IDs and the ephemeral gateway UUID are correlation labels, not
+authentication. Never use the gateway UUID as a durable selection key. Completing an
+action leaves the conversation/editor intact; no session-reset effect exists.
+
+### Canonical state and tool updates
+
+Services should be selection-stateless: use supplied host state, return canonical state,
+and compute its revision over that same state. Do not key selection by cwd or
+gateway-run UUID.
+
+Successful model tools may return `_meta["native-ui/state"]` with new opaque state,
+limited to **8 KiB**. Only services advertising a native app may do so.
+
+- The host validates and persists state **before** refreshing the service.
+- Failed tools cannot update state.
+- Calls and actions for a service serialize around the update; late results cannot cross
+  session/tree boundaries.
+- Metadata stays out of model-facing content.
+
+### Change notifications and invalidation
+
+Emit `notifications/native-ui/changed` with `{uri}` after mutations. The gateway wraps
+the URI; the host rereads the view. Notifications cannot perform actions.
+
+Services may observe shared storage to notify external changes. Otherwise external
+writers must emit updates or users must refresh: the generic host adds no watcher or
+background polling. It also refreshes after model tool calls.
+
+| Event | Host behavior |
+|---|---|
+| Missing/invalid view | Clears service footer; shows error |
+| Gateway disconnect | Clears native views |
+| Child disconnect | Gateway emits `notifications/native-ui/invalidated` with `{service}`; clears that service's view/controls/footer |
+| Notification during refresh | Queues a follow-up read |
+| Invalidated view | Cannot dispatch a pending edit |
+| Late response after navigation/shutdown | Discarded by lifetime guards |
 
 ## Read-only extension queries
 
-Other trusted Pi extensions may emit `gateway:query-service-tool` with
-`{service, tool, arguments?, respond}`. `respond` is called synchronously with
-`{handled:false}` when the gateway does not own the configured service, otherwise
-`{handled:true, result: Promise<CallToolResult>}` (or `error` for an invalid request).
-The promise uses the normal MCP request timeout and current native context; only
-model-visible tools explicitly advertising `readOnlyHint:true` are allowed.
-It rejects when an owned service is unavailable. While a selected gateway's
-configuration is still loading (or failed to load), queries return a handled
-error rather than claiming a service is absent. Consumers must not substitute
-an unrelated selection on that failure or on a null result. No transcript/model
-turn is created. This event is a trusted extension API, not a security boundary.
+Trusted Pi extensions may emit `gateway:query-service-tool` with `{service, tool,
+arguments?, respond}`. `respond` is called synchronously:
 
-Screens and previews are UI-only and never appended as model messages. Ordinary
-MCP tool results still reach the model. This is routing, not a secrecy boundary:
-trusted services and agents retain the OS access granted to their processes.
+| Condition | Response |
+|---|---|
+| Gateway does not own configured service | `{handled:false}` |
+| Owned service | `{handled:true, result: Promise<CallToolResult>}` |
+| Invalid request | Handled response with `error` |
+| Selected gateway configuration loading/failed | Handled error, not service absence |
+
+The promise uses the normal MCP timeout and current native context. Only model-visible
+tools explicitly advertising `readOnlyHint:true` are allowed; unavailable owned services
+reject.
+
+Consumers must not substitute an unrelated selection after failure or a null result.
+Queries create no transcript/model turn. This trusted extension API is not a security
+boundary.
+
+Screens and previews are UI-only, never model messages; ordinary MCP tool results still
+reach the model. Routing is not secrecy: trusted services and agents retain their
+processes' OS access.

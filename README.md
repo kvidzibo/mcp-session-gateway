@@ -1,30 +1,31 @@
 # Local stdio MCP gateway
 
-Run local MCP servers behind one stdio connection. Each launch gets its own UUID
-and child processes—no shared daemon or HTTP server.
+Run local MCP servers behind one stdio connection. Each launch has its own UUID and
+child processes—no shared daemon or HTTP server.
 
 ```text
 Pi A ⇄ gateway A ⇄ child MCP processes A
 Pi B ⇄ gateway B ⇄ child MCP processes B
 ```
 
-Use it as a standalone MCP gateway, or add the optional Pi adapter for operator
-menus, approvals, service settings/apps, and a live delegate panel.
+Use the standalone gateway or the optional Pi adapter for operator menus, approvals,
+service settings/apps, and a live delegate panel.
 
 > **Trusted processes, not a sandbox.** Servers run with your OS permissions.
-> Gateway identity and private UI routing are not security boundaries. Only
-> configure trusted executables.
+> Gateway identity and private UI routing are not security boundaries. Configure
+> only trusted executables.
 
 ## Contents
 
-[Setup](#setup) · [Connect Pi](#connect-pi) · [Demo](#try-the-demo) ·
-[Operator menu](#operator-menu) · [Troubleshooting](#troubleshooting) ·
-[Documentation](#documentation) · [Development](#development-validation)
+[Setup](#setup) · [Connect Pi](#connect-pi) · [Demo](#try-the-demo) · [Operator
+menu](#operator-menu) · [Integrations](#integrations) ·
+[Troubleshooting](#troubleshooting) · [Documentation](#documentation) ·
+[Development](#development-validation)
 
 ## Setup
 
-Requires **Node.js 22+** and your child servers' runtimes. The adapter is tested
-with **Pi 1.1.0**, which requires **Node.js 22.19+**.
+Requires **Node.js 22+** and your child servers' runtimes. The adapter is tested with
+**Pi 1.1.0**, which requires **Node.js 22.19+**.
 
 From this checkout:
 
@@ -33,8 +34,8 @@ npm ci
 npm run build
 ```
 
-**Trying it first?** [Run the bundled counter demo](#try-the-demo); no external
-MCP server is needed. Otherwise, configure your servers below.
+To try it without an external server, skip to the [counter demo](#try-the-demo).
+Otherwise, configure your servers.
 
 ### Configure your servers
 
@@ -42,7 +43,7 @@ MCP server is needed. Otherwise, configure your servers below.
 cp gateway.example.json gateway.json
 ```
 
-Replace the placeholder with your actual MCP server entry point:
+Replace the placeholder with your MCP server's entry point:
 
 ```json
 {
@@ -55,17 +56,17 @@ Replace the placeholder with your actual MCP server entry point:
 }
 ```
 
-- **Commands** are executables, not shell expressions; arguments are literal.
+- **Commands:** executables, not shell expressions; arguments are literal.
 - **Paths:** `cwd` defaults to the config directory; relative values resolve there.
-  Children receive `MCP_GATEWAY_WORKSPACE` with the gateway's launch directory
-  (Pi's session workspace with the adapter), regardless of their own `cwd`.
-- **Environment:** children receive SDK defaults plus configured `env`, **not the
-  full parent environment**. `${VARIABLE}` references in `env` read the gateway's
-  environment; missing variables fail startup. Never check credentials into Git.
-- **Names:** lowercase letters, digits, and hyphens, starting with a letter;
-  `gateway` is reserved.
-- Prefer `mcpServers`; legacy `servers` also works, but never specify both.
-  Other clients' configuration options are not necessarily supported.
+  `MCP_GATEWAY_WORKSPACE` gives children the gateway launch directory (Pi's session
+  workspace with the adapter), independent of their `cwd`.
+- **Environment:** children receive SDK defaults plus configured `env`, **not the full
+  parent environment**. `${VARIABLE}` in `env` reads the gateway environment; missing
+  variables fail startup. Never commit credentials.
+- **Names:** lowercase letters, digits, and hyphens, starting with a letter; `gateway`
+  is reserved.
+- Prefer `mcpServers`; legacy `servers` works, but specifying both is an error. Other
+  clients' configuration options are not necessarily supported.
 
 See [configuration and environment examples](docs/reference.md#configuration).
 
@@ -73,8 +74,8 @@ See [configuration and environment examples](docs/reference.md#configuration).
 
 ## Connect Pi
 
-Choose **one** connection method. Never register the same gateway through both
-`mcp.json` and the adapter.
+Choose **one** method. Never register the same gateway through both `mcp.json` and the
+adapter.
 
 ### Option A: Pi adapter
 
@@ -84,30 +85,19 @@ For menus, approvals, settings, service apps, and live panels, run from this che
 pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.json"
 ```
 
-Use absolute paths when launching elsewhere. The adapter starts one gateway with
-the session and closes it and its children at shutdown.
+Use absolute paths when launching elsewhere. The adapter starts one gateway with the
+session and closes it and its children at shutdown.
 
-Before each launch, the adapter checks content fingerprints of the gateway/example
-sources, package manifest/lockfile, TypeScript configs, and compiled outputs.
-Missing or changed output runs `npm run build` in this checkout before connecting;
-the first launch after upgrading to this behavior also builds once to record a
-fingerprint. Fresh builds are reused. This requires the development dependencies
-from `npm ci` and POSIX process-group support; it never installs dependencies or
-updates sources. Standalone/built-in MCP launches still require a manual build.
-
-Concurrent adapter launches wait for the same checkout's build lock, with a
-five-minute build/wait limit. Shutdown cancels compilation. Build failure leaves
-the gateway disconnected rather than running stale output; inspect the reported
-compiler error, run `npm ci` if dependencies changed, and retry `/reload` after
-finishing other gateway jobs. A crashed Pi can leave `dist/.gateway-build.lock`:
-remove it only after verifying its recorded PID and any compiler children are no
-longer running. Already-running gateways are never rebuilt or restarted by this
-check.
+Before connecting, it rebuilds missing/stale output with `npm run build`. This requires
+development dependencies from `npm ci` and POSIX process-group support; it never
+installs dependencies or updates sources. Build failure leaves the gateway disconnected,
+not running stale output. See [build checks, locking, and
+recovery](docs/reference.md#adapter-builds).
 
 ### Option B: Pi's built-in MCP client
 
-For a plain MCP connection without adapter menus/panels, add this entry to
-`mcp.json`, replacing the paths. **Do not load the adapter.**
+For plain MCP without adapter menus/panels, add this to `mcp.json`, replacing the paths.
+**Do not load the adapter.** Standalone/built-in launches require a manual build.
 
 ```json
 {
@@ -124,108 +114,44 @@ For a plain MCP connection without adapter menus/panels, add this entry to
 }
 ```
 
-Pi reads personal entries from `~/.pi/agent/mcp.json` and trusted project entries
-from `.pi/mcp.json`. Diagnose with `pi mcp list`; use `/reload` after config changes.
-Read the [restart warning](#troubleshooting) first if work is running.
+Pi reads `~/.pi/agent/mcp.json` and trusted projects' `.pi/mcp.json`. Diagnose with `pi
+mcp list`; use `/reload` after config changes. If work is running, read the [restart
+warning](#troubleshooting) first.
 
 ## Try the demo
 
-After the [install/build steps](#setup), edit `gateway.demo.json`: replace
-`mcpServers.demo.args[0]` with this checkout's absolute path to
-`dist/examples/demo-service.js`. JSON arguments do not expand `$PWD`.
+1. Complete [setup](#setup), then edit `gateway.demo.json`: replace
+   `mcpServers.demo.args[0]` with this checkout's absolute path to
+   `dist/examples/demo-service.js`. JSON arguments do not expand `$PWD`.
+2. Launch:
 
-**Shell:**
+   ```bash
+   pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.demo.json"
+   ```
 
-```bash
-pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.demo.json"
-```
+3. Ask Pi:
 
-**Ask Pi:**
+   ```text
+   Use gateway_tools to discover demo__increment, then call it through gateway_call.
+   ```
 
-```text
-Use gateway_tools to discover demo__increment, then call it through gateway_call.
-```
-
-Allow the one-shot prompt and review its disclosure. The first approved call
-returns `Counter is 1.`; declining leaves the counter unchanged. The counter is
-in memory only.
-
-**Pi command:** open **`/gateway` → Services → demo → Resources → Demo counter**.
-Press **r** to refresh and **Escape** to go back.
+4. Review the one-shot disclosure and allow the call. The first approved call returns
+   `Counter is 1.`; declining leaves the in-memory counter unchanged.
+5. Open **`/gateway` → Services → demo → Resources → Demo counter**. Press **r** to
+   refresh and **Escape** to return.
 
 ## Operator menu
 
-With the adapter, use `gateway_tools` to discover model-callable tools and
-`gateway_call` to call them. Tools use names such as `example__read_file`.
+Use `gateway_tools` to discover model-callable tools and `gateway_call` to call names
+such as `example__read_file`.
 
-**`/gateway`** opens the private operator menu; **`/pi-services`** opens Services
-directly, or the recovery menu when disconnected. The bottom bar shows
-` MCP 3 services`: the configured count from the last start/restart, **not a live
-or healthy-service count**. Observed child disconnects add `· !N`; a closed gateway
-shows `· off`. Before configuration is available the count is `?`. No status
-polling is added.
-
-**`/gateway` → Display: Minimal / Full** toggles and saves the presentation
-immediately. Minimal is the default above. Full adds a horizontal, wrapping panel
-below the editor, leaving Pi's footer and service action links intact:
-
-```text
- MCP 3 services · 31 tool calls
- delegate ✓12 ✗0  │  pinote ✓17 ✗2  │  browser ✓0 ✗0
-```
-
-Click a service's name or counters in Full display to open its app, or its
-feature menu if it has no app. Settings remain a separate action and are disabled
-in the feature menu when unavailable. Closing the service screen returns to the
-editor. Disconnected and `previous` services have no service link. The keyboard
-fallback is **`/pi-services` → highlight service → Enter**; existing service-provided
-footer actions are unchanged.
-
-Nonzero successes are green (`✓`), failures red (`✗`), and in-flight calls amber
-(`…`); zeros and names are muted. Counts cover child tool dispatches in this Pi
-session, including calls made while Minimal is selected. Discovery, resource
-reads, settings and native app actions do not count. Success means a non-error
-tool response, not a verified outcome. Errors, timeouts, cancellations after
-dispatch, and interrupted/unconfirmed calls on disconnect or reload count as
-failures; calls rejected before dispatch do not count. Child-side approval denials
-count when the child returns an error. Background queries implemented as tool
-calls also count.
-
-Counts are stored outside model context and survive gateway restarts, reload and
-resume; new sessions and forks start at zero. Tree navigation does not rewind
-usage. Totals are scoped to the session and configuration path, and cover only
-activity recorded after this feature was installed (not reconstructed history).
-Removed services with recorded calls remain labelled `previous`. A crash can lose
-unflushed notifications; counters are operational feedback, not an audit log.
-
-During startup/reload, an animated indicator above the editor shows the current
-stage: configuration, optional package updates, build check, service connection,
-tool discovery, apps and live panels. It clears on success, failure or shutdown;
-noninteractive sessions do not animate. Auto-update supports activated managed
-releases and explicitly configured [local Git packages](docs/packages.md#local-git-packages):
-clean main/master checkouts are fast-forwarded, then built and validated before
-connection. Updates run concurrently with a CPU-based limit (up to four by default);
-set `autoUpdateConcurrency` to override it, or `1` for sequential updates. See the
-[update concurrency and resource limits](docs/packages.md#automatic-startup-updates).
-Other development folders are never adopted automatically.
-
-New sessions also print a compact, display-only **startup snapshot** listing each
-service's observed connection state, exposed tool count and tool names. Names wrap
-beneath their service; call them as `service__tool` through `gateway_call`. Unactivated managed
-services show `stopped · package not activated`. The snapshot excludes gateway-owned
-tools and is not a health check or live dashboard. It is saved outside model
-context; reload/resume/fork do not append duplicate cards. Status-read failures show
-an unavailable summary without stopping a working gateway.
-
-Click the whole MCP segment to open Services (or recovery when disconnected),
-without starting a model turn. Kitty needs the existing
-[footer-link handler](docs/native-ui.md#terminal-clicks); `/pi-services` is the
-keyboard fallback. Menus/panels do not add their contents to model context.
-Explicit tool results still reach the model.
+**`/gateway`** opens the private operator menu. **`/pi-services`** opens Services, or
+recovery when disconnected. Menus/panels stay outside model context; explicit tool
+results still reach the model.
 
 ```text
 Gateway
-├─ Services → service → app (when available)
+├─ Services → service → app (or feature menu if no app)
 │  ├─ Tab → Settings (also from the service list)
 │  └─ Ctrl+O → service features → Open app / Settings / Resources
 ├─ Packages
@@ -242,82 +168,99 @@ Gateway
 
 | Key | Action |
 |---|---|
-| **↑/↓**, **Enter** | Select and open an item |
-| **Escape** | Go back; close at the root; return from an app to Services |
-| **Tab** | Open settings for the highlighted service or current app |
-| **Ctrl+O** in an app | Open its feature menu, including Resources |
+| **↑/↓**, **Enter** | Select and open |
+| **Escape** | Go back; close at root; return from an app to Services |
+| **Tab** | Settings for the highlighted service or current app |
+| **Ctrl+O** in an app | Feature menu, including Resources |
 | **↑/↓**, **PgUp/PgDn** in a viewer | Scroll details, inventory, logs, or resources |
-| **r** in inventory/resources | Refresh; inventory refresh reads local metadata only |
+| **r** in inventory/resources | Refresh; inventory reads local metadata only |
 
-A service without an app opens its feature menu. Closing settings returns to the
-calling list/app. Menus remember selection while open, explain unavailable
-features, and have no inactivity deadline. Service names reflect configuration
-and the last launch, **not a health check**. Package/recovery menus remain usable
-while disconnected; shutdown still cancels dialogs.
+Settings return to the calling list/app when closed and are disabled in the feature menu
+when unavailable. Menus remember selection while open, explain unavailable features, and
+have no inactivity deadline. Service names reflect configuration and the last launch,
+**not health**. Package/recovery menus work while disconnected; shutdown cancels
+dialogs.
+
+The footer's ` MCP 3 services` is the configured count at the last start/restart, **not
+a live or healthy-service count**. Click the whole segment to open Services or recovery
+without a model turn. Kitty requires the existing [footer-link
+handler](docs/native-ui.md#terminal-clicks); `/pi-services` is the keyboard fallback.
+
+**Display: Minimal / Full** saves immediately. Full adds clickable per-service call
+counts below the editor; [display and counter
+semantics](docs/reference.md#display-and-call-counts) cover totals, failures,
+persistence, and disconnect indicators.
+
+Startup/reload shows an animated stage indicator; new sessions also receive a
+display-only [startup snapshot](docs/reference.md#startup-snapshot) of observed
+connections and tools. Neither adds status polling or a health check.
 
 ### Approvals
 
-**Allow once**, **Decline**, and **Cancel** are distinct. Allow once requires
-viewing every disclosure line before **Enter** confirms; resizing resets review.
-Missing UI, timeouts, disconnects, and aborted calls **never grant approval**.
-Incoming confirmations are cancelled while gateway menus are open.
+**Allow once**, **Decline**, and **Cancel** are distinct. Allow once requires viewing
+every disclosure line before **Enter** confirms; resizing resets review. Missing UI,
+timeouts, disconnects, and aborted calls **never grant approval**. Incoming
+confirmations are cancelled while gateway menus are open.
 
-Services must honor the decision; prompts are not general permission enforcement.
-See the [approval contract](docs/reference.md#approvals).
+Services must honor the decision; prompts are not general permission enforcement. See
+the [approval contract](docs/reference.md#approvals).
 
 ### Child-server settings
 
-Open **`/pi-services`**, highlight a service, and press **Tab**. Edit the draft,
-choose **Save changes**, review every preview line, then confirm. Declining keeps
-the draft editable; **Escape/Back** discards it. Type to filter settings/choices.
+1. Open **`/pi-services`**, highlight a service, and press **Tab**.
+2. Edit the draft; type to filter settings/choices.
+3. Choose **Save changes**, review every preview line, then confirm. Declining keeps the
+   draft editable; **Escape/Back** discards it.
 
-For a service implementing the [settings contract](docs/settings.md), add its
-settings opt-in **inside the existing service entry**. For pi-delegate, add
-`"settings": { "tokenEnv": "PI_DELEGATE_SETTINGS_TOKEN" }`.
+Settings require TUI mode and a service implementing the [settings
+contract](docs/settings.md). Add its opt-in **inside the existing service entry**; for
+pi-delegate: `"settings": { "tokenEnv": "PI_DELEGATE_SETTINGS_TOKEN" }`.
 
-This names an environment variable, not a token value; the gateway generates the
-private token. Never put tokens in config or prompts. Settings require TUI mode.
-See [editing and save behavior](docs/settings.md#operator-guide).
+This names an environment variable, not a token value; the gateway generates the private
+token. Never put tokens in config or prompts. See [editing and save
+behavior](docs/settings.md#operator-guide).
 
 ### Package manager
 
-Open **`/gateway` → Packages** for inventory, update checks, preparation,
-activation, and rollback. Inventory is read-only; checking installs nothing.
-Writes and restarting all gateway services require separate confirmations.
-Managed services stay stopped until their first manual preparation/activation.
+**`/gateway` → Packages** provides inventory, update checks, preparation, activation,
+and rollback. Inventory is read-only; checking installs nothing. Writes and restarting
+all gateway services require separate confirmations. Managed services remain stopped
+until first manual preparation/activation.
 
-Updates are manual by default. Select **`/gateway` → Auto update: Off/On** to
-toggle and save immediately to the selected gateway config, with no extra dialog.
-This does not update or restart services now; it takes effect on the next startup
-or reload. The menu remains available while disconnected. Saving rewrites JSON
-formatting but preserves other values. You can also edit top-level `"autoUpdate"`
-in the config directly.
+Updates default to manual. **Auto update: Off/On** saves immediately to the selected
+config, even while disconnected; it rewrites JSON formatting but preserves other values.
+It affects the next startup/reload, not running services. You can also edit top-level
+`"autoUpdate"` directly.
 
-Enabling `"autoUpdate": true` authorizes startup
-updates of already-activated managed packages, **including trusted download/build/
-validation commands without per-update confirmation**. Other sessions' running
-services are not restarted. Read the [package guide](docs/packages.md), including
-its Git 2.45+/POSIX requirements, before enabling management.
+**`"autoUpdate": true` authorizes trusted download/build/validation commands without
+per-update confirmation.** Eligible activated managed releases and explicitly configured
+[local Git packages](docs/packages.md#local-git-packages) update before connection;
+other development folders are never adopted. Other sessions' running services are not
+restarted.
+
+Read the [package guide](docs/packages.md), including **Git 2.45+/POSIX** requirements
+and [update concurrency/resource limits](docs/packages.md#automatic-startup-updates),
+before enabling management.
 
 ## Integrations
 
 ### Browser service
 
 [Connect pi-browser](docs/integrations.md#browser-service) for isolated Chromium,
-profiles, manual login, and cookie approvals. Use one process per saved profile;
-do not load both the browser service and its old native extension.
+profiles, manual login, and cookie approvals. Use one process per saved profile; do not
+load both the service and its old native extension.
 
 ### Live delegate panel
 
-[Connect pi-delegate](docs/integrations.md#live-delegate-panel) to show queued and
-running jobs above the editor without polling or model turns. Completed means
-**unverified**, not successful; disconnects show stale state, not completion.
+[Connect pi-delegate](docs/integrations.md#live-delegate-panel) for queued/running jobs
+above the editor without polling or model turns. Completed means **unverified**, not
+successful; disconnects show stale state, not completion.
 
 ### Server-driven UI
 
-Services can provide native terminal apps without a model turn.
-[Connect Pinote](docs/integrations.md#pinote) for an example, or see the
-[native UI protocol](docs/native-ui.md) to implement a service.
+Services can provide native terminal apps without a model turn. [Connect
+Pinote](docs/integrations.md#pinote) or implement the [native UI
+protocol](docs/native-ui.md).
 
 <a id="lifecycle-and-validation"></a>
 
@@ -326,42 +269,44 @@ Services can provide native terminal apps without a model turn.
 | Symptom | Check or action |
 |---|---|
 | Startup fails | Every launched server must initialize. Check executable paths, required environment variables, stderr/logs, and log-directory writability. |
-| Tools disappear after cancellation/timeout | A cancelled/timed-out started request retires that connection. Restart the gateway; calls are not retried automatically. Other services stay connected. |
-| Settings unavailable | Requires TUI mode, service opt-in, and a compatible connected service. After a conflicting/uncertain save, reopen to read state; do not replay the save. A retired connection needs restart first. |
-| Managed service stays stopped | Prepare and activate its first release manually, then confirm restart. Startup auto-update does not perform first installation. |
+| Tools disappear after cancellation/timeout | A cancelled/timed-out started request retires that connection. Restart the gateway; calls are not retried. Other services stay connected. |
+| Settings unavailable | Requires TUI mode, opt-in, and a compatible connected service. After a conflicting/uncertain save, reopen to read state; do not replay it. Restart a retired connection first. |
+| Managed service stays stopped | Manually prepare and activate its first release, then confirm restart. Auto-update does not perform first installation. |
 
 > **Restarting this gateway stops its children and cancels active/queued jobs.**
-> Finish work first. `/reload` is not a settings-save or job-detach operation.
+> Finish work first. `/reload` neither saves settings nor detaches jobs.
 > Other Pi sessions keep running.
 
 ### Logs
 
-Diagnostics go to stderr and `gateway.log` beside the config; stdout is MCP-only.
-The log's parent directory must already exist and be writable. Child diagnostics
-may contain sensitive data; the gateway does not log tool arguments/results.
+Diagnostics go to stderr and `gateway.log` beside the config; stdout is MCP-only. The
+parent directory must exist and be writable. Child diagnostics may contain sensitive
+data; the gateway does not log tool arguments/results.
 
 ```bash
 tail -F /absolute/path/to/config-directory/gateway.log
 ```
 
-See [log paths/rotation](docs/reference.md#logs) and
-[request/shutdown behavior](docs/reference.md#lifecycle).
+See [log paths/rotation](docs/reference.md#logs) and [request/shutdown
+behavior](docs/reference.md#lifecycle).
 
 ### Migration note
 
-`/gateway-manager`, `/gateway-ui`, `/mcp-settings`, and `/gateway-panel` were
-replaced by `/gateway` submenus. `gateway_tools` and `gateway_call` are unchanged.
+`/gateway-manager`, `/gateway-ui`, `/mcp-settings`, and `/gateway-panel` became
+`/gateway` submenus. `gateway_tools` and `gateway_call` are unchanged.
 
 <a id="identity"></a>
 
 ## Documentation
 
-- [Integration recipes](docs/integrations.md): browser, delegate, and Pinote.
-- [Gateway reference](docs/reference.md): configuration, protocol limits,
-  [identity](docs/reference.md#identity), approvals, resources, logs, and lifecycle.
-- [Package management](docs/packages.md): sources, updates, confirmations, rollback, recovery.
+- [Integration recipes](docs/integrations.md): browser, delegate, Pinote.
+- [Gateway reference](docs/reference.md): configuration, builds, counters, snapshots,
+  protocol limits, [identity](docs/reference.md#identity), approvals, resources, logs,
+  lifecycle.
+- [Package management](docs/packages.md): sources, updates, confirmations, rollback,
+  recovery.
 - [Service settings](docs/settings.md): operator guide and reusable protocol.
-- [Native terminal UI](docs/native-ui.md): service protocol and terminal click setup.
+- [Native terminal UI](docs/native-ui.md): service protocol and terminal clicks.
 
 ## Development validation
 
