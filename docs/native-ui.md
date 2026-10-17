@@ -72,8 +72,31 @@ The gateway unwraps the resource URI, routes only to that service, and validates
 A service must verify the revision and allowed action before writing, validate
 values itself, and use atomic persistence/concurrency checks. Host validation and
 confirmation hints are not authorization against other clients or local OS tools.
-There are no retries of actions; after an error, inspect refreshed state because
-the write may have committed.
+There are no retries of actions; after an unknown error, inspect refreshed state
+because the write may have committed.
+
+Gateways accepting scoped validation advertise
+`capabilities.experimental["native-ui-v1"].actionRevisions = true`. Only when this
+capability is present do supporting hosts send
+`_meta["native-ui/features"] = {"actionRevisions": true}` on reads, actions, and
+tools. An older gateway therefore retains legacy behavior. Only for such requests,
+a service may add `revision` (1–256 characters) to each control. The host sends
+that control revision instead of the view revision and permits an in-progress
+edit across unrelated view changes when the control ID, kind, and revision still
+match. Without a control revision, the full-view guard remains. Services must bind
+scoped revisions to the action's target, displayed values/options, confirmation
+semantics, and relevant persistence dependencies, then validate atomically before
+writing. Read-only actions can use fresh data. Omit control revisions for legacy
+hosts, including in action-result views, so their strict schemas remain valid.
+
+A service that rejects a stale action **before any persistent effect** may throw
+MCP error `-33003` with data
+`{"native-ui/action":{"status":"not-applied","reason":"stale-view"}}`.
+The host refreshes and reports **Action not applied**, without the uncertain-commit
+warning. Local pre-dispatch failures are also definite rejections. Do not attach
+this marker to failures after any write or receipt consumption; ordinary errors,
+timeouts, and disconnects retain the possible-commit warning. Error text alone
+never establishes that an action was rejected.
 
 `preview` appends a display-only text entry to the transcript, including while an
 agent is running. It is excluded from model context and never starts a turn. `draft` requests a separately
@@ -122,8 +145,9 @@ advertised native app may return UI state.
 
 Emit `notifications/native-ui/changed` with `{uri}` after mutations. The gateway
 wraps that URI for the host, which rereads the view. Notifications cannot perform
-actions. External writers need to emit an update or the user must refresh; no file
-watcher or background polling is installed. The host also refreshes after model
+actions. Services can observe their own shared storage to notify external changes;
+otherwise external writers need to emit an update or the user must refresh. The
+generic host installs no file watcher or background polling. The host also refreshes after model
 tool calls. Missing/invalid views clear the service's footer and show an error;
 gateway disconnect clears native views. Child disconnect emits a gateway-owned
 `notifications/native-ui/invalidated` with `{service}` and clears that service's

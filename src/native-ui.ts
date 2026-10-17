@@ -4,6 +4,10 @@ import { z } from 'zod';
 export const UI_MIME = 'application/vnd.mcp-native-ui+json';
 export const UI_CONTEXT = 'native-ui/context';
 export const UI_STATE = 'native-ui/state';
+export const UI_FEATURES = 'native-ui/features';
+export const UI_STALE_ACTION = -33003;
+export const ActionRevisionFeaturesSchema = z.object({ actionRevisions: z.literal(true) });
+export const StaleActionDataSchema = z.object({ 'native-ui/action': z.object({ status: z.literal('not-applied'), reason: z.literal('stale-view') }) });
 const text = z.string().max(20_000);
 const scalar = z.union([text, z.number().finite(), z.boolean(), z.null()]);
 export const StateSchema = z.record(z.string(), z.unknown()).refine((state) => JSON.stringify(state).length <= 8192, 'UI state exceeds 8 KiB');
@@ -13,7 +17,7 @@ const control = z.object({
   kind: z.enum(['action', 'text', 'number', 'toggle', 'select']),
   value: scalar.optional(), multiline: z.boolean().optional(),
   options: z.array(z.object({ label: text, value: scalar })).max(256).optional(),
-  confirm: text.optional(),
+  confirm: text.optional(), revision: z.string().min(1).max(256).optional(),
 }).strict();
 export const ViewSchema = z.object({
   version: z.literal(1), title: text, revision: z.string().min(1).max(256),
