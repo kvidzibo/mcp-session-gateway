@@ -7,8 +7,86 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { NativeUI } from '../pi/native-ui.js';
+import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import { inputSettings } from '../pi/settings.js';
 import { ActionResultSchema, clean, editorText, footerText, InvalidatedSchema, ViewSchema } from '../src/native-ui.js';
+
+test('native apps reuse inline Pi menus with live refresh, native bindings, and resize guards', async () => {
+  const keys = getKeybindings(), original = keys.getUserBindings();
+  const controller = new AbortController();
+  const terminal = { rows: 30, columns: 100 };
+  const uri = 'gateway-resource://demo/test%3A%2F%2Froot';
+  const view = { version: 1, title: 'Pinote · Tasks', revision: 'r1', state: {},
+    body: 'Selected task\n\nDetails '.repeat(30), controls: Array.from({ length: 24 }, (_, index) => ({
+      id: index === 0 ? '__back' : index === 1 ? 'refresh' : String(index), kind: 'action',
+      label: `Task ${index + 1}: ${'long title '.repeat(10)}`, description: `Description ${index + 1}: ${'Useful explanation. '.repeat(5)}`,
+    })),
+  };
+  let phase = 0, actions = 0;
+  const client: any = {
+    listResources: async () => ({ resources: [{ uri, mimeType: 'application/vnd.mcp-native-ui+json' }] }),
+    readResource: async () => ({ contents: [{ uri, mimeType: 'application/vnd.mcp-native-ui+json', text: JSON.stringify(view) }] }),
+    request: async (request: any) => { actions++; assert.equal(request.params.action, 'refresh', 'Service IDs must not collide with host navigation'); return { view }; },
+  };
+  const ctx: any = { mode: 'tui', ui: { setStatus() {}, notify: (message: string) => assert.fail(message),
+    custom: async (factory: Function, options: unknown) => {
+      assert.equal(options, undefined, 'Apps use the normal inline area, never an overlay');
+      let answer: unknown, finished = false;
+      const panel = factory({ terminal, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: unknown) => { answer = value; finished = true; });
+      const render = () => {
+        const lines: string[] = panel.render(terminal.columns - 2).map(clean);
+        assert.ok(lines.length <= Math.max(1, terminal.rows - 6), 'Menu leaves room for Pi’s footer and service widgets');
+        assert.ok(lines.every((line) => visibleWidth(line) <= terminal.columns - 2));
+        return lines;
+      };
+      try {
+        const lines = render();
+        assert.match(lines[0], /^─+$/);
+        assert.equal(lines[1], 'Gateway › Services › demo › Pinote · Tasks');
+        assert.match(lines.at(-1)!, /^─+$/);
+        assert.match(lines.join('\n'), /ctrl\+p\/ctrl\+n.*ctrl\+y.*ctrl\+x/);
+        assert.ok(lines.some((line) => /Selected task.*\.\.\.$/.test(line)), 'Long bodies have a visibly truncated summary');
+        assert.ok(lines.filter((line) => /^(→ |  )Task/.test(line)).every((line) => !line.includes('Description')), 'Descriptions appear below the list, not in squeezed columns');
+        if (phase++ === 0) {
+          panel.handleInput('\x0e');
+          assert.match(render().join('\n'), /→ Task 2:.*\n[\s\S]*Description 2:/);
+          for (const [rows, columns] of [[16, 40], [24, 80], [30, 100]]) {
+            terminal.rows = rows; terminal.columns = columns;
+            panel.handleInput('\x19');
+            assert.equal(finished, false, 'A resize must render before selection can act');
+            assert.ok(render().some((line) => line.startsWith('→ Task 2:')));
+          }
+          terminal.rows = 8; terminal.columns = 16;
+          render(); panel.handleInput('\x19');
+          assert.equal(finished, false, 'Hidden actions cannot run in a tiny terminal');
+          terminal.rows = 30; terminal.columns = 100;
+          render();
+          await host.refresh(uri);
+          assert.equal(finished, true, 'View updates close the old menu before reopening');
+        } else if (phase === 2) {
+          assert.ok(lines.some((line) => line.startsWith('→ Task 2:')), 'Live updates preserve focus');
+          panel.handleInput('\x12');
+        } else if (phase === 3) {
+          assert.ok(lines.some((line) => line.startsWith('→ Task 2:')), 'Manual refresh preserves focus');
+          panel.handleInput('\x19');
+        } else if (phase === 4) panel.handleInput('\x18');
+        else controller.abort();
+        assert.ok(finished, 'Cancel, refresh, selection, and shutdown complete their menu');
+        return answer;
+      } finally { panel.dispose(); }
+    },
+  } };
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: controller.signal, timeout: 5000 }));
+  try {
+    keys.setUserBindings({ ...original, 'tui.select.up': 'ctrl+p', 'tui.select.down': 'ctrl+n',
+      'tui.select.confirm': 'ctrl+y', 'tui.select.cancel': 'ctrl+x' });
+    await host.start(ctx, '/test/gateway.json');
+    await host.open('demo', ctx, { settings: async () => assert.fail('No settings requested') });
+    assert.equal(actions, 1);
+    await host.open('demo', ctx, { settings: async () => assert.fail('No settings requested') });
+    assert.equal(phase, 5);
+  } finally { keys.setUserBindings(original); await host.stop(); }
+});
 
 // One fixture covers the transport plus the actual generic renderer/action loop.
 test('native UI routes privately, renders safely, persists host state, and rejects malformed views', async (t) => {
@@ -69,8 +147,9 @@ test('native UI routes privately, renders safely, persists host state, and rejec
         assert.equal(result, true);
       } else {
         assert.match(rendered, /Remote settings/);
-        assert.match(component.render(54).join('\n'), /Esc close/);
+        assert.match(component.render(54).join('\n'), /escape.*close/);
         assert.ok(component.render(8).every((line: string) => [...clean(line)].length <= 8));
+        component.render(80);
         component.handleInput(rounds++ === 0 ? '\r' : '\x1b');
       }
       component.dispose();
