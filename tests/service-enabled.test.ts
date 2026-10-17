@@ -83,6 +83,10 @@ test('service controls persist enable/disable safely and only change launches af
       approve = true;
       await menu('Connection', 'Restart gateway services…', 'Back', 'Close');
       assert.ok((await inventory()).includes('demo__increment'));
+      await menu('Services', 'unused (disabled)', 'Enable service', 'Connection / restart…', 'Restart gateway services…', 'Close');
+      assert.ok(notices.some((text) => text.includes('Missing environment variable')));
+      assert.ok((await inventory()).includes('demo__increment'), 'Invalid enabled-service environment must not stop healthy running services');
+      await menu('Services', 'unused', 'Disable service', 'Back', 'Back', 'Close');
       await menu('Services', 'demo', 'Disable service', 'Back', 'Back', 'Close');
       assert.ok((await inventory()).includes('demo__increment'), 'Disabling does not interrupt a running service');
       await menu('Connection', 'Restart gateway services…', 'Back', 'Close');
@@ -101,7 +105,7 @@ test('service controls persist enable/disable safely and only change launches af
       assert.equal(await readFile(target, 'utf8'), before);
       approve = false;
     }
-    assert.equal(confirmations, 6);
+    assert.equal(confirmations, 8);
     assert.ok(notices.some((text) => text.includes('running services unchanged')));
     await writeFile(target, JSON.stringify({ mcpServers: { bad: { command: 'node', enabled: 'false' } } }));
     await assert.rejects(loadConfig(config), /enabled must be a boolean/);

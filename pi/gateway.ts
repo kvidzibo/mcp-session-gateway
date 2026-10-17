@@ -488,6 +488,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                   const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${(launchedServices ?? []).map((name) => `- ${name}`).join('\n') || '(none known)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.filter((service) => service.enabled !== false).map((service) => `- ${service.name}`).join('\n') || '(none enabled)'}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
                   if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
                   if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
+                  // Validate enabled-service environment variables before stopping healthy children.
+                  await loadConfig(configPath);
                   await close(true);
                   if (!shuttingDown) { await start(ctx, true); ctx.ui.notify('Gateway services restarted', 'info'); }
                 }
