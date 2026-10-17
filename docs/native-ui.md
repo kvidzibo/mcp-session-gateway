@@ -37,7 +37,7 @@ For alternate footer actions, also include [`pi/kitty/mouse.conf`](../pi/kitty/m
 in `kitty.conf`, replacing its absolute kitten path, then reload Kitty. Right-click
 invokes the alternate action in regular and fullscreen mode. It does nothing on
 ordinary links or controls without an alternate; it never falls back to the primary
-action. The mapping reserves right-button release for this helper (including outside
+action. The mapping reserves right-button press for this helper (including outside
 links); omit it if that conflicts with your terminal/application bindings. App-menu
 actions remain available without the mapping.
 
