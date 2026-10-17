@@ -1,22 +1,30 @@
 import { compileSchema } from '../src/validation.js';
 import { clean, literal as display } from '../src/native-ui.js';
 import { DynamicBorder, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { getKeybindings, Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Editor, getKeybindings, Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): value is ObjectValue => typeof value === 'object' && value !== null && !Array.isArray(value);
 interface Field { path: string[]; schema: ObjectValue; readonly: boolean }
-function fields(schema: ObjectValue, path: string[] = [], readonly = false): Field[] {
+const restricted = (schema: ObjectValue): boolean => schema.readOnly === true || schema.writeOnly === true || schema.format === 'password' ||
+  ['$ref', 'allOf', 'anyOf', 'if'].some((key) => Object.hasOwn(schema, key)) ||
+  (Array.isArray(schema.oneOf) && !schema.oneOf.every((entry) => object(entry) && Object.hasOwn(entry, 'const')));
+function fields(schema: ObjectValue, path: string[] = [], readonly = false, values?: unknown): Field[] {
   if (path.length > 16) throw new Error('Settings schema is too deeply nested');
-  readonly ||= schema.readOnly === true || schema.writeOnly === true || schema.format === 'password' ||
-    ['$ref', 'allOf', 'anyOf', 'if'].some((key) => Object.hasOwn(schema, key)) ||
-    (Array.isArray(schema.oneOf) && !schema.oneOf.every((entry) => object(entry) && Object.hasOwn(entry, 'const')));
+  readonly ||= restricted(schema);
   if ((schema.type === 'object' || schema.type === undefined) && object(schema.properties)) {
-    return Object.entries(schema.properties).flatMap(([key, child]) => {
+    const properties = { ...schema.properties };
+    if (object(schema.additionalProperties) && object(values)) {
+      for (const key of Object.keys(values)) {
+        if (!safeKey(key)) throw new Error('Unsupported settings schema property');
+        if (!Object.hasOwn(properties, key)) properties[key] = schema.additionalProperties;
+      }
+    }
+    return Object.entries(properties).flatMap(([key, child]) => {
       if (!safeKey(key) || !object(child)) throw new Error('Unsupported settings schema property');
-      return fields(child, [...path, key], readonly);
+      return fields(child, [...path, key], readonly, object(values) ? values[key] : undefined);
     });
   }
   return [{ path, schema, readonly }];
@@ -41,6 +49,8 @@ function supported(schema: ObjectValue): boolean {
   if (Object.hasOwn(schema, 'const')) return false;
   if (Array.isArray(schema.enum)) return schema.enum.length > 0 && schema.enum.every(primitive);
   if (Array.isArray(schema.oneOf)) return schema.oneOf.length > 0 && schema.oneOf.every((entry) => object(entry) && primitive(entry.const));
+  if (schema.type === 'array') return schema.uniqueItems === true && object(schema.items) &&
+    Array.isArray(schema.items.enum) && schema.items.enum.every(primitive);
   return ['string', 'number', 'integer', 'boolean'].includes(String(schema.type));
 }
 type DialogOptions = { signal: AbortSignal; timeout?: number; title?: string; actionLabel?: string };
@@ -155,14 +165,17 @@ export async function confirmSettings(ctx: ExtensionContext, text: string, optio
   }, overlay);
 }
 
-export async function inputSettings(ctx: ExtensionContext, title: string, value: string, options: { signal: AbortSignal; timeout?: number }): Promise<string | undefined> {
+export async function inputSettings(ctx: ExtensionContext, title: string, value: string, options: { signal: AbortSignal; timeout?: number; multiline?: boolean; raw?: boolean }): Promise<string | undefined> {
   if (options.signal.aborted) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
-    const input = new Input();
-    input.setValue(value);
+    const input = options.multiline ? new Editor(tui, {
+      borderColor: (s) => theme.fg('border', s),
+      selectList: { selectedPrefix: (s) => s, selectedText: (s) => s, description: (s) => s, scrollInfo: (s) => s, noMatch: (s) => s },
+    }) : new Input();
+    if (input instanceof Editor) input.setText(value);
+    else input.setValue(value);
     let geometry = '', usable = false;
     const cancel = () => done(undefined);
-    input.onEscape = cancel;
     input.onSubmit = (text) => { if (usable && !options.signal.aborted) done(text); };
     const timer = options.timeout === undefined ? undefined : setTimeout(cancel, options.timeout);
     options.signal.addEventListener('abort', cancel, { once: true });
@@ -172,12 +185,12 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
       render(width: number) {
         geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
         const height = inlineHeight(tui.terminal.rows);
-        usable = height >= 8 && width >= 20;
+        usable = height >= (options.multiline ? 14 : 8) && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);
         const [border] = new DynamicBorder((text) => theme.fg('border', text)).render(width);
         return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...input.render(width), '',
-          truncateToWidth(theme.fg('muted', width < 40 ? 'Enter stage · Esc' : 'JSON value  Enter stage  Esc back'), width), border];
+          truncateToWidth(theme.fg('muted', options.multiline ? 'Shift+Enter newline · Enter stage · Esc back' : options.raw ? 'Enter stage · Esc back' : width < 40 ? 'Enter stage · Esc' : 'JSON value  Enter stage  Esc back'), width), border];
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
@@ -197,7 +210,11 @@ export function settingsValidationSchema(schema: ObjectValue): ObjectValue {
   // A reference may target a oneOf branch by JSON Pointer: never remove its path.
   if (/"\$(?:ref|dynamicRef)":/.test(JSON.stringify(schema))) return schema;
   const copy = structuredClone(schema);
-  for (const { schema: leaf } of fields(copy)) {
+  const schemas = (node: ObjectValue): ObjectValue[] => [node,
+    ...Object.values(object(node.properties) ? node.properties : {}).flatMap((child) => object(child) ? schemas(child) : []),
+    ...['additionalProperties', 'items'].flatMap((key) => object(node[key]) ? schemas(node[key]) : []),
+  ];
+  for (const leaf of schemas(copy)) {
     if (Object.hasOwn(leaf, 'enum') || !Array.isArray(leaf.oneOf) || !leaf.oneOf.length) continue;
     if (!leaf.oneOf.every((entry) => object(entry) && primitive(entry.const) &&
       Object.keys(entry).every((key) => key === 'const' ||
@@ -218,21 +235,57 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
   const options = { signal };
   let feedback = '';
   while (!signal.aborted) {
-    const leaves = fields(document.schema);
-    if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
     const draft = structuredClone(document.values);
+    const rootProperties = object(document.schema.properties) ? Object.entries(document.schema.properties) : [];
+    // A service can expose a named collection with a schema for newly added entries.
+    const collection = rootProperties.length === 1 && object(rootProperties[0][1]) &&
+      object(rootProperties[0][1].additionalProperties) && object(rootProperties[0][1].additionalProperties.properties)
+      ? { key: rootProperties[0][0], schema: rootProperties[0][1], entry: rootProperties[0][1].additionalProperties } : undefined;
+    let selectedEntry: string | undefined;
     // Browsing/cancelling must not compile a potentially huge service schema.
     let validate: ReturnType<typeof compileSchema> | undefined;
     // Only inline primitive controls are editable. Full schema validation still applies on save.
     const editable = (field: Field) => document.writable && !document.conflict && !field.readonly &&
       supported(field.schema);
     while (!signal.aborted) {
+      const leaves = fields(document.schema, [], false, draft);
+      if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
       const changes = leaves.filter((f) => JSON.stringify(at(draft, f.path)) !== JSON.stringify(at(document.values, f.path)));
-      const labels = leaves.map((f, i) => `${i + 1}. ${pathLabel(f.path)}: ${clean(display(at(draft, f.path)))}${editable(f) ? '' : ' [read-only]'}`);
+      const visible = collection ? leaves.filter((f) => f.path[0] === collection.key && f.path[1] === selectedEntry) : leaves;
+      const collectionValue = collection ? draft[collection.key] : undefined;
+      const entries = object(collectionValue) ? Object.keys(collectionValue) : [];
+      const labels = collection && selectedEntry === undefined ? entries.map((key) => clean(key)) : visible.map((f, i) =>
+        `${i + 1}. ${collection ? clean(String(f.schema.title ?? f.path.at(-1))) : pathLabel(f.path)}: ${clean(display(at(draft, f.path)))}${editable(f) ? '' : ' [read-only]'}`);
+      const canAdd = collection && editable({ path: [collection.key], schema: { type: 'string' }, readonly:
+        [document.schema, collection.schema, collection.entry].some(restricted) });
+      const add = `Add ${String(collection?.entry.title ?? 'entry').toLowerCase()}`;
       const save = `Save changes (${changes.length})`;
-      const choice = await selectSettingsOption(ctx, clean([document.title, feedback, document.warning,
-        document.applyTo ? `Applies to: ${document.applyTo}` : '', !document.writable ? 'Read-only' : ''].filter(Boolean).join('\n')), [...labels, save, 'Back'], options);
-      if (!choice || choice === 'Back' || signal.aborted) return;
+      const choice = await selectSettingsOption(ctx, clean([selectedEntry ? `${document.title} › ${selectedEntry}` : document.title, feedback, document.warning,
+        document.applyTo ? `Applies to: ${document.applyTo}` : '', !document.writable ? 'Read-only' : ''].filter(Boolean).join('\n')),
+        [...labels, ...(canAdd && selectedEntry === undefined ? [add] : []), save, 'Back'], options);
+      if (signal.aborted) return;
+      if (!choice || choice === 'Back') {
+        if (selectedEntry !== undefined) { selectedEntry = undefined; continue; }
+        return;
+      }
+      if (collection && choice === add && canAdd) {
+        const name = await inputSettings(ctx, `${add}: name`, '', { ...options, raw: true });
+        if (name === undefined || signal.aborted) continue;
+        const validateName = compileSchema(object(collection.schema.propertyNames) ? collection.schema.propertyNames : { type: 'string', minLength: 1 });
+        if (!safeKey(name) || validateName(name) || entries.includes(name)) {
+          ctx.ui.notify('Enter a valid, unused name', 'error'); continue;
+        }
+        const entry: ObjectValue = {};
+        for (const [key, schema] of Object.entries(collection.entry.properties as ObjectValue)) {
+          if (!safeKey(key) || !object(schema)) throw new Error('Unsupported settings schema property');
+          if (Object.hasOwn(schema, 'default')) entry[key] = structuredClone(schema.default);
+          else if (schema.type === 'string') entry[key] = '';
+        }
+        put(draft, [collection.key, name], entry);
+        selectedEntry = name;
+        continue;
+      }
+      if (collection && selectedEntry === undefined && labels.includes(choice)) { selectedEntry = entries[labels.indexOf(choice)]; continue; }
       if (choice === save) {
         if (!changes.length || !document.writable || document.conflict) continue;
         validate ??= compileSchema(settingsValidationSchema(document.schema));
@@ -253,7 +306,7 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
           return;
         }
       }
-      const field = leaves[labels.indexOf(choice)];
+      const field = visible[labels.indexOf(choice)];
       if (!field || !editable(field)) continue;
       const key = field.path[field.path.length - 1];
       const siblingModel = at(draft, [...field.path.slice(0, -1), 'model']);
@@ -267,7 +320,26 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
       } else if (field.schema.type === 'boolean') choices = [{ value: true, label: 'true' }, { value: false, label: 'false' }];
       const title = clean(`${pathLabel(field.path)}${field.schema.description ? `\n${field.schema.description}` : ''}`);
       let next: unknown;
-      if (choices) {
+      if (field.schema.type === 'array' && object(field.schema.items) && Array.isArray(field.schema.items.enum)) {
+        const values = field.schema.items.enum;
+        let selected = Array.isArray(at(draft, field.path)) ? [...at(draft, field.path) as unknown[]] : [];
+        const wildcard = key === 'tools' && values.includes('*');
+        while (!signal.aborted) {
+          const all = wildcard && selected.includes('*');
+          const labels = values.map((value) => `[${all || selected.includes(value) ? 'x' : ' '}] ${display(value)}`);
+          const choice = await selectSettingsOption(ctx, title, [...labels, 'Done'], options);
+          if (!choice || signal.aborted) break;
+          if (choice === 'Done') { next = selected; break; }
+          const value = values[labels.indexOf(choice)];
+          if (wildcard && value === '*') selected = all ? [] : ['*'];
+          else if (all) selected = values.filter((item) => item !== '*' && item !== value);
+          else selected = selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value];
+        }
+        if (next === undefined) continue;
+      } else if (field.schema['x-multiline'] === true && field.schema.type === 'string') {
+        next = await inputSettings(ctx, title, String(at(draft, field.path) ?? ''), { ...options, multiline: true });
+        if (next === undefined || signal.aborted) continue;
+      } else if (choices) {
         if (!choices.length) { ctx.ui.notify('No available choices for this field', 'warning'); continue; }
         const labels = choices.map((c, i) => `${i + 1}. ${clean(c.label)}`);
         const selected = await selectSettingsOption(ctx, title, labels, options);

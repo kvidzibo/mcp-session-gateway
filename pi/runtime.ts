@@ -476,15 +476,17 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                     if (signal.aborted || !connected) break;
                   }
                   const options = { signal: lifetime.signal, timeout };
-                  let editable = false, settingsError = '';
+                  let editable = false, settingsError = '', settingsTitle = 'Settings';
                   try {
                     const settings = connected && operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
-                    editable = settings.services.some((s) => s.name === service);
+                    const entry = settings.services.find((s) => s.name === service);
+                    editable = Boolean(entry);
+                    settingsTitle = clean(entry?.title || 'Settings');
                   } catch (error) { settingsError = clean(`Settings discovery failed: ${String(error)}`); }
                   const app = connected && native.has(service);
                   const selected = await menu.choose(['Gateway', 'Services', service], settingsError || `Next launch: ${enabled ? 'enabled' : 'disabled'} · saved changes do not stop/start running services`, [
                     { id: 'app', label: 'Open app', description: 'Open the service-provided interactive menu.', disabled: !app },
-                    { id: 'settings', label: 'Settings', description: 'Edit a draft; review and confirm before saving.', disabled: !editable },
+                    { id: 'settings', label: settingsTitle, description: 'Edit a draft; review and confirm before saving.', disabled: !editable },
                     { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.', disabled: !connected },
                     { id: 'restart', label: 'Connection / restart…', description: 'Apply saved choices using a separately confirmed restart of ALL gateway services in this session. Active/queued jobs will be cancelled.' },
                     { id: 'toggle-enabled', label: enabled ? 'Disable service' : 'Enable service', disabled: !current,
