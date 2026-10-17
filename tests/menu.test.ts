@@ -247,7 +247,7 @@ test('service controls open apps; Tab opens private settings and returns to the 
     import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
     import {ListToolsRequestSchema,ListResourcesRequestSchema,ReadResourceRequestSchema} from '@modelcontextprotocol/sdk/types.js';
     import {z} from 'zod';
-    const contract = {version:1,getMethod:'kvidzibo/settings/get',updateMethod:'kvidzibo/settings/update',authorization:'token',audience:'operator'};
+    const contract = {version:1,getMethod:'kvidzibo/settings/get',updateMethod:'kvidzibo/settings/update',authorization:'token',audience:'operator',title:'Roles'};
     const token = process.env.SERVICE_SETTINGS_TOKEN;
     delete process.env.SERVICE_SETTINGS_TOKEN;
     const server = new Server({name:'demo',version:'1'}, {capabilities:{tools:{},resources:{},experimental:{'native-ui-v1':{},'com.kvidzibo/settings':contract}}});
@@ -284,6 +284,7 @@ test('service controls open apps; Tab opens private settings and returns to the 
             assert.ok(rendered.length <= terminal.rows - 2);
             assert.ok(rendered.every((line) => visibleWidth(line) <= columns - 2));
             if (step[0] === 'Gateway › Services' || step[0] === 'Service app') assert.match(rendered.join('\n'), /Tab settings/);
+            if (step[0] === 'Gateway › Services › demo') assert.match(rendered.join('\n'), /Roles/);
           }
           if (step[1] === 'open-app') {
             for (let i = 0; i < 10 && !panel.render(98).includes('→ Open app'); i++) panel.handleInput(down);

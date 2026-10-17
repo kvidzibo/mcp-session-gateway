@@ -43,6 +43,7 @@ interface Service {
   connected: boolean;
   settingsToken?: string;
   settingsEnabled?: boolean;
+  settingsTitle?: string;
   subscriptions: Set<string>;
   queue: Promise<void>;
   closed: AbortController;
@@ -87,7 +88,7 @@ export class Gateway {
       this.server.setRequestHandler(OperatorListSchema, async (request, extra) => this.withRequest(extra, async () => {
         authorize(request.params.token, this.operatorToken);
         await this.ready;
-        return { services: this.services.filter((s) => s.connected && s.settingsEnabled).map((s) => ({ name: s.config.name })) };
+        return { services: this.services.filter((s) => s.connected && s.settingsEnabled).map((s) => ({ name: s.config.name, ...(s.settingsTitle ? { title: s.settingsTitle } : {}) })) };
       }));
       for (const schema of [OperatorGetSchema, OperatorUpdateSchema]) {
         this.server.setRequestHandler(schema, async (request, extra) => this.withRequest(extra, async () => {
@@ -443,7 +444,9 @@ export class Gateway {
     service.connected = true;
     const capabilities = client.getServerCapabilities();
     const extensions = (capabilities as { extensions?: Record<string, unknown> } | undefined)?.extensions;
-    service.settingsEnabled = Boolean(settingsToken && SettingsCapabilitySchema.safeParse(extensions?.[SETTINGS_EXTENSION] ?? capabilities?.experimental?.[SETTINGS_EXTENSION]).success);
+    const settings = SettingsCapabilitySchema.safeParse(extensions?.[SETTINGS_EXTENSION] ?? capabilities?.experimental?.[SETTINGS_EXTENSION]);
+    service.settingsEnabled = Boolean(settingsToken && settings.success);
+    service.settingsTitle = settings.success ? settings.data.title : undefined;
     if (client.getServerCapabilities()?.tools) await this.queueRefresh(service);
   }
 

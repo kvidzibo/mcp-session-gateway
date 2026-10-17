@@ -165,7 +165,8 @@ Highlight a service and press **Tab**; edit, choose **Save changes**, review and
 keeps the draft; Escape/Back discards it. Type to filter. Settings require TUI mode and [service
 opt-in](docs/settings.md). For pi-delegate, add `"settings": { "tokenEnv":
 "PI_DELEGATE_SETTINGS_TOKEN" }` inside its existing entry. This names a variable, not a token value;
-never configure the token.
+never configure the token. Its settings action is **Roles**: select or add a role, then edit its
+model, thinking, tools, extension access, enablement and prompt. Changes apply only to future jobs.
 
 ### Package manager
 
