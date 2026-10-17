@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { availableParallelism } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parsePackages, type PackageConfig } from './packages.js';
 
@@ -17,6 +18,7 @@ export interface GatewayConfig {
   packages: PackageConfig[];
   packageStore: string;
   autoUpdate: boolean;
+  autoUpdateConcurrency: number;
   timeoutMs: number;
   logFile: string;
 }
@@ -54,6 +56,11 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   }
   const autoUpdate = data.autoUpdate === undefined ? false : data.autoUpdate;
   if (typeof autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
+  const autoUpdateConcurrency = data.autoUpdateConcurrency === undefined
+    ? Math.min(4, Math.max(1, Math.floor(availableParallelism() / 2))) : data.autoUpdateConcurrency;
+  if (typeof autoUpdateConcurrency !== 'number' || !Number.isInteger(autoUpdateConcurrency) || autoUpdateConcurrency < 1 || autoUpdateConcurrency > 128) {
+    throw new Error('autoUpdateConcurrency must be an integer between 1 and 128');
+  }
   const packages = parsePackages(data.packages, dirname(absolute));
   const packageStore = data.packageStore ?? '.gateway-packages';
   if (typeof packageStore !== 'string' || !packageStore.trim()) throw new Error('packageStore must be a non-empty path');
@@ -99,5 +106,5 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
       cwd: value.cwd?.includes('{{packageRoot}}') ? value.cwd : resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });
-  return { services, packages, autoUpdate, packageStore: resolve(dirname(absolute), packageStore), timeoutMs, logFile: resolve(dirname(absolute), logFile) };
+  return { services, packages, autoUpdate, autoUpdateConcurrency, packageStore: resolve(dirname(absolute), packageStore), timeoutMs, logFile: resolve(dirname(absolute), logFile) };
 }

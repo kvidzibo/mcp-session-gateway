@@ -95,12 +95,26 @@ checkouts linked to services qualify. First managed installs, unlinked packages
 and other external/local folders remain manual.
 The standalone stdio gateway does not run this adapter policy.
 
+Eligible packages update concurrently. The default limit is
+`min(4, max(1, floor(available CPU cores / 2)))`, using Node's `availableParallelism()`
+so process CPU affinity is respected. Set top-level `"autoUpdateConcurrency": 1`
+for sequential updates, or any integer from **1 to 128** to override the limit,
+including values above four. The limit counts whole package operations; each
+package's build and validation steps still run in order. Builds/tests may use
+multiple cores themselves, so higher limits can increase RAM and disk contention.
+Local checkouts sharing a canonical Git common directory run one at a time to
+avoid conflicting with their own worktree lock; locks held by other operations
+are still refused. No services connect until all updates finish; the update
+summary retains config order.
+
 All existing pinned-version, clean-tree, ancestry/downgrade, locking, validation,
 logging and cancellation checks still apply. Managed-release failures warn and
 leave the current activation in use. Local checks may skip an unchanged checkout,
 but incomplete local builds block startup (see below). No same-startup retries.
-Shutdown cancels and awaits pending update work. No existing processes in other
-sessions are restarted. Managed activation affects their next launch; **local
+Shutdown or a startup-blocking local failure stops queued updates, cancels active
+operations, and awaits their cleanup before returning. Completed changes are not
+rolled back. No existing processes in other sessions are restarted. Managed
+activation affects their next launch; **local
 updates mutate shared files immediately**, including dependencies and build output
 that running processes may still read.
 Manual Connection-menu restarts do not check for updates.
@@ -110,6 +124,8 @@ being checked. When a newer version is found, it shows **Updating service <name>
 while preparing, building, validating and activating the package, before connecting
 services. Local packages also show this stage when rebuilding missing output or
 validating a checkout for the first time. Fully current services show only checking.
+With concurrent updates, the loader shows the most recent package progress event,
+not an inventory of every active operation.
 
 After successful version changes, one display-only chat entry says **MCP servers were updated**
 and lists package IDs and old/new versions. Nothing is posted when up to date,
