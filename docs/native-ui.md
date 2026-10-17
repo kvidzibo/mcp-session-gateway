@@ -26,6 +26,15 @@ controls/confirmations without model turns.
   alternates do nothing—no primary fallback. This reserves right-button press even outside links;
   omit conflicting mappings. App-menu actions remain available.
 
+- Double-click (0.28.0+): update the same mouse include and kitten. Regular mode uses
+  double-click; fullscreen uses **Ctrl+Shift+double-click**. The second press invokes
+  only the declared double action; single-click remains the primary action. Kitty's
+  click interval distinguishes gestures, with no host timing heuristic. Non-gateway
+  double-clicks retain word selection. Ctrl+Shift single-click now waits for Kitty's
+  click interval instead of firing immediately on release. Existing includes must
+  be updated/reloaded; old mappings cannot invoke double actions. Menus/icons remain
+  available without the mapping.
+
 Other terminals need equivalent protocol handlers; `/pi-services` is the keyboard fallback. The
 helper signals a private socket, never service commands; installation leaves terminal config
 unchanged.
@@ -64,7 +73,18 @@ Footer `action` references an action control; `url` is safe HTTP(S), mutually ex
 control, using its own confirmation/revision. Both share one single-use capability: either
 invalidates both. Host links bind revision/session; services cannot inject socket paths/executable
 links. Refresh/navigation/disconnect/shutdown invalidate action links. Services render actions
-independently. Busy menus/confirmations reject clicks: finish and refresh. Accepted operations drain
+independently. Negotiated `doubleAction` references its own action control (and its
+confirmation/revision); it may stand alone or accompany a primary action, but not
+`url`. All actions on a link share single-use consent; accepting a suggestion cannot
+reuse that capability to complete its newly selected task. Unsupported gestures do
+not fall back to primary and do not consume the link.
+
+Negotiated `style: {italic?: boolean, color?: "accent"|"muted"|"text"}` styles a footer
+segment using the host theme, after sanitization/truncation. Services cannot supply
+raw ANSI or arbitrary colors. Omit styles and double actions from all views, including
+action results, until the corresponding feature is negotiated.
+
+Busy menus/confirmations reject clicks: finish and refresh. Accepted operations drain
 despite helper disconnect; no automatic replay.
 
 `native-ui/action` receives `{uri, revision, action, value?, _meta}`; gateway unwraps/routes URI
@@ -76,6 +96,8 @@ refreshed state after uncertain completion.
 | Negotiation | Contract |
 |---|---|
 | Scoped revisions | Gateway advertises `capabilities.experimental["native-ui-v1"].actionRevisions = true`; only then supporting hosts send `_meta["native-ui/features"] = {"actionRevisions": true}` on reads/actions/tools. |
+| Footer styles | Gateway advertises `capabilities.experimental["native-ui-v1"].footerStyles = true`; host independently sends `_meta["native-ui/features"].footerStyles = true`. |
+| Double footer | Gateway advertises `capabilities.experimental["native-ui-v1"].footerDoubleActions = true`; host independently sends `_meta["native-ui/features"].footerDoubleActions = true`. This does not imply installed mouse mappings. |
 | Alternate footer | Gateway advertises `capabilities.experimental["native-ui-v1"].footerSecondaryActions = true`; hosts independently negotiate `_meta["native-ui/features"].footerSecondaryActions = true`. This does not imply installed mouse mappings. |
 
 Negotiated controls may supply **1–256-character** `revision`: host sends it instead of view

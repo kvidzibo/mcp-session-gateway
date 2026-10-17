@@ -11,7 +11,7 @@ export class FooterActions {
   private starting?: Promise<void>;
   private stopping?: Promise<void>;
   private clients = new Set<Socket>();
-  private actions = new Map<string, { scope: string; invoke: () => Promise<boolean>; secondary?: () => Promise<boolean> }>();
+  private actions = new Map<string, { scope: string; invoke?: () => Promise<boolean>; secondary?: () => Promise<boolean>; double?: () => Promise<boolean> }>();
 
   start(): Promise<void> {
     return this.starting ??= this.listen();
@@ -37,10 +37,10 @@ export class FooterActions {
         if (Buffer.byteLength(input) > 43) { client.destroy(); return; }
         if (!input.includes('\n')) return;
         dispatched = true;
-        const match = /^([0-9a-f]{32})( secondary)?\n$/.exec(input);
+        const match = /^([0-9a-f]{32})( secondary| double)?\n$/.exec(input);
         const token = match?.[0] === input ? match[1] : undefined;
         const entry = token ? this.actions.get(token) : undefined;
-        const invoke = match?.[2] ? entry?.secondary : entry?.invoke;
+        const invoke = match?.[2] === ' secondary' ? entry?.secondary : match?.[2] === ' double' ? entry?.double : entry?.invoke;
         if (!entry || !token || !invoke) { client.end('rejected\n'); return; }
         // Consume before dispatch: parallel clicks cannot duplicate a write.
         this.actions.delete(token);
@@ -60,10 +60,10 @@ export class FooterActions {
   clear(scope?: string): void {
     for (const [token, entry] of this.actions) if (scope === undefined || entry.scope === scope) this.actions.delete(token);
   }
-  link(scope: string, invoke: () => Promise<boolean>, secondary?: () => Promise<boolean>): string | undefined {
+  link(scope: string, invoke?: () => Promise<boolean>, secondary?: () => Promise<boolean>, double?: () => Promise<boolean>): string | undefined {
     if (this.closed || !this.file || !this.server?.listening || this.actions.size >= 4096) return;
     const token = randomBytes(16).toString('hex');
-    this.actions.set(token, { scope, invoke, secondary });
+    this.actions.set(token, { scope, invoke, secondary, double });
     return `pi-gateway-action://${basename(this.file, '.sock')}/${token}`;
   }
   stop(): Promise<void> {

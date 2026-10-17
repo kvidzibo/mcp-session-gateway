@@ -5,7 +5,7 @@ import { FooterActions } from './footer-actions.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { confirmSettings, inputSettings } from './settings.js';
-import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
+import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, FooterStylesFeaturesSchema, FooterDoubleFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
 const transferKey = Symbol.for('gateway.native-ui.new-session');
@@ -153,7 +153,9 @@ export class NativeUI {
     if (!this.contexts.has(service)) this.contexts.set(service, randomUUID());
     const scoped = ActionRevisionFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
     const secondary = FooterSecondaryFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
-    return { ...(scoped || secondary ? { [UI_FEATURES]: { ...(scoped ? { actionRevisions: true } : {}), ...(secondary ? { footerSecondaryActions: true } : {}) } } : {}), [UI_CONTEXT]: ContextSchema.parse({
+    const styles = FooterStylesFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
+    const double = FooterDoubleFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
+    return { ...(scoped || secondary || styles || double ? { [UI_FEATURES]: { ...(scoped ? { actionRevisions: true } : {}), ...(secondary ? { footerSecondaryActions: true } : {}), ...(styles ? { footerStyles: true } : {}), ...(double ? { footerDoubleActions: true } : {}) } } : {}), [UI_CONTEXT]: ContextSchema.parse({
       conversationId: this.ctx?.sessionManager?.getSessionId() ?? this.ephemeralId,
       contextId: this.contexts.get(service),
       state: this.states.get(service) ?? {},
@@ -184,7 +186,9 @@ export class NativeUI {
         return await this.dispatch(uri, view, control, undefined, ctx, epoch);
       } finally { if (epoch === this.epoch && this.views.get(uri)) this.renderFooter(uri, this.views.get(uri)!); }
     });
-    ctx.ui.setStatus(`gateway-ui:${service}`, footerText(view, truncateToWidth, (action, secondary) => this.bridge?.link(service, invoke(action), secondary ? invoke(secondary) : undefined)));
+    ctx.ui.setStatus(`gateway-ui:${service}`, footerText(view, truncateToWidth,
+      (action, secondary, double) => this.bridge?.link(service, action ? invoke(action) : undefined, secondary ? invoke(secondary) : undefined, double ? invoke(double) : undefined),
+      (text, style) => { const colored = style.color ? ctx.ui.theme.fg(style.color, text) : text; return style.italic ? ctx.ui.theme.italic(colored) : colored; }));
   }
 
   async refresh(uri: string): Promise<void> {
