@@ -19,6 +19,7 @@ import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ensureGatewayBuild } from './build.js';
+import { awaitTransportExit } from './transport.js';
 import { checkGatewayUpdate, gatewayNeedsRestart } from './self-update.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
@@ -347,6 +348,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     delete env[OPERATOR_ENV];
     if (operatorToken) env[OPERATOR_ENV] = operatorToken;
     transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../dist/cli.js', import.meta.url)), '--config', configPath], cwd: ctx.cwd, env, stderr: 'pipe' });
+    awaitTransportExit(transport);
     if (ctx.hasUI) handleElicitation(current, transport, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});

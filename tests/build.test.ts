@@ -4,7 +4,10 @@ import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ensureGatewayBuild } from '../pi/build.js';
+import { awaitTransportExit } from '../pi/transport.js';
 import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 
 test('launch builds missing/stale output once, detects content changes, and never accepts a failed build', async () => {
@@ -76,21 +79,33 @@ test('launch builds missing/stale output once, detects content changes, and neve
       assert.equal(installing, false, 'Dependency replacement must wait for the child handshake');
     } finally { release(); await Promise.all([launching, installer]); }
     assert.equal(installing, true);
-    let cleaning!: () => void, finishCleanup!: () => void;
-    const cleanupEntered = new Promise<void>((resolve) => { cleaning = resolve; });
-    const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
-    const failing = assert.rejects(ensureGatewayBuild(root, signal, {
-      launch: async () => { throw new Error('failed handshake'); },
-      dispose: async () => { cleaning(); await cleanup; },
-    }), /failed handshake/);
-    await cleanupEntered;
-    installing = false;
-    const afterFailure = withCheckoutLock(root, signal, async () => { installing = true; });
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      assert.equal(installing, false, 'A failed handshake retains the lock until child disposal finishes');
-    } finally { finishCleanup(); await Promise.all([failing, afterFailure]); }
-    assert.equal(installing, true);
+    // Exercise SDK connect()'s fire-and-forget close with a real slow-exiting child.
+    for (const stubborn of [false, true]) {
+      const client = new Client({ name: 'timeout-fixture', version: '1' });
+      const transport = new StdioClientTransport({ command: process.execPath, args: ['-e',
+        stubborn
+          ? "process.stdin.resume(); process.on('SIGTERM',()=>{}); setInterval(()=>{},1000);"
+          : "process.stdin.resume(); process.stdin.on('end',()=>setTimeout(()=>process.exit(0),350));"], stderr: 'pipe' });
+      awaitTransportExit(transport);
+      let exited = false;
+      const onclose = transport.onclose;
+      transport.onclose = () => { exited = true; onclose?.(); };
+      let timedOut!: () => void;
+      const timeout = new Promise<void>((resolve) => { timedOut = resolve; });
+      const failing = assert.rejects(ensureGatewayBuild(root, signal, {
+        launch: async () => {
+          try { await client.connect(transport, { timeout: 1000 }); }
+          catch (error) { timedOut(); throw error; }
+        },
+        dispose: () => transport.close(),
+      }), /timed out/);
+      await timeout;
+      const afterFailure = withCheckoutLock(root, signal, async () => {
+        assert.equal(exited, true, 'The installer must wait for SDK-initiated teardown and actual child exit');
+      });
+      try { await Promise.all([failing, afterFailure]); }
+      finally { await transport.close(); }
+    }
 
     const identity = await checkoutIdentity(root);
     await withCheckoutLock(root, signal, async () => {
