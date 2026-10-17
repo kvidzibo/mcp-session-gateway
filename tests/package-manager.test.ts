@@ -12,7 +12,10 @@ import { Gateway } from '../src/gateway.js';
 import { bindManagedService, PackageManager, runPackageCommand } from '../src/package-manager.js';
 import { parsePackages } from '../src/packages.js';
 import { managePackages } from '../pi/package-actions.js';
-import gatewayExtension from '../pi/gateway.js';
+import registerGateway from '../pi/runtime.js';
+
+// Service/UI tests must never fetch or install into the checkout hosting this test.
+const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
 
 test('managed releases prepare, validate, activate and roll back independently of running services, with safe failure/cancellation', { timeout: 60_000 }, async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-managed-'));

@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { git, gitEnvironment, localGitSource, readMetadata, safeGitArgs, type PackageConfig } from './packages.js';
 import { runPackageCommand } from './package-manager.js';
+import { withCheckoutLock } from './checkout-lock.js';
 
 const receiptSchema = z.object({ ready: z.boolean(), head: z.string(), definition: z.string() }).strict();
 const definition = (pkg: PackageConfig) => createHash('sha256').update(JSON.stringify(pkg.localUpdate)).digest('hex');
@@ -62,6 +63,14 @@ export async function localPackageRoot(pkg: PackageConfig, signal: AbortSignal, 
 export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal,
   progress: (stage: 'checking' | 'updating') => void): Promise<{ name: string; from: string; version: string } | undefined> {
   progress('checking');
+  const paths = await checkout(pkg, signal);
+  if (await exists(paths.lock)) throw new Error(`Local checkout is locked; never delete a live lock: ${paths.lock}`);
+  return withCheckoutLock(paths.root, signal, (recordGroup) => updateLocked(pkg, signal, progress, recordGroup));
+}
+
+async function updateLocked(pkg: PackageConfig, signal: AbortSignal,
+  progress: (stage: 'checking' | 'updating') => void,
+  recordGroup: (pid: number, command: string, cwd: string) => Promise<void>) {
   const paths = await checkout(pkg, signal), commands = pkg.localUpdate!;
   let lock;
   try { lock = await open(paths.lock, 'wx', 0o600); }
@@ -94,7 +103,10 @@ export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal
       if (chunk.length) writing = writing.then(async () => { await log!.writeFile(chunk); }).catch((error: unknown) => { logFailure = error; });
     };
     const run = (command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => runPackageCommand(command, args, cwd, env, signal,
-      commands.timeoutMs, report, (pid) => record({ kind: 'command', pid, pgid: pid, command, cwd, started: new Date().toISOString() }));
+      commands.timeoutMs, report, async (pid) => {
+        await record({ kind: 'command', pid, pgid: pid, command, cwd, started: new Date().toISOString() });
+        await recordGroup(pid, command, cwd);
+      });
     // Explicit URL/refspec bypass remote helpers, configured refspecs, and upload-pack overrides.
     // FETCH_HEAD is shared with developer Git commands: use a private ref and delete it afterward.
     const ref = `refs/mcp-gateway/${randomUUID()}`;

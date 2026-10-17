@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
+import { withCheckoutLock } from '../src/checkout-lock.js';
 import { runPackageCommand } from '../src/package-manager.js';
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -31,20 +31,8 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal): Pro
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(300_000)]);
   bounded.throwIfAborted();
   await mkdir(join(root, 'dist'), { recursive: true });
-  const lockPath = join(root, 'dist/.gateway-build.lock');
   const stampPath = join(root, 'dist/.gateway-build.json');
-  let lock;
-  while (!lock) {
-    bounded.throwIfAborted();
-    try { lock = await open(lockPath, 'wx', 0o600); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try { await delay(100, undefined, { signal: bounded }); }
-      catch { throw new Error(`Gateway build lock wait cancelled or timed out: ${lockPath}. Remove only a verified stale lock.`); }
-    }
-  }
-  try {
-    await lock.writeFile(`pid=${process.pid}\n`);
+  await withCheckoutLock(root, bounded, async (recordGroup) => {
     const inputs = [...await sources(root, 'src'), ...await sources(root, 'examples'),
       'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json'];
     const outputs = inputs.filter((path) => path.endsWith('.ts')).flatMap((path) => {
@@ -66,7 +54,7 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal): Pro
     let output = '';
     try {
       await runPackageCommand('npm', ['run', 'build'], root, process.env, bounded, 300_000,
-        (chunk) => { output = (output + chunk).slice(-8000); });
+        (chunk) => { output = (output + chunk).slice(-8000); }, (pid) => recordGroup(pid, 'npm', root));
       bounded.throwIfAborted();
       const currentInputs = [...await sources(root, 'src'), ...await sources(root, 'examples'), ...inputs.filter((path) => !path.endsWith('.ts'))];
       if (await fingerprint(root, currentInputs) !== input) throw new Error('Build inputs changed during compilation; retry startup');
@@ -74,8 +62,5 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal): Pro
     } catch (error) {
       throw new Error(`Gateway build failed; no gateway was launched. Run npm ci && npm run build in ${root} if dependencies are missing.\n${String(error)}\n${output}`);
     }
-  } finally {
-    await lock.close();
-    await rm(lockPath, { force: true });
-  }
+  });
 }

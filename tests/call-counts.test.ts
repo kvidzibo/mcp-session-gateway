@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import gatewayExtension from '../pi/gateway.js';
+import registerGateway from '../pi/runtime.js';
+
+// Service/UI tests must never fetch or install into the checkout hosting this test.
+const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from '../pi/call-counts.js';
 import { readDisplay, toggleDisplay } from '../pi/auto-update.js';
 

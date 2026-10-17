@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ensureGatewayBuild } from '../pi/build.js';
+import { withCheckoutLock } from '../src/checkout-lock.js';
 
 test('launch builds missing/stale output once, detects content changes, and never accepts a failed build', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-build-'));
   const signal = new AbortController().signal;
+  let pending: Promise<void> | undefined;
   const build = () => ensureGatewayBuild(root, signal);
   const count = async () => (await readFile(join(root, 'builds'), 'utf8')).length;
   try {
@@ -50,8 +52,22 @@ test('launch builds missing/stale output once, detects content changes, and neve
     await writeFile(source, 'two');
     await build();
     assert.equal(await count(), 7, 'Failure cannot reuse the earlier successful stamp');
+    // The updater and compiler must not race npm ci against tsc.
+    await mkdir(join(root, '.git'));
+    await writeFile(source, 'three');
+    await withCheckoutLock(root, signal, async () => {
+      pending = build();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(await count(), 7, 'A launch compiler waits for the checkout update lock');
+      assert.ok(pending);
+    });
+    await pending;
+    assert.equal(await count(), 8);
     const cancelled = new AbortController();
     cancelled.abort();
     await assert.rejects(ensureGatewayBuild(root, cancelled.signal), { name: 'AbortError' });
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await pending?.catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -71,12 +71,19 @@ behavior's introduction also builds to record a fingerprint. Fresh builds are re
 Requires `npm ci` development dependencies and **POSIX process-group support**. The build check
 itself never installs dependencies or updates sources; the separate [gateway startup update
 policy](packages.md#gateway-self-updates) can do both. Standalone/built-in launches need manual builds. Concurrent
-launches share a checkout lock with a **five-minute build/wait limit**. Shutdown cancels
-compilation; already-running gateways are never rebuilt/restarted.
+launches, dependency imports and automatic updates share a **five-minute lock-wait limit**;
+builds also have a five-minute deadline. The dependency-light adapter loader waits before importing
+packages that an update may be replacing. Shutdown cancels compilation; already-running gateways
+are never rebuilt/restarted.
 
-Failure leaves the gateway disconnected, not stale. Inspect compiler errors, run `npm ci` if
-dependencies changed, finish gateway jobs, then retry `/reload`. Remove a crash-left
-`dist/.gateway-build.lock` **only after verifying its recorded PID and compiler children stopped**.
+Failure leaves the gateway disconnected, not stale. Finish gateway jobs and wait for all updates
+and builds before manually running `npm ci --include=dev`; manual npm commands do not take the
+gateway lock. Start a fresh Pi with Auto update on to rebuild/validate an interrupted self-update.
+Do not delete failed-build receipts.
+
+Git checkouts use `mcp-gateway-build.lock` in the Git common directory (shared by linked worktrees);
+archives use `dist/.gateway-build.lock`. Crash-left locks require
+[process-group recovery](packages.md#store-logs-and-recovery), never automatic deletion.
 
 ### Display and call counts
 
