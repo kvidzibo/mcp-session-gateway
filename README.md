@@ -191,6 +191,7 @@ Gateway
 │  ├─ Installed versions
 │  ├─ Check for updates
 │  └─ Manage releases → package → prepare / activate / roll back / log
+├─ Auto update: Off / On → toggle and save immediately
 └─ Connection
    ├─ Connection details
    └─ Restart gateway services…
@@ -242,7 +243,14 @@ activation, and rollback. Inventory is read-only; checking installs nothing.
 Writes and restarting all gateway services require separate confirmations.
 Managed services stay stopped until their first manual preparation/activation.
 
-Updates are manual by default. Top-level `"autoUpdate": true` authorizes startup
+Updates are manual by default. Select **`/gateway` → Auto update: Off/On** to
+toggle and save immediately to the selected gateway config, with no extra dialog.
+This does not update or restart services now; it takes effect on the next startup
+or reload. The menu remains available while disconnected. Saving rewrites JSON
+formatting but preserves other values. You can also edit top-level `"autoUpdate"`
+in the config directly.
+
+Enabling `"autoUpdate": true` authorizes startup
 updates of already-activated managed packages, **including trusted download/build/
 validation commands without per-update confirmation**. Other sessions' running
 services are not restarted. Read the [package guide](docs/packages.md), including

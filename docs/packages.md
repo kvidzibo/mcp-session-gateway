@@ -75,8 +75,17 @@ can create a project-local Python environment.
 
 ## Automatic startup updates
 
-Set top-level `"autoUpdate": true` in the gateway config (default `false`; only a
-boolean is accepted). This authorizes the **Pi adapter** to check public sources
+Select **`/gateway` → Auto update: Off/On** to toggle and automatically save the
+selected gateway config, without a second confirmation. The label refreshes from
+disk; save failures leave the previous value in place and report an error. This
+works while disconnected and does not immediately update or restart any service.
+Saving rewrites JSON formatting but preserves other values, including environment
+variable references. A concurrent adapter save is refused; an interrupted save
+may leave `<config>.auto-update.lock`. Remove that lock only after verifying no
+session is still saving.
+
+Alternatively set top-level `"autoUpdate": true` in the gateway config (default
+`false`; only a boolean is accepted). Enabling this authorizes the **Pi adapter** to check public sources
 on startup/reload and prepare, build, validate and activate changed versions
 without individual confirmations, before starting any child servers.
 Only already-activated managed packages linked to configured services qualify;

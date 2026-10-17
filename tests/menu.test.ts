@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -61,6 +61,72 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
     await handlers.get('session_shutdown')!({}, ctx);
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('Auto update toggles and saves from the root, preserves raw config, and refuses failed or stale saves', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gateway-auto-update-'));
+  const target = join(dir, 'actual.json'), config = join(dir, 'gateway.json');
+  const lock = `${target}.auto-update.lock`;
+  const commands = new Map<string, any>();
+  const notices: string[] = [];
+  let visit = 0;
+  gatewayExtension({
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} }, registerTool() {}, on() {},
+    registerCommand: (name: string, command: any) => commands.set(name, command),
+    appendEntry() { assert.fail('Toggling must not add model/session entries'); },
+  } as any);
+  const original = { mcpServers: { demo: { command: 'unused', env: { SECRET: '${KEEP_THIS_REFERENCE}' } } }, extra: { untouched: true } };
+  const read = async () => JSON.parse(await readFile(target, 'utf8'));
+  const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, ui: { theme,
+    notify: (text: string) => notices.push(text),
+    custom: async (factory: Function) => {
+      let answer: unknown;
+      const terminal = { rows: 24, columns: 80 };
+      const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; });
+      const render = () => panel.render(terminal.columns - 2) as string[];
+      try {
+        const current = visit++;
+        const label = `Auto update: ${[1, 4].includes(current) ? 'On' : current === 7 ? 'Unavailable' : 'Off'}`;
+        assert.ok(render().includes('Gateway'), 'No confirmation or settings subdialog');
+        assert.match(render().join('\n'), /Disconnected/);
+        for (let i = 0; i < 8 && !render().includes(`→ ${label}${current === 7 ? ' (unavailable)' : ''}`); i++) panel.handleInput(down);
+        assert.ok(render().some((line) => line.includes(`→ ${label}`)));
+        if (current === 1) assert.equal((await read()).autoUpdate, true);
+        if ([2, 3, 5, 6].includes(current)) assert.equal((await read()).autoUpdate, false);
+        for (const columns of [38, 80]) {
+          terminal.columns = columns;
+          const lines = render();
+          assert.ok(lines.length <= terminal.rows - 2);
+          assert.ok(lines.every((line) => visibleWidth(line) <= columns - 2));
+        }
+        if (current === 0) await writeFile(target, JSON.stringify({ ...original, concurrentField: 'preserved' }));
+        if (current === 2) await writeFile(lock, 'busy');
+        if (current === 3) {
+          await rm(lock);
+          await writeFile(target, JSON.stringify({ ...await read(), autoUpdate: true }));
+        }
+        panel.handleInput(current >= 5 ? escape : '\r');
+        if (current === 7) assert.equal(await readFile(target, 'utf8'), '{invalid');
+        return answer;
+      } finally { panel.dispose(); }
+    },
+  } };
+  try {
+    await writeFile(target, JSON.stringify(original), { mode: 0o640 });
+    await symlink(target, config);
+    await commands.get('gateway').handler('', ctx);
+    await commands.get('gateway').handler('', ctx);
+    assert.equal(visit, 7, 'Reopening reads the persisted value');
+    assert.deepEqual(await read(), { ...original, concurrentField: 'preserved', autoUpdate: false });
+    assert.equal((await stat(target)).mode & 0o777, 0o640);
+    assert.equal((await readFile(config, 'utf8')), await readFile(target, 'utf8'), 'Symlink target was updated');
+    assert.equal(notices.filter((text) => text.includes('saved for next startup/reload')).length, 3);
+    assert.ok(notices.some((text) => text.includes('Another session is saving')));
+    assert.ok(notices.some((text) => text.includes('changed in another session')));
+    await writeFile(target, '{invalid');
+    await commands.get('gateway').handler('', ctx);
+    assert.equal(visit, 8);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('service selection opens its app directly; Tab opens private settings and returns to the caller', async () => {
