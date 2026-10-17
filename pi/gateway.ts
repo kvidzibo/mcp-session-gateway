@@ -1,9 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import type { EntryRenderer, ExtensionAPI, ExtensionContext, SessionStartEvent, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
-import { readAutoUpdate } from './auto-update.js';
 import { gatewayCommands, gatewayEntries, gatewayTools } from './definitions.js';
-import { updateBeforeLoad } from './startup-update.js';
+import { readStartupAutoUpdate, updateBeforeLoad } from './startup-update.js';
 import type { GatewayLifecycle } from './runtime.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -78,7 +77,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     // Reloads keep the old behavior: already-imported code must never adopt a new installation.
     if (event && !state[identityKey]?.has(root) && typeof config === 'string' && config) {
       try {
-        if (await readAutoUpdate(config)) {
+        if (await readStartupAutoUpdate(config)) {
           await updateBeforeLoad(root, signal, (stage) => ctx.ui.setStatus('gateway', `MCP · ${stage}`),
             (text, level) => ctx.ui.notify(text.replace(/[\x00-\x1f\x7f-\x9f]/g, ' '), level));
           checked = true;

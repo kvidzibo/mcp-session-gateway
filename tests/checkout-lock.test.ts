@@ -14,7 +14,7 @@ test('the dependency-light bootstrap waits for an install in a linked checkout b
     await mkdir(join(root, 'common/worktrees/linked'), { recursive: true });
     await writeFile(join(root, '.git'), 'gitdir: common/worktrees/linked\n');
     await writeFile(join(root, 'common/worktrees/linked/commondir'), '../..\n');
-    for (const path of ['pi/gateway.ts', 'pi/auto-update.ts', 'pi/definitions.ts', 'pi/startup-update.ts', 'src/checkout-lock.ts']) {
+    for (const path of ['pi/gateway.ts', 'pi/definitions.ts', 'pi/startup-update.ts', 'src/checkout-lock.ts']) {
       await copyFile(new URL('../' + path, import.meta.url), join(root, path));
     }
     await writeFile(join(root, 'pi/runtime.ts'), `import command from 'fixture-dependency';

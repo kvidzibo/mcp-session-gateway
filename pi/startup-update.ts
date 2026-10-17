@@ -1,9 +1,18 @@
 import { fork } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { lstat } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withCheckoutLock } from '../src/checkout-lock.js';
+
+/** Do not preload the runtime's preference module: an update may replace its implementation. */
+export async function readStartupAutoUpdate(path: string): Promise<boolean> {
+  const data: unknown = JSON.parse(await readFile(path, 'utf8'));
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Config must be an object');
+  const value = (data as { autoUpdate?: unknown }).autoUpdate;
+  if (value !== undefined && typeof value !== 'boolean') throw new Error('autoUpdate must be a boolean');
+  return value === true;
+}
 
 export async function updateBeforeLoad(root: string, signal: AbortSignal,
   progress: (stage: string) => void,

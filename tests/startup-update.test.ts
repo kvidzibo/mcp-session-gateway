@@ -31,12 +31,14 @@ test('a fresh Pi updates dependencies before importing the adapter and starts se
     for (const path of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json', '.gitignore']) {
       await copyFile(join(root, path), join(remote, path));
     }
-    const runtime = join(remote, 'pi/runtime.ts');
-    await writeFile(runtime, "// @ts-ignore: test-only dependency replaced by the simulated npm ci\nimport version from 'fixture-dependency';\nif (version !== 'new') throw new Error('Adapter imported before dependency update');\n" + await readFile(runtime, 'utf8'));
+    const runtime = join(remote, 'pi/runtime.ts'), preferences = join(remote, 'pi/auto-update.ts');
+    await writeFile(preferences, await readFile(preferences, 'utf8') + "\nexport const startupRevision = 'old';\n");
+    await writeFile(runtime, "// @ts-ignore: test-only dependency replaced by the simulated npm ci\nimport version from 'fixture-dependency';\nimport { startupRevision } from './auto-update.js';\nif (version !== 'new' || startupRevision !== 'new') throw new Error('Adapter imported before source/dependency update');\n" + await readFile(runtime, 'utf8'));
     git(remote, 'init', '-b', 'main'); git(remote, 'add', '.'); git(remote, 'commit', '-m', 'initial');
     git(dir, 'clone', remote, local);
     git(local, 'remote', 'set-url', 'origin', 'git@github.com:kvidzibo/mcp-session-gateway.git');
     await writeFile(join(remote, 'revision.txt'), 'updated');
+    await writeFile(preferences, (await readFile(preferences, 'utf8')).replace("startupRevision = 'old'", "startupRevision = 'new'"));
     git(remote, 'add', '.'); git(remote, 'commit', '-m', 'update');
     const target = git(remote, 'rev-parse', 'HEAD');
     // Keep npm isolated without duplicating the full dependency tree. Only the fixture dependency is replaced.
