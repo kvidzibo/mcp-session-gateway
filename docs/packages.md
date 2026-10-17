@@ -132,10 +132,15 @@ It runs `npm ci --include=dev`, `npm run build`, then `npm run check`. The first
 builds/validates the current revision; later unchanged launches reuse that receipt. This updates
 the installation shared by configurations/sessions using this checkout—not just one config.
 
-**After a gateway build/update, start a fresh Pi process.** The adapter stays disconnected rather
-than mix its already-loaded modules with replaced sources/dependencies. `/reload` is not a substitute
-for restarting Pi. Running sessions are never restarted automatically; finish their work before
-enabling updates. Connection-menu restarts check but do not self-update. Direct CLI/built-in MCP
+**A fresh Pi updates before loading the adapter.** A disposable TypeScript worker imports the
+updater under the dependency lock, then installs/builds/validates and exits. Pi imports the resulting
+adapter under that same lock and starts services in the same launch; no second restart is needed.
+Extension discovery/help starts no updater or services. Opening a recovery command before session
+startup loads the adapter without updating or connecting.
+
+**Updates after the adapter is loaded still require a fresh Pi.** The adapter stays disconnected
+rather than mix cached modules with replaced sources/dependencies. `/reload` cannot reset that
+guard. Running sessions are never restarted automatically; finish their work before enabling updates. Connection-menu restarts check but do not self-update. Direct CLI/built-in MCP
 launches remain manual; this is the Pi adapter's startup policy.
 
 Pre-mutation refusals warn and may launch existing files. Incomplete/failed builds block adapter
