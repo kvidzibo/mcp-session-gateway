@@ -269,39 +269,52 @@ export class PackageManager {
 export async function updateManagedPackages(config: GatewayConfig, signal: AbortSignal,
   failed: (name: string, error: unknown) => void,
   progress: (name: string, stage: 'checking' | 'updating') => void = () => {}): Promise<{ name: string; from: string; version: string }[]> {
-  const updates: { name: string; from: string; version: string }[] = [];
-  if (!config.autoUpdate) return updates;
+  if (!config.autoUpdate) return [];
+  const packages = config.packages.filter((pkg) => (pkg.managed || pkg.localUpdate) && config.services.some((service) => service.package === pkg.name));
+  const updates: ({ name: string; from: string; version: string } | undefined)[] = new Array(packages.length);
   const manager = new PackageManager(config.packageStore);
-  for (const pkg of config.packages) {
-    if ((!pkg.managed && !pkg.localUpdate) || !config.services.some((service) => service.package === pkg.name)) continue;
-    signal.throwIfAborted();
+  const stopped = new AbortController();
+  const operation = AbortSignal.any([signal, stopped.signal]);
+  const update = async (pkg: PackageConfig, index: number) => {
     try {
       if (pkg.localUpdate) {
-        const updated = await updateLocalPackage(pkg, signal, (stage) => progress(pkg.name, stage));
-        if (updated) updates.push(updated);
-        continue;
+        updates[index] = await updateLocalPackage(pkg, operation, (stage) => progress(pkg.name, stage));
+        return;
       }
-      if (!(await manager.state(pkg, signal)).active) continue;
+      if (!(await manager.state(pkg, operation)).active) return;
       progress(pkg.name, 'checking');
-      const plan = await manager.plan(pkg, signal);
-      if (!plan.from || plan.version === plan.from) continue;
+      const plan = await manager.plan(pkg, operation);
+      if (!plan.from || plan.version === plan.from) return;
       progress(pkg.name, 'updating');
-      await manager.prepare(pkg, plan, signal, () => {});
-      const state = await manager.state(pkg, signal);
+      await manager.prepare(pkg, plan, operation, () => {});
+      const state = await manager.state(pkg, operation);
       if (state.active?.version !== plan.from || state.prepared?.version !== plan.version) {
         throw new Error('Package changed during startup update; inspect releases before retrying');
       }
-      await manager.activate(pkg, state.revision, false, signal);
-      updates.push({ name: pkg.name, from: plan.from, version: plan.version });
+      await manager.activate(pkg, state.revision, false, operation);
+      updates[index] = { name: pkg.name, from: plan.from, version: plan.version };
     } catch (error) {
-      signal.throwIfAborted();
+      operation.throwIfAborted();
       failed(pkg.name, error);
       // A skipped local check may retain a known-good checkout. Once mutation/build
       // started, its durable marker blocks all launch paths until a successful retry.
-      if (pkg.localUpdate) await localPackageRoot(pkg, signal);
+      if (pkg.localUpdate) await localPackageRoot(pkg, operation);
     }
-  }
-  return updates;
+  };
+  let next = 0;
+  const worker = async () => {
+    try {
+      while (next < packages.length) {
+        operation.throwIfAborted();
+        const index = next++;
+        await update(packages[index], index);
+      }
+    } catch (error) { stopped.abort(error); }
+  };
+  // Await every worker's process/lock cleanup before startup can fail or continue.
+  await Promise.all(Array.from({ length: Math.min(config.autoUpdateConcurrency, packages.length) }, worker));
+  operation.throwIfAborted();
+  return updates.filter((entry) => entry !== undefined);
 }
 
 /** Called only at gateway startup. Missing activation leaves a managed service stopped. */

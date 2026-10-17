@@ -169,7 +169,10 @@ tool discovery, apps and live panels. It clears on success, failure or shutdown;
 noninteractive sessions do not animate. Auto-update supports activated managed
 releases and explicitly configured [local Git packages](docs/packages.md#local-git-packages):
 clean main/master checkouts are fast-forwarded, then built and validated before
-connection. Other development folders are never adopted automatically.
+connection. Updates run concurrently with a CPU-based limit (up to four by default);
+set `autoUpdateConcurrency` to override it, or `1` for sequential updates. See the
+[update concurrency and resource limits](docs/packages.md#automatic-startup-updates).
+Other development folders are never adopted automatically.
 
 New sessions also print a compact, display-only **startup snapshot** listing each
 service's observed connection state, exposed tool count and tool names. Names wrap

@@ -24,6 +24,11 @@ reserved.
 `timeoutMs` defaults to **30,000 ms** and must be an integer from 100 to 300,000.
 Allow enough time for approval dialogs as well as service work.
 
+`autoUpdateConcurrency` optionally overrides the CPU-based startup package-update
+limit with an integer from **1 to 128** (`1` runs sequentially). See
+[startup update concurrency](packages.md#automatic-startup-updates) for the default
+and resource/cleanup behavior. It does not enable `autoUpdate` by itself.
+
 ### Environment variables
 
 Children receive the MCP SDK's minimal default environment plus configured
