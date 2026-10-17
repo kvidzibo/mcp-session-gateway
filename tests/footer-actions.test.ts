@@ -185,3 +185,71 @@ test('right-click dispatches only the alternate control and shares single-use co
     assert.equal(primary, 1);
   } finally { await host.stop(); await bridge.stop(); }
 });
+
+test('styled double-click titles accept then complete only on fresh capabilities', async () => {
+  const statuses = new Map<string, string>(), actions: string[] = [];
+  let selected = false, completed = false, busy = false;
+  const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => [], getSessionId: () => 'double' },
+    ui: { setStatus: (key: string, value: string) => statuses.set(key, value), notify() {},
+      theme: { fg: (_: string, text: string) => `\x1b[36m${text}\x1b[39m`, italic: (text: string) => `\x1b[3m${text}\x1b[23m` } } };
+  const view = () => ({ version: 1, title: 'Tasks', revision: selected ? 'active' : 'suggested', state: { selected },
+    controls: ['accept', 'preview', 'done'].map((id) => ({ id, label: id, kind: 'action', revision: id + (selected ? '-active' : '-suggested') })),
+    footer: completed ? [] : [{ text: '\x1b[31mTask 日本語', width: 30,
+      ...(selected ? { action: 'preview', doubleAction: 'done' } : { doubleAction: 'accept', style: { italic: true, color: 'accent' } }) }] });
+  const client: any = {
+    getServerCapabilities: () => ({ experimental: { 'native-ui-v1': { footerStyles: true, footerDoubleActions: true } } }),
+    listResources: async () => ({ resources: [{ uri: 'gateway-resource://demo/root', mimeType: 'application/vnd.mcp-native-ui+json' }] }),
+    readResource: async () => ({ contents: [{ mimeType: 'application/vnd.mcp-native-ui+json', text: JSON.stringify(view()) }] }),
+    request: async (request: any) => {
+      const { action, revision } = request.params;
+      assert.equal(revision, action + (selected ? '-active' : '-suggested'));
+      actions.push(action);
+      if (action === 'accept') selected = true;
+      if (action === 'done') completed = true;
+      return { view: view() };
+    },
+  };
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => !busy && run());
+  const link = () => statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b]+/)![0];
+  const bridge = new FooterActions();
+  try {
+    await host.start(ctx, '/double-config');
+    assert.deepEqual(host.meta('demo')['native-ui/features'], { footerStyles: true, footerDoubleActions: true });
+    assert.match(statuses.get('gateway-ui:demo')!, /\x1b\[3m\x1b\[36mTask 日本語/);
+    assert.ok(!statuses.get('gateway-ui:demo')!.includes('\x1b[31m'), 'Service escapes are removed before trusted styling');
+    const suggestion = link();
+    await assert.rejects(click(suggestion), 'A single click cannot accept');
+    await click(suggestion, 'double');
+    assert.deepEqual(actions, ['accept']);
+    await assert.rejects(click(suggestion, 'double'), 'The accepting gesture cannot complete');
+    assert.equal(completed, false);
+    assert.ok(!statuses.get('gateway-ui:demo')!.includes('\x1b[3m'));
+    await click(link());
+    assert.deepEqual(actions, ['accept', 'preview'], 'Single-click active title still previews');
+    busy = true;
+    await assert.rejects(click(link(), 'double'));
+    assert.equal(completed, false);
+    busy = false;
+    const stale = link();
+    await host.refresh('gateway-resource://demo/root');
+    await assert.rejects(click(stale, 'double'));
+    await click(link(), 'double');
+    assert.deepEqual(actions, ['accept', 'preview', 'done']);
+    await bridge.start();
+    let writes = 0;
+    const race = bridge.link('race', async () => { writes++; return true; }, undefined, async () => { writes++; return true; })!;
+    const results = await Promise.allSettled([click(race), click(race, 'double')]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.equal(writes, 1);
+    const primary = bridge.link('primary', async () => true)!;
+    await assert.rejects(click(primary, 'double'));
+    await click(primary);
+    const base = view();
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', doubleAction: 'missing' }] }));
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', doubleAction: 'done', url: 'https://example.com' }] }));
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', style: { color: 'red' } }] }));
+    const stopped = bridge.link('stopped', undefined, undefined, async () => true)!;
+    await bridge.stop();
+    await assert.rejects(click(stopped, 'double'));
+  } finally { await host.stop(); await bridge.stop(); }
+});
