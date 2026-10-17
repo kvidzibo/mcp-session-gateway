@@ -10,6 +10,7 @@ import { Loader, Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
+import { readAutoUpdate, toggleAutoUpdate } from './auto-update.js';
 import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
@@ -309,15 +310,23 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       let nextAction = connected ? initialAction : undefined;
       try {
         while (!signal.aborted) {
+          let autoUpdate: boolean | undefined, autoUpdateError = '';
+          try { autoUpdate = await readAutoUpdate(configPath); }
+          catch (error) { autoUpdateError = clean(String(error)); }
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
             { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
+            { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
+              description: autoUpdateError || 'Enter toggles and saves immediately. On authorizes trusted downloads/builds/validation with OS permissions at startup/reload, without confirmations. Already-activated managed packages only.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;
           if (!action) break;
           try {
-            if (action === 'services') {
+            if (action === 'auto-update' && autoUpdate !== undefined) {
+              const enabled = await toggleAutoUpdate(configPath, autoUpdate, signal);
+              ctx.ui.notify(`Auto update ${enabled ? 'on' : 'off'} · saved for next startup/reload`, 'info');
+            } else if (action === 'services') {
               while (!signal.aborted && connected) {
                 const config = await loadConfig(configPath);
                 const names = [...new Set([...config.services.map((s) => s.name), ...(launchedServices ?? [])])];
