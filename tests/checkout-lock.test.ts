@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { watch } from 'node:fs';
 import { join } from 'node:path';
@@ -61,6 +61,7 @@ export default function(pi, check, _identity, lifecycle) {
     await recovery.extensions[0].commands.get('gateway').handler('', ctx);
     assert.equal(notes.at(-1), 'updated', 'Failed builds block launches but leave recovery commands usable');
     await rm(join(root, 'pending'));
+    await assert.rejects(recovery.extensions[0].handlers.get('session_start')[0]({ reason: 'reload' }, ctx), /unready installation/, 'Repair elsewhere cannot authorize an unvalidated runtime copy');
     const previousCopy = await snapshotInstallation(root, signal);
     await writeFile(join(root, 'tsconfig.build.json'), '{"compilerOptions":{"target":"ES2022"}}');
     assert.notEqual(await snapshotInstallation(root, signal), previousCopy, 'Compiler configuration changes invalidate runtime copies');
@@ -71,11 +72,17 @@ export default function(pi, check, _identity, lifecycle) {
       await assert.rejects(pending);
       await readFile(join(root, 'common/mcp-gateway-build.lock'));
     });
+    await mkdir(join(root, 'dist/linked-dependency'), { recursive: true });
+    await writeFile(join(root, 'dist/linked-dependency/index.js'), 'old output');
+    await symlink('../dist/linked-dependency', join(root, 'node_modules/linked-dependency'));
+    const linkedCopy = await snapshotInstallation(root, signal);
+    await writeFile(join(root, 'dist/linked-dependency/index.js'), 'new output');
+    assert.notEqual(await snapshotInstallation(root, signal), linkedCopy, 'Internal dependency links must fingerprint their copied output targets');
     await writeFile(join(root, 'node_modules/fixture-dependency/index.js'), 'module.exports = "cancel-copy";');
     const copyAbort = new AbortController();
     const store = join(root, '.gateway-runtimes');
     const copying = watch(store, { recursive: true }, (_event, name) => {
-      if (String(name).includes('/node_modules/')) copyAbort.abort(new Error('cancel dependency copy'));
+      if (String(name).includes('/node_modules/')) { copying.close(); copyAbort.abort(new Error('cancel dependency copy')); }
     });
     try { await assert.rejects(snapshotInstallation(root, copyAbort.signal), /cancel dependency copy/); }
     finally { copying.close(); }

@@ -45,11 +45,12 @@ export async function checkoutIdentity(root: string, signal?: AbortSignal): Prom
     try { entries = await readdir(path, { withFileTypes: true }); }
     catch (error) { if (missing(error)) return; throw error; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (join(path, entry.name) === join(root, 'dist/.gateway-build.lock')) continue;
       if (entry.isDirectory()) await tree(join(path, entry.name));
       else if (entry.isFile() || entry.isSymbolicLink()) await file(join(path, entry.name), entry.isSymbolicLink());
     }
   };
-  for (const path of ['src', 'pi', 'examples', 'node_modules']) await tree(join(root, path));
+  for (const path of ['src', 'pi', 'examples', 'node_modules', 'dist']) await tree(join(root, path));
   for (const path of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json']) await file(join(root, path));
   const git = await gitDirectories(root);
   if (git) await file(join(git.gitDir, 'mcp-gateway-local.json'));

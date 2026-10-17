@@ -91,8 +91,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       try {
         const installation = await snapshotInstallation(root, signal);
         const { assertGatewayReady, checkGatewayUpdate } = await import(pathToFileURL(join(installation, 'pi/self-update.ts')).href);
+        let readinessFailure: unknown;
+        try { await assertGatewayReady(root, signal); }
+        catch (error) { signal.throwIfAborted(); readinessFailure = error; }
         const { default: register } = await import(pathToFileURL(join(installation, 'pi/runtime.ts')).href);
         const checkUpdate: typeof import('./self-update.js').checkGatewayUpdate = async (_root, _autoUpdate, operation, progress, notify) => {
+          // Repairing the source cannot repair this already-copied runtime. Recovery menus
+          // remain usable, but only a new /reload may adopt the validated installation.
+          if (readinessFailure) throw new Error(`Gateway runtime was copied from an unready installation; /reload after repair. ${String(readinessFailure)}`);
           if (checked) {
             checked = false;
             if (updateFailure) throw updateFailure;

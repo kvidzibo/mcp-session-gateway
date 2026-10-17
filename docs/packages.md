@@ -136,13 +136,14 @@ the installation shared by configurations/sessions using this checkout—not jus
 **Startup and `/reload` update before loading the adapter.** A disposable TypeScript worker
 imports the updater under the dependency lock, then installs/builds/validates and exits. Pi copies
 the completed installation under the same lock and loads that version's unique module paths.
-Copies are keyed by source/configuration, dependency contents and symlink identities; unchanged
+Copies are keyed by source/configuration, compiled output, dependency contents and symlink identities; unchanged
 copies are reused. Extension discovery/help starts no updater or services. Opening a
 recovery command before session startup loads a copy without updating or connecting.
 
 Runtime copies live in Git-ignored `.gateway-runtimes/<fingerprint>` in the gateway checkout.
 They contain real dependency copies (reflinks where supported), not hard links or external symlinks,
-and can consume substantial disk space. Incomplete copies are never loaded. There is no automatic
+and can consume substantial disk space. Incomplete copies are never loaded. Copies captured
+from an unready installation allow recovery menus only; `/reload` after repair adopts a validated copy. There is no automatic
 pruning: remove old copies only after all Pi processes using them have exited. Existing sessions
 stay pinned; `/reload` adopts current sources without restarting Pi. The first migration from the
 old loader may require one fresh Pi process. Connection-menu restarts retain the loaded copy and
