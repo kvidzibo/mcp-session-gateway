@@ -35,7 +35,12 @@ Children receive the MCP SDK's minimal default environment plus configured
 `env`. Other parent variables are **not inherited automatically**. `${VARIABLE}`
 references in `env` resolve from the gateway environment; missing variables fail
 startup. The Pi adapter passes Pi's environment to the gateway, not directly to
-its children.
+its children. Every child also receives `MCP_GATEWAY_WORKSPACE`: the gateway's
+launch directory, independent of the child's configured `cwd`. The Pi adapter
+launches the gateway in the session workspace. Services can use this trusted
+launcher value for project scope instead of accidentally using the config or
+package directory; explicit service workspace arguments may take precedence.
+There is no argument/shell interpolation or dynamic workspace switching.
 
 For example, merge this server into your `mcpServers` map:
 
@@ -164,6 +169,7 @@ Every child receives:
 |---|---|
 | `MCP_GATEWAY_SESSION_ID` | Same UUID for all children of this gateway |
 | `MCP_GATEWAY_SERVICE_ID` | Service name from config |
+| `MCP_GATEWAY_WORKSPACE` | Absolute gateway launch directory, independent of child `cwd` |
 
 Every forwarded tool call also receives request `_meta`:
 

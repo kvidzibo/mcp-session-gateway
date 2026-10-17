@@ -57,6 +57,8 @@ Replace the placeholder with your actual MCP server entry point:
 
 - **Commands** are executables, not shell expressions; arguments are literal.
 - **Paths:** `cwd` defaults to the config directory; relative values resolve there.
+  Children receive `MCP_GATEWAY_WORKSPACE` with the gateway's launch directory
+  (Pi's session workspace with the adapter), regardless of their own `cwd`.
 - **Environment:** children receive SDK defaults plus configured `env`, **not the
   full parent environment**. `${VARIABLE}` references in `env` read the gateway's
   environment; missing variables fail startup. Never check credentials into Git.

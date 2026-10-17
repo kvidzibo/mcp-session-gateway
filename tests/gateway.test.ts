@@ -23,7 +23,7 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
     command: process.execPath,
     args: ['--import', 'tsx', servicePath],
     cwd: projectRoot,
-    env: { MCP_GATEWAY_SESSION_ID: 'spoofed', MCP_GATEWAY_SERVICE_ID: 'spoofed' },
+    env: { MCP_GATEWAY_SESSION_ID: 'spoofed', MCP_GATEWAY_SERVICE_ID: 'spoofed', MCP_GATEWAY_WORKSPACE: 'spoofed' },
   };
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
   try {
@@ -34,7 +34,8 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
       }));
       const transport = new StdioClientTransport({
         command: process.execPath,
-        args: ['--import', 'tsx', cliPath, '--config', configPath],
+        args: ['--import', import.meta.resolve('tsx'), cliPath, '--config', configPath],
+        cwd: tempDir,
         stderr: 'pipe',
       });
       const client = new Client({ name: `gateway-test-${i}`, version: '1.0.0' });
@@ -75,10 +76,14 @@ test('stdio gateway isolates sessions and routes names, arguments, and metadata'
         const content = result.structuredContent as {
           sessionId: string;
           serviceId: string;
+          workspace: string;
+          cwd: string;
           meta: { sessionId: string; serviceId: string };
         };
         assert.equal(content.sessionId, gatewayIdentity.sessionId);
         assert.equal(content.serviceId, serviceId);
+        assert.equal(content.workspace, tempDir, 'Launch workspace overrides configured spoofing');
+        assert.equal(content.cwd, projectRoot, 'Child cwd remains independent from workspace');
         assert.deepEqual(content.meta, gatewayMeta(gatewayIdentity.sessionId, serviceId));
         return content;
       }));
