@@ -4,7 +4,10 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import gatewayExtension from '../pi/gateway.js';
+import registerGateway from '../pi/runtime.js';
+
+// Service/UI tests must never fetch or install into the checkout hosting this test.
+const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
 const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 
 test('gateway footer counts configuration, opens Services repeatedly, and keeps recovery clickable after disconnect', async () => {

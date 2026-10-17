@@ -47,6 +47,7 @@ const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{
     // Never invoke real npm: in particular npm ci must not touch shared worktree dependencies.
     await writeFile(join(bin, 'npm'), `#!${process.execPath}
 const fs=require('fs'),args=process.argv.slice(2).join(' ');
+if(!fs.existsSync(${JSON.stringify(join(local, '.git/mcp-gateway-build.lock'))}))throw new Error('Updater must hold the dependency/build lock');
 fs.appendFileSync(${JSON.stringify(commands)},args+'\\n');
 if(args==='run build'){
  if(fs.existsSync(${JSON.stringify(fail)}))process.exit(7);

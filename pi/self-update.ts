@@ -11,6 +11,33 @@ export function gatewayNeedsRestart(root: string): boolean {
   return processState[restartKey]?.has(resolve(root)) ?? false;
 }
 
+export function requireGatewayRestart(root: string): void {
+  (processState[restartKey] ??= new Set()).add(resolve(root));
+}
+
+function gatewayPackage(root: string): PackageConfig {
+  const step = (...args: string[]) => ({ command: 'npm', args, cwd: '.' });
+  return {
+    name: 'gateway', source: { type: 'local', path: root },
+    localUpdate: {
+      build: [step('ci', '--include=dev'), step('run', 'build')],
+      validate: [step('run', 'check')], outputs: ['dist/cli.js'], timeoutMs: 300_000,
+    },
+  };
+}
+
+/** Call under the build mutex as well: an update may have failed after startup preflight. */
+export async function assertGatewayReady(root: string, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  try { await lstat(join(root, '.git')); }
+  catch (error) {
+    signal.throwIfAborted();
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  await localPackageRoot(gatewayPackage(root), signal, { allowUnbuilt: true });
+}
+
 /** Pi launch only: update the explicit gateway checkout, never inferred child packages. */
 export async function checkGatewayUpdate(root: string, autoUpdate: boolean, signal: AbortSignal,
   progress: (stage: 'checking' | 'updating') => void,
@@ -22,14 +49,7 @@ export async function checkGatewayUpdate(root: string, autoUpdate: boolean, sign
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; // Archive, not a checkout.
     throw error;
   }
-  const step = (...args: string[]) => ({ command: 'npm', args, cwd: '.' });
-  const pkg: PackageConfig = {
-    name: 'gateway', source: { type: 'local', path: root },
-    localUpdate: {
-      build: [step('ci', '--include=dev'), step('run', 'build')],
-      validate: [step('run', 'check')], outputs: ['dist/cli.js'], timeoutMs: 300_000,
-    },
-  };
+  const pkg = gatewayPackage(root);
   // Unsupported/development checkouts opt out without noisy warnings on every launch.
   let supported = false;
   try {
@@ -52,7 +72,7 @@ export async function checkGatewayUpdate(root: string, autoUpdate: boolean, sign
     try {
       if (autoUpdate) {
         const updated = await updateLocalPackage(pkg, signal, (stage) => {
-          if (stage === 'updating') (processState[restartKey] ??= new Set()).add(resolve(root));
+          if (stage === 'updating') requireGatewayRestart(root);
           progress(stage);
         });
         if (updated) notify(`Gateway updated to ${updated.version.slice(0, 12)}.`, 'info');
@@ -72,6 +92,6 @@ export async function checkGatewayUpdate(root: string, autoUpdate: boolean, sign
   signal.throwIfAborted();
   // After the attempt so autoUpdate can repair a pending build. Initial missing dist
   // is left to ensureGatewayBuild; existing failed/in-flight/stale receipts still block.
-  await localPackageRoot(pkg, signal, { allowUnbuilt: true });
+  await assertGatewayReady(root, signal);
   signal.throwIfAborted();
 }
