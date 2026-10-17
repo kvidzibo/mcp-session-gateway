@@ -197,7 +197,9 @@ polling/model turns. Finished means **unverified**; disconnect means stale.
 ### Server-driven UI
 
 [Pinote](docs/integrations.md#pinote) is an example of the generic [native UI
-protocol](docs/native-ui.md).
+protocol](docs/native-ui.md). In fullscreen mode, service footers use native click/double-click
+regions without action-link underline or pointer changes. Regular mode keeps the Kitty bridge.
+Try fullscreen for one launch with `--tui-mode fullscreen`; no saved settings change.
 
 <a id="lifecycle-and-validation"></a>
 
