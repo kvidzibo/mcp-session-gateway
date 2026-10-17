@@ -44,6 +44,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let client: Client | undefined;
   let transport: StdioClientTransport | undefined;
   let connected = false;
+  const connectionLost = new Error('Gateway connection closed');
   let timeout = 30_000;
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
@@ -322,7 +323,8 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       } finally { if (startupWork === work) startupWork = undefined; }
     }
     startupProgress(ctx, 'checking gateway build');
-    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal, {
+    const startupSignal = lifetime.signal;
+    const build = ensureGatewayBuild(gatewayRoot, startupSignal, {
       identity, launch: () => connectGateway(ctx, configPath, reason),
       dispose: async () => { lifetime.abort(); await closeConnection(); },
     });
@@ -332,7 +334,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       if (startupBuild === build) startupBuild = undefined;
       renderFooter('off');
       await close(preserveMenu);
-      throw error;
+      // A ready gateway lost during optional UI discovery is already shown as
+      // disconnected. Keep recovery available, but propagate real startup/cancel errors.
+      if (startupSignal.reason !== connectionLost) throw error;
     } finally { if (startupBuild === build) startupBuild = undefined; }
   }
 
@@ -340,8 +344,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (shuttingDown || lifetime.signal.aborted) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
     const countsOwner = callCounts, callLifetime = lifetime;
+    let servicesReady = false;
+    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); callLifetime.abort(servicesReady ? connectionLost : undefined); void native.stop(); } };
     current.setNotificationHandler(CallEventSchema, ({ params }) => {
       if (client !== current || callLifetime.signal.aborted || callCounts !== countsOwner || shuttingDown || !configuredServices.includes(params.service)) return;
       if (callCounts?.event(params)) { saveCounts(); renderFooter(); }
@@ -368,6 +373,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     connected = true;
     startupProgress(ctx, 'discovering tools');
     await tools(lifetime.signal); // Wait for child startup before declaring success.
+    servicesReady = true;
     if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
       try {
         startupStatus = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal: lifetime.signal, timeout });

@@ -233,6 +233,9 @@ report to stderr and trigger cleanup.
   builds/validation block standalone/manual launches too.
 - Tool/resource requests await startup; upstream EOF remains observed. Child disconnect removes
   tools; reconnect the gateway to restart it.
+- In the Pi adapter, losing an initialized gateway during optional app/panel discovery leaves the
+  footer **off** and recovery available, without an extra cancellation error. Startup failures and
+  explicit cancellation still propagate after teardown; there is no automatic reconnect.
 - Configured timeouts/cancellation apply; **no automatic tool retries**. Cancelling/timing out
   started requests, including resource reads, retires that connection/tools/resources until restart
   (`/reload` in adapter); other services remain connected. MCP cancellation lacks completion
