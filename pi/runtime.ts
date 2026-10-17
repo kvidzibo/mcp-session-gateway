@@ -44,6 +44,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let client: Client | undefined;
   let transport: StdioClientTransport | undefined;
   let connected = false;
+  const connectionLost = new Error('Gateway connection closed');
   let timeout = 30_000;
   let lifetime = new AbortController();
   let closing: Promise<void> | undefined;
@@ -322,7 +323,8 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       } finally { if (startupWork === work) startupWork = undefined; }
     }
     startupProgress(ctx, 'checking gateway build');
-    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal, {
+    const startupSignal = lifetime.signal;
+    const build = ensureGatewayBuild(gatewayRoot, startupSignal, {
       identity, launch: () => connectGateway(ctx, configPath, reason),
       dispose: async () => { lifetime.abort(); await closeConnection(); },
     });
@@ -332,7 +334,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       if (startupBuild === build) startupBuild = undefined;
       renderFooter('off');
       await close(preserveMenu);
-      throw error;
+      // A ready gateway lost during optional UI discovery is already shown as
+      // disconnected. Keep recovery available, but propagate real startup/cancel errors.
+      if (startupSignal.reason !== connectionLost) throw error;
     } finally { if (startupBuild === build) startupBuild = undefined; }
   }
 
@@ -340,8 +344,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (shuttingDown || lifetime.signal.aborted) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
     const countsOwner = callCounts, callLifetime = lifetime;
+    let servicesReady = false;
+    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); callLifetime.abort(servicesReady ? connectionLost : undefined); void native.stop(); } };
     current.setNotificationHandler(CallEventSchema, ({ params }) => {
       if (client !== current || callLifetime.signal.aborted || callCounts !== countsOwner || shuttingDown || !configuredServices.includes(params.service)) return;
       if (callCounts?.event(params)) { saveCounts(); renderFooter(); }
@@ -368,6 +373,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     connected = true;
     startupProgress(ctx, 'discovering tools');
     await tools(lifetime.signal); // Wait for child startup before declaring success.
+    servicesReady = true;
     if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
       try {
         startupStatus = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal: lifetime.signal, timeout });
@@ -476,15 +482,17 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                     if (signal.aborted || !connected) break;
                   }
                   const options = { signal: lifetime.signal, timeout };
-                  let editable = false, settingsError = '';
+                  let editable = false, settingsError = '', settingsTitle = 'Settings';
                   try {
                     const settings = connected && operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
-                    editable = settings.services.some((s) => s.name === service);
+                    const entry = settings.services.find((s) => s.name === service);
+                    editable = Boolean(entry);
+                    settingsTitle = clean(entry?.title || 'Settings');
                   } catch (error) { settingsError = clean(`Settings discovery failed: ${String(error)}`); }
                   const app = connected && native.has(service);
                   const selected = await menu.choose(['Gateway', 'Services', service], settingsError || `Next launch: ${enabled ? 'enabled' : 'disabled'} · saved changes do not stop/start running services`, [
                     { id: 'app', label: 'Open app', description: 'Open the service-provided interactive menu.', disabled: !app },
-                    { id: 'settings', label: 'Settings', description: 'Edit a draft; review and confirm before saving.', disabled: !editable },
+                    { id: 'settings', label: settingsTitle, description: 'Edit a draft; review and confirm before saving.', disabled: !editable },
                     { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.', disabled: !connected },
                     { id: 'restart', label: 'Connection / restart…', description: 'Apply saved choices using a separately confirmed restart of ALL gateway services in this session. Active/queued jobs will be cancelled.' },
                     { id: 'toggle-enabled', label: enabled ? 'Disable service' : 'Enable service', disabled: !current,

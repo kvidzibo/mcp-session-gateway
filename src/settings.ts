@@ -21,10 +21,10 @@ export type SettingsDocument = z.infer<typeof SettingsDocumentSchema>;
 export const OperatorListSchema = z.object({ method: z.literal(OPERATOR_LIST), params: z.object({ token: z.string() }).strict() });
 export const OperatorGetSchema = z.object({ method: z.literal(OPERATOR_GET), params: z.object({ token: z.string(), service: z.string() }).strict() });
 export const OperatorUpdateSchema = z.object({ method: z.literal(OPERATOR_UPDATE), params: z.object({ token: z.string(), service: z.string(), revision: z.string(), patch: object }).strict() });
-export const OperatorServicesSchema = z.object({ services: z.array(z.object({ name: z.string() })) });
+export const OperatorServicesSchema = z.object({ services: z.array(z.object({ name: z.string(), title: z.string().optional() })) });
 export const SettingsCapabilitySchema = z.object({
   version: z.literal(1), getMethod: z.literal(SETTINGS_GET), updateMethod: z.literal(SETTINGS_UPDATE),
-  authorization: z.literal('token'), audience: z.literal('operator'),
+  authorization: z.literal('token'), audience: z.literal('operator'), title: z.string().optional(),
 });
 
 export function authorize(actual: string, expected: string | undefined): void {

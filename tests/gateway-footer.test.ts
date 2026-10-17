@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import registerGateway from '../pi/runtime.js';
+import { LiveJobs } from '../pi/live-jobs.js';
 
 // Service/UI tests must never fetch or install into the checkout hosting this test.
 const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
 const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 
-test('gateway footer counts configuration, opens Services repeatedly, and keeps recovery clickable after disconnect', async () => {
+test('gateway footer counts configuration, opens Services repeatedly, and keeps recovery clickable after disconnect', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-footer-'));
   const config = join(dir, 'gateway.json'), pids = join(dir, 'pids');
   const handlers = new Map<string, Function>();
@@ -105,9 +106,19 @@ test('gateway footer counts configuration, opens Services repeatedly, and keeps 
     await writeFile(config, JSON.stringify({ mcpServers: { race: {
       command: process.execPath, args: ['--input-type=module', '-e', race], cwd: new URL('../', import.meta.url).pathname,
     } } }));
-    await handlers.get('session_start')!({ reason: 'reload' }, ctx);
+    // Force disconnect before the launch callback returns, rather than letting
+    // the build helper's post-launch cancellation check race the transport close.
+    const startJobs = LiveJobs.prototype.start;
+    const discovery = t.mock.method(LiveJobs.prototype, 'start', async function (this: LiveJobs) {
+      await startJobs.call(this);
+      await waitFor(/off$/);
+    });
+    try { await handlers.get('session_start')!({ reason: 'reload' }, ctx); }
+    finally { discovery.mock.restore(); }
     await waitFor(/off$/);
     assert.equal(text(), ' MCP 1 service · off');
+    await click(link());
+    assert.deepEqual(screens.splice(0), ['Gateway'], 'Startup disconnect preserves the recovery menu');
     const beforeShutdown = link();
     await handlers.get('session_shutdown')!({}, ctx);
     assert.equal(statuses.get('gateway'), undefined);
