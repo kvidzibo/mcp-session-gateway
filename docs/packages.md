@@ -89,8 +89,11 @@ already-activated managed releases and explicit `localUpdate` Git checkouts.
 Inactive managed packages need their first installation through **Manage releases**.
 Other external packages remain read-only. The same concurrency, clean-tree,
 locking, validation and cancellation safeguards as startup updates apply.
-Progress is cancellable with Escape; the results list changed versions and
-nonfatal failures. A local rebuild may succeed without a version change.
+Progress is cancellable with Escape; after cleanup, the results retain completed
+version changes even when cancelled. Package failures, including local checkout
+failures, are reported without stopping unrelated manual updates. Startup still
+fails closed on unsafe local checkouts. A local rebuild may succeed without a
+version change.
 
 Services are **not restarted**. Managed activation changes future launches in
 every session sharing the store; local updates immediately modify shared files

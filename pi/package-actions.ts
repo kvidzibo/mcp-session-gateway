@@ -76,14 +76,20 @@ export async function updateAllPackages(ctx: ExtensionContext, config: GatewayCo
   if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Update all packages?', actionLabel: 'update all' }) || signal.aborted) return;
   if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; package update was cancelled', 'warning'); return; }
   const failures: string[] = [];
-  let updates: Awaited<ReturnType<typeof updateManagedPackages>> = [];
-  await progress(ctx, 'Updating all packages', signal, async (operation, output) => {
-    updates = await updateManagedPackages(config, operation,
-      (name, error) => { failures.push(clean(`${name}: ${String(error)}`)); output(`Failed: ${name}\n`); },
-      (name, stage) => output(`${stage === 'checking' ? 'Checking' : 'Updating'} ${name}\n`), 'manual');
-  });
+  const updates: Awaited<ReturnType<typeof updateManagedPackages>> = [];
+  let stopped = '';
+  try {
+    await progress(ctx, 'Updating all packages', signal, async (operation, output) => {
+      await updateManagedPackages(config, operation,
+        (name, error) => { failures.push(clean(`${name}: ${String(error)}`)); output(`Failed: ${name}\n`); },
+        (name, stage) => output(`${stage === 'checking' ? 'Checking' : 'Updating'} ${name}\n`),
+        { mode: 'manual', completed: (update) => updates.push(update) });
+    });
+  } catch (error) { stopped = clean(`Update run stopped: ${String(error)}. Completed changes are retained.`); }
   if (signal.aborted) return;
+  updates.sort((a, b) => packages.findIndex((pkg) => pkg.name === a.name) - packages.findIndex((pkg) => pkg.name === b.name));
   const summary = [
+    ...(stopped ? [stopped] : []),
     updates.length ? updates.map(({ name, from, version }) => `${name}: ${from} → ${version}`).join('\n') :
       'No version changes. Packages may already be current or inactive; local builds can complete without a version change.',
     ...(failures.length ? ['Failed packages:', ...failures] : []),

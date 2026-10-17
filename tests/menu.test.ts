@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -68,11 +69,15 @@ test('Update all packages confirms once, updates unlinked active packages with A
   const dir = await mkdtemp(join(tmpdir(), 'gateway-update-all-'));
   const config = join(dir, 'gateway.json');
   const commands = new Map<string, any>(), notices: string[] = [], prepared: string[] = [], activated: string[] = [];
-  let approve = false, idle = true, opened = false, previews = '', results = '';
-  const source = JSON.stringify({ autoUpdate: false, autoUpdateConcurrency: 2,
-    packages: Object.fromEntries(['alpha', 'broken', 'inactive'].map((name) => [name, {
-      source: { type: 'npm', name }, managed: { validate: [{ command: 'node', args: ['--version'] }] },
-    }])), mcpServers: { demo: { command: 'unused' } },
+  let approve = false, idle = true, opened = false, previews = '', results = '', cancel = false;
+  let cancelReady!: () => void;
+  const cancellationReady = new Promise<void>((resolve) => { cancelReady = resolve; });
+  const source = JSON.stringify({ autoUpdate: false, autoUpdateConcurrency: 1,
+    packages: { 'missing-local': { source: { type: 'local', path: join(dir, 'missing') },
+      localUpdate: { validate: [{ command: 'node', args: ['--version'] }] } },
+      ...Object.fromEntries(['alpha', 'broken', 'inactive'].map((name) => [name, {
+        source: { type: 'npm', name }, managed: { validate: [{ command: 'node', args: ['--version'] }] },
+      }])) }, mcpServers: { demo: { command: 'unused' } },
   });
   t.mock.method(PackageManager.prototype, 'state', async (pkg: any) => ({
     version: 1, source: '', revision: 'test',
@@ -80,8 +85,11 @@ test('Update all packages confirms once, updates unlinked active packages with A
     ...(prepared.includes(pkg.name) ? { prepared: { id: 'new', version: '2.0.0' } } : {}),
   }));
   t.mock.method(PackageManager.prototype, 'plan', async () => ({ version: '2.0.0', from: '1.0.0', revision: 'test', definition: '' }));
-  t.mock.method(PackageManager.prototype, 'prepare', async (pkg: any) => {
-    if (pkg.name === 'broken') throw new Error('validation failed');
+  t.mock.method(PackageManager.prototype, 'prepare', async (pkg: any, _plan: unknown, signal: AbortSignal) => {
+    if (pkg.name === 'broken') {
+      if (cancel) { cancelReady(); if (!signal.aborted) await once(signal, 'abort'); signal.throwIfAborted(); }
+      throw new Error('validation failed');
+    }
     prepared.push(pkg.name);
   });
   t.mock.method(PackageManager.prototype, 'activate', async (pkg: any) => { activated.push(pkg.name); });
@@ -114,7 +122,10 @@ test('Update all packages confirms once, updates unlinked active packages with A
           panel.handleInput(approve ? '\r' : escape);
         } else if (lines[0] === 'Package update results') {
           results = lines.join('\n'); panel.handleInput(escape);
-        } else assert.equal(lines[0], 'Updating all packages');
+        } else {
+          assert.equal(lines[0], 'Updating all packages');
+          if (cancel) { await cancellationReady; panel.handleInput(escape); }
+        }
         return await answer;
       } finally { panel.dispose(); }
     } },
@@ -128,12 +139,16 @@ test('Update all packages confirms once, updates unlinked active packages with A
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(prepared, ['alpha']); assert.deepEqual(activated, ['alpha']);
     assert.match(results, /alpha: 1.0.0 → 2.0.0/); assert.match(results, /broken: Error: validation failed/);
-    assert.match(results, /Services were not restarted/);
+    assert.match(results, /Services were not restarted/); assert.match(results, /missing-local: Error:/);
     assert.equal(await readFile(config, 'utf8'), source, 'Auto update and raw config stay unchanged');
+    cancel = true; opened = false;
+    await commands.get('gateway').handler('', ctx);
+    assert.match(results, /Update run stopped:/); assert.match(results, /alpha: 1.0.0 → 2.0.0/);
+    assert.deepEqual(activated, ['alpha', 'alpha'], 'Completed activation survives cancellation of the later package');
     idle = false; opened = false;
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(notices, ['Wait for the current agent turn to finish before updating packages']);
-    assert.deepEqual(activated, ['alpha']);
+    assert.deepEqual(activated, ['alpha', 'alpha']);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
