@@ -18,7 +18,7 @@ Escape cancels. After dispatch, failures may have committed; inspect refreshed s
 survive disconnect, not shutdown. Footer text/HTTP(S) links use Pi's status area; actions use app
 controls/confirmations without model turns.
 
-**Fullscreen (0.29.0+):** service footers use native mouse regions below the editor.
+**Fullscreen (0.30.0+):** service footers use native mouse regions below the editor.
 Click normally; double-click invokes the declared double action. Action titles are not
 terminal hyperlinks, so they add no hyperlink underline or hand pointer and do not take
 keyboard focus. Hover hints name actions when space permits. A fast double-click waits
