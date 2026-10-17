@@ -197,6 +197,7 @@ Gateway
 │  ├─ Installed versions
 │  ├─ Check for updates
 │  └─ Manage releases → package → prepare / activate / roll back / log
+├─ Update all packages → confirm a one-time update; no restart
 ├─ Auto update: Off / On → toggle and save immediately
 └─ Connection
    ├─ Connection details

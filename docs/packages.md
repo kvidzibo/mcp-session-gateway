@@ -75,6 +75,33 @@ can create a project-local Python environment.
 - Before first activation a managed service stays stopped, so the manager remains
   usable to install it. An invalid state/missing active directory fails closed.
 
+## Update all packages
+
+Choose **`/gateway` → Update all packages** for a one-time update, even when
+**Auto update** is off or the gateway is disconnected. Review the complete
+package sources, commands and effects, then confirm. This permission covers
+resolving the latest configured sources and building, validating and activating
+updates; unlike individual release preparation, targets are resolved after approval.
+The saved Auto update setting is unchanged.
+
+All configured update-enabled packages qualify, including unlinked declarations:
+already-activated managed releases and explicit `localUpdate` Git checkouts.
+Inactive managed packages need their first installation through **Manage releases**.
+Other external packages remain read-only. The same concurrency, clean-tree,
+locking, validation and cancellation safeguards as startup updates apply.
+Progress is cancellable with Escape; after cleanup, the results retain completed
+version changes even when cancelled. Package failures, including local checkout
+failures, are reported without stopping unrelated manual updates. Startup still
+fails closed on unsafe local checkouts. A local rebuild may succeed without a
+version change.
+
+Services are **not restarted**. Managed activation changes future launches in
+every session sharing the store; local updates immediately modify shared files
+and dependencies that running services may read. Finish affected background jobs
+in all sessions first. Completed changes are not rolled back on failure/cancellation;
+incomplete local builds block future launches until repaired and successfully retried.
+Use **Connection → Restart gateway services** separately when ready.
+
 ## Automatic startup updates
 
 Select **`/gateway` → Auto update: Off/On** to toggle and automatically save the
@@ -134,7 +161,8 @@ disabled, ineligible or entirely failed. The entry never starts a model turn.
 Enabling this setting grants ongoing permission to execute the configured trusted
 build/validation code with your OS permissions, not in a sandbox. Enable it only
 for trusted sources and commands. `false` disables startup writes; managed-release
-operations remain separately confirmed. Local updates have no manual release UI.
+operations remain separately confirmed. The one-time Update all packages action
+also supports local checkouts; these have no individual release/rollback UI.
 
 ## Local Git packages
 
@@ -284,7 +312,8 @@ Existing npm/Git installations may declare `installedPath`; omission means the
 installed version is unknown, not necessarily absent. Local sources use
 `source.path`. No PATH/global-npm scan, `--version` execution or service-settings
 inspection occurs. Local folders without `localUpdate` remain externally managed;
-unlinked local declarations are never updated.
+unlinked local declarations are skipped at startup but can be included by the
+confirmed Update all packages action.
 A `package` reference links inventory but does not prove an external command
 launches that installation. Several services may link to one package.
 

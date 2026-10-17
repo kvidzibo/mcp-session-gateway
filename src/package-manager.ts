@@ -265,12 +265,15 @@ export class PackageManager {
   }
 }
 
-/** Explicit config opt-in authorizes release updates and declared local checkout writes. */
+/** Startup opt-in or a confirmed manual action authorizes trusted package updates. */
 export async function updateManagedPackages(config: GatewayConfig, signal: AbortSignal,
   failed: (name: string, error: unknown) => void,
-  progress: (name: string, stage: 'checking' | 'updating') => void = () => {}): Promise<{ name: string; from: string; version: string }[]> {
-  if (!config.autoUpdate) return [];
-  const packages = config.packages.filter((pkg) => (pkg.managed || pkg.localUpdate) && config.services.some((service) => service.package === pkg.name));
+  progress: (name: string, stage: 'checking' | 'updating') => void = () => {},
+  options: { mode?: 'startup' | 'manual'; completed?: (update: { name: string; from: string; version: string }) => void } = {}): Promise<{ name: string; from: string; version: string }[]> {
+  const manual = options.mode === 'manual';
+  if (!manual && !config.autoUpdate) return [];
+  const packages = config.packages.filter((pkg) => (pkg.managed || pkg.localUpdate) &&
+    (manual || config.services.some((service) => service.package === pkg.name)));
   const updates: ({ name: string; from: string; version: string } | undefined)[] = new Array(packages.length);
   const manager = new PackageManager(config.packageStore);
   const stopped = new AbortController();
@@ -279,6 +282,7 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
     try {
       if (pkg.localUpdate) {
         updates[index] = await updateLocalPackage(pkg, operation, (stage) => progress(pkg.name, stage));
+        if (updates[index]) options.completed?.(updates[index]);
         return;
       }
       if (!(await manager.state(pkg, operation)).active) return;
@@ -289,16 +293,19 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
       await manager.prepare(pkg, plan, operation, () => {});
       const state = await manager.state(pkg, operation);
       if (state.active?.version !== plan.from || state.prepared?.version !== plan.version) {
-        throw new Error('Package changed during startup update; inspect releases before retrying');
+        throw new Error('Package changed during update; inspect releases before retrying');
       }
       await manager.activate(pkg, state.revision, false, operation);
       updates[index] = { name: pkg.name, from: plan.from, version: plan.version };
+      options.completed?.(updates[index]);
     } catch (error) {
       operation.throwIfAborted();
       failed(pkg.name, error);
       // A skipped local check may retain a known-good checkout. Once mutation/build
       // started, its durable marker blocks all launch paths until a successful retry.
-      if (pkg.localUpdate) await localPackageRoot(pkg, operation);
+      // Manual runs report local failures and continue; launch guards still reject
+      // unsafe checkouts. Startup must instead stop before connecting services.
+      if (pkg.localUpdate && !manual) await localPackageRoot(pkg, operation);
     }
   };
   const localOperations = new Map<string, Promise<void>>();
