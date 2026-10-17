@@ -24,7 +24,7 @@ import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorSer
 import { confirmSettings, editSettings } from './settings.js';
 import { LiveJobs } from './live-jobs.js';
 import { openManager } from './manager.js';
-import { managePackages } from './package-actions.js';
+import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
 export default function gatewayExtension(pi: ExtensionAPI): void {
@@ -320,6 +320,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
             { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
+            { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
               description: autoUpdateError || 'Enter toggles and saves. On permits startup/reload updates and trusted builds with OS permissions: activated releases + configured localUpdate Git checkouts. No prompts.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
@@ -378,6 +379,12 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                   }
                 }
               }
+            } else if (action === 'update-all') {
+              if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before updating packages', 'warning'); continue; }
+              const config = await loadConfig(configPath);
+              const work = updateAllPackages(ctx, config, signal);
+              managerWork = work;
+              try { await work; } finally { if (managerWork === work) managerWork = undefined; }
             } else if (action === 'packages') {
               while (!signal.aborted) {
                 const config = await loadConfig(configPath);

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import { GatewayMenu } from '../pi/menu.js';
 import gatewayExtension from '../pi/gateway.js';
+import { PackageManager } from '../src/package-manager.js';
 
 const down = '\x1b[B', escape = '\x1b';
 const theme = { fg: (_color: string, text: string) => text };
@@ -61,6 +62,79 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
     await handlers.get('session_shutdown')!({}, ctx);
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('Update all packages confirms once, updates unlinked active packages with Auto update off, and reports failures without restarting', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'gateway-update-all-'));
+  const config = join(dir, 'gateway.json');
+  const commands = new Map<string, any>(), notices: string[] = [], prepared: string[] = [], activated: string[] = [];
+  let approve = false, idle = true, opened = false, previews = '', results = '';
+  const source = JSON.stringify({ autoUpdate: false, autoUpdateConcurrency: 2,
+    packages: Object.fromEntries(['alpha', 'broken', 'inactive'].map((name) => [name, {
+      source: { type: 'npm', name }, managed: { validate: [{ command: 'node', args: ['--version'] }] },
+    }])), mcpServers: { demo: { command: 'unused' } },
+  });
+  t.mock.method(PackageManager.prototype, 'state', async (pkg: any) => ({
+    version: 1, source: '', revision: 'test',
+    ...(pkg.name === 'inactive' ? {} : { active: { id: 'old', version: '1.0.0' } }),
+    ...(prepared.includes(pkg.name) ? { prepared: { id: 'new', version: '2.0.0' } } : {}),
+  }));
+  t.mock.method(PackageManager.prototype, 'plan', async () => ({ version: '2.0.0', from: '1.0.0', revision: 'test', definition: '' }));
+  t.mock.method(PackageManager.prototype, 'prepare', async (pkg: any) => {
+    if (pkg.name === 'broken') throw new Error('validation failed');
+    prepared.push(pkg.name);
+  });
+  t.mock.method(PackageManager.prototype, 'activate', async (pkg: any) => { activated.push(pkg.name); });
+  gatewayExtension({
+    registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, events: { on() {} }, registerTool() {}, on() {},
+    registerCommand: (name: string, command: any) => commands.set(name, command),
+    appendEntry() { assert.fail('Manual updates must not send model/session entries'); },
+  } as any);
+  const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => idle,
+    ui: { theme, notify: (text: string) => notices.push(text), custom: async (factory: Function) => {
+      let done!: (value: unknown) => void, settled = false;
+      const answer = new Promise((resolve) => { done = (value) => { settled = true; resolve(value); }; });
+      const panel = factory({ terminal: { rows: 24, columns: 80 }, requestRender() {} }, theme, {}, done);
+      const render = () => panel.render(78) as string[];
+      try {
+        const lines = render();
+        if (lines.includes('Gateway')) {
+          const target = opened ? 'Close' : 'Update all packages'; opened = true;
+          for (let i = 0; i < 20 && !render().includes(`→ ${target}`); i++) panel.handleInput(down);
+          assert.ok(render().includes(`→ ${target}`)); panel.handleInput('\r');
+        } else if (lines.includes('Update all packages?')) {
+          panel.handleInput('\r');
+          assert.equal(settled, false, 'Must review every disclosure before confirming');
+          for (let i = 0; i < 100; i++) {
+            const page = render(); previews += page.join('\n');
+            if (page.includes('Enter update all  Esc cancel')) break;
+            panel.handleInput('\x1b[6~');
+          }
+          assert.ok(render().includes('Enter update all  Esc cancel'));
+          panel.handleInput(approve ? '\r' : escape);
+        } else if (lines[0] === 'Package update results') {
+          results = lines.join('\n'); panel.handleInput(escape);
+        } else assert.equal(lines[0], 'Updating all packages');
+        return await answer;
+      } finally { panel.dispose(); }
+    } },
+  };
+  try {
+    await writeFile(config, source);
+    await commands.get('gateway').handler('', ctx);
+    assert.deepEqual(prepared, [], 'Decline performs no updates');
+    assert.match(previews, /IN PLACE/); assert.match(previews, /Commands and limits/);
+    approve = true; opened = false;
+    await commands.get('gateway').handler('', ctx);
+    assert.deepEqual(prepared, ['alpha']); assert.deepEqual(activated, ['alpha']);
+    assert.match(results, /alpha: 1.0.0 → 2.0.0/); assert.match(results, /broken: Error: validation failed/);
+    assert.match(results, /Services were not restarted/);
+    assert.equal(await readFile(config, 'utf8'), source, 'Auto update and raw config stay unchanged');
+    idle = false; opened = false;
+    await commands.get('gateway').handler('', ctx);
+    assert.deepEqual(notices, ['Wait for the current agent turn to finish before updating packages']);
+    assert.deepEqual(activated, ['alpha']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test('Auto update toggles and saves from the root, preserves raw config, and refuses failed or stale saves', async () => {

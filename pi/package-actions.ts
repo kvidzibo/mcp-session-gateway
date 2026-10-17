@@ -3,7 +3,7 @@ import { open } from 'node:fs/promises';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { GatewayConfig } from '../src/config.js';
-import { PackageManager } from '../src/package-manager.js';
+import { PackageManager, updateManagedPackages } from '../src/package-manager.js';
 import { confirmSettings } from './settings.js';
 import { clean, literal } from '../src/native-ui.js';
 import { GatewayMenu } from './menu.js';
@@ -51,6 +51,45 @@ async function viewLog(ctx: ExtensionContext, path: string, signal: AbortSignal)
     text = clean(buffer.subarray(0, bytesRead).toString('utf8').slice(-20_000));
   } finally { await file.close(); }
   await showText(ctx, 'Package log · recent tail', text, signal);
+}
+
+/** One-shot permission, independent of the persistent startup-update toggle. */
+export async function updateAllPackages(ctx: ExtensionContext, config: GatewayConfig, signal: AbortSignal): Promise<void> {
+  const packages = config.packages.filter((pkg) => pkg.managed || pkg.localUpdate);
+  if (!packages.length) {
+    ctx.ui.notify('No update-enabled packages. Configure managed or localUpdate; external folders are never adopted automatically.', 'info');
+    return;
+  }
+  const preview = [
+    'Check ALL configured update-enabled packages, including those not linked to services.',
+    'Resolve the latest configured source after confirmation, then build, validate and activate changed managed releases.',
+    'Inactive managed packages are skipped; use Packages → Manage releases for first installation. Other external packages are skipped.',
+    'Auto update is NOT changed. This authorizes one update run only.',
+    `Store: ${literal(config.packageStore)}`,
+    ...packages.map((pkg) => `\n${pkg.name}\nSource: ${literal(pkg.source)}\nCommands and limits: ${literal(pkg.localUpdate ?? pkg.managed)}`),
+    '\nThese trusted commands execute with your OS permissions and network access, NOT in a sandbox. Builds use a minimal environment, not service credentials.',
+    'Managed activation affects future launches in ALL sessions sharing the store. Local Git updates modify shared checkout files, dependencies and build output IN PLACE; running services may read changed files immediately.',
+    'Finish background jobs in every affected session before continuing; their count is unknown.',
+    'No services are stopped or restarted. To use new versions here, separately choose Connection → Restart gateway services.',
+    'Failures/cancellation do not roll back completed updates. Incomplete local builds block future launches until a successful retry; inspect package logs.',
+  ].join('\n\n');
+  if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Update all packages?', actionLabel: 'update all' }) || signal.aborted) return;
+  if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; package update was cancelled', 'warning'); return; }
+  const failures: string[] = [];
+  let updates: Awaited<ReturnType<typeof updateManagedPackages>> = [];
+  await progress(ctx, 'Updating all packages', signal, async (operation, output) => {
+    updates = await updateManagedPackages(config, operation,
+      (name, error) => { failures.push(clean(`${name}: ${String(error)}`)); output(`Failed: ${name}\n`); },
+      (name, stage) => output(`${stage === 'checking' ? 'Checking' : 'Updating'} ${name}\n`), 'manual');
+  });
+  if (signal.aborted) return;
+  const summary = [
+    updates.length ? updates.map(({ name, from, version }) => `${name}: ${from} → ${version}`).join('\n') :
+      'No version changes. Packages may already be current or inactive; local builds can complete without a version change.',
+    ...(failures.length ? ['Failed packages:', ...failures] : []),
+    'Services were not restarted. Auto update is unchanged.',
+  ].join('\n\n');
+  await showText(ctx, 'Package update results', summary, signal);
 }
 
 /** All writes require a complete, scroll-reviewed operator confirmation. */
