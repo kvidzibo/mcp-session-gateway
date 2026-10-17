@@ -68,7 +68,8 @@ From this checkout:
 pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.json"
 ```
 
-Use absolute paths elsewhere. The adapter starts one gateway with the session and closes it and its
+Use absolute paths elsewhere. Custom wrapper extensions must **return or await** the gateway
+factory's promise so Pi waits for dependency loading. The adapter starts one gateway with the session and closes it and its
 children at shutdown. It rebuilds stale/missing output before connecting; this requires development
 dependencies and POSIX process groups. [Build checks and recovery](docs/reference.md#adapter-builds)
 cover failures and locks.
