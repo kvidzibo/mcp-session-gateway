@@ -168,8 +168,10 @@ never configure the token.
 offers restart. Inventory/checks install nothing. First managed installation and restart require
 separate confirmations.
 
-**Auto update: Off/On** saves immediately and affects the next startup/reload, not running services.
-Enabling it authorizes trusted downloads/builds/validation without per-update prompts. Read the
+The adapter checks the **gateway itself** before each launch, even with **Auto update: Off**.
+**Auto update: On** also authorizes gateway and eligible service downloads/builds/validation at
+startup/reload, without per-update prompts. Gateway updates require a **fresh Pi process** before
+connecting; running sessions are not restarted. The setting saves immediately. Read the
 [package guide](docs/packages.md) before enabling it, including Git 2.45+/POSIX requirements and
 in-place local-update effects.
 

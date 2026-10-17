@@ -68,8 +68,9 @@ Each launch fingerprints gateway/example sources, manifest/lockfile, TypeScript 
 compiled outputs. Missing/changed output runs `npm run build` here; the first launch after this
 behavior's introduction also builds to record a fingerprint. Fresh builds are reused.
 
-Requires `npm ci` development dependencies and **POSIX process-group support**. Never installs
-dependencies or updates sources; standalone/built-in launches need manual builds. Concurrent
+Requires `npm ci` development dependencies and **POSIX process-group support**. The build check
+itself never installs dependencies or updates sources; the separate [gateway startup update
+policy](packages.md#gateway-self-updates) can do both. Standalone/built-in launches need manual builds. Concurrent
 launches share a checkout lock with a **five-minute build/wait limit**. Shutdown cancels
 compilation; already-running gateways are never rebuilt/restarted.
 
@@ -114,7 +115,7 @@ nothing. No arguments/results or polling.
 
 ### Startup snapshot
 
-Startup/reload animates configuration, optional package updates, build check, connection, discovery,
+Startup/reload animates configuration, gateway checks/updates, optional service updates, build check, connection, discovery,
 apps, and panels above the editor; clears on success/failure/shutdown. Noninteractive sessions do
 not animate. [Package progress/concurrency](packages.md#automatic-startup-updates).
 

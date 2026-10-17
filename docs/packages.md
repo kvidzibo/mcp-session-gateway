@@ -83,13 +83,13 @@ updating/restarting services. The label rereads disk; failed saves preserve the 
 formatting changes, but other values/environment references remain. Concurrent adapter saves are
 refused; remove an interrupted `<config>.auto-update.lock` only after verifying nobody is saving.
 
-Top-level `"autoUpdate": true` (boolean; default `false`) authorizes the **Pi adapter** to check
-public sources and download/build/validate/activate before startup/reload, **without per-update
-confirmation**. **Code runs with your OS permissions, not in a sandbox: authorize only trusted
+Top-level `"autoUpdate": true` (boolean; default `false`) authorizes the **Pi adapter** to update
+itself and download/build/validate/activate eligible service packages before startup/reload,
+**without per-update confirmation**. **Code runs with your OS permissions, not in a sandbox: authorize only trusted
 sources/commands**, including manually confirmed operations. `false` disables startup writes; manual
 release actions remain separately confirmed.
 
-Only packages linked to enabled services qualify: activated managed packages and explicit
+For service updates, only packages linked to enabled services qualify: activated managed packages and explicit
 `localUpdate` checkouts. First
 installs, unlinked packages and other folders do not. Standalone launches and Connection-menu
 restarts do not run this policy. All updates finish before connection.
@@ -111,6 +111,33 @@ including initial/output-only builds. Concurrent progress shows the latest event
 changes produce one display-only **MCP servers were updated** entry with package IDs and old/new
 versions, never a model turn. No entry appears for unchanged, disabled, ineligible, entirely failed
 or output-only operations.
+
+### Gateway self-updates
+
+Before each Pi-adapter launch, including Connection-menu restarts, the gateway checks its own
+checkout's public `kvidzibo/mcp-session-gateway` upstream—even with Auto update off and no service
+packages configured. A
+read-only check reports differing Git revisions, not proven ancestry. Network/check failures warn
+without preventing an otherwise usable launch. Archives and checkouts without a supported public
+main/master upstream, including feature/detached branches, skip self-checks/updates.
+
+With Auto update on, startup/reload uses the local-update safeguards below: clean main/master,
+fast-forward only, serialized updates, and no hooks, executable filters, submodules or credentials.
+Shared/out-of-checkout `node_modules` or `dist` directories are refused before commands run.
+It runs `npm ci --include=dev`, `npm run build`, then `npm run check`. The first enabled launch also
+builds/validates the current revision; later unchanged launches reuse that receipt. This updates
+the installation shared by configurations/sessions using this checkout—not just one config.
+
+**After a gateway build/update, start a fresh Pi process.** The adapter stays disconnected rather
+than mix its already-loaded modules with replaced sources/dependencies. `/reload` is not a substitute
+for restarting Pi. Running sessions are never restarted automatically; finish their work before
+enabling updates. Connection-menu restarts check but do not self-update. Direct CLI/built-in MCP
+launches remain manual; this is the Pi adapter's startup policy.
+
+Pre-mutation refusals warn and may launch existing files. Incomplete/failed builds block adapter
+launches even with Auto update off; retry a fresh Pi with Auto update on to repair, or inspect
+`mcp-gateway-local.log`/`mcp-gateway-local.json` in the checkout's Git directory. Keep receipts;
+[local-update recovery](#local-git-packages) applies. Notifications are display-only, not model turns.
 
 ### Effects on running sessions
 
