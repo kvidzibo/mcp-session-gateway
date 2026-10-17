@@ -91,6 +91,6 @@ test('large settings catalogues open without compilation and compact only equiva
     return undefined;
   } } } as unknown as ExtensionContext;
   await editSettings(ctx, { schemaVersion: 1, title: 'Large catalogue', revision: 'one', schema, writable: true, values: { model: 'model-0' } },
-    async () => assert.fail('Browsing cannot write settings'), new AbortController().signal, 30_000);
+    async () => assert.fail('Browsing cannot write settings'), new AbortController().signal);
   assert.equal(compile.mock.callCount(), 0);
 });

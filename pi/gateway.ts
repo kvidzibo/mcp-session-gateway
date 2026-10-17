@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Loader, Text } from '@earendil-works/pi-tui';
+import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
@@ -116,9 +116,12 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       }
       ctx.ui.setStatus('gateway', undefined);
       ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
-        render: (width: number) => callCountLines(width, theme,
-          `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`,
-          footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks),
+        render: (width: number) => {
+          const header = `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`;
+          // Wrapped counters must not push an active dialog's controls offscreen.
+          return uiBusy ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
+            footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks);
+        },
         invalidate() {},
       }), { placement: 'belowEditor' });
     } else {
@@ -589,7 +592,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const options = { signal, timeout };
     const document = await current.request({ method: OPERATOR_GET, params: { token, service } }, SettingsDocumentSchema, options);
     await editSettings(ctx, document, (revision, patch) =>
-      current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal, timeout);
+      current.request({ method: OPERATOR_UPDATE, params: { token, service, revision, patch } }, SettingsDocumentSchema, options), signal);
   }
 
   async function openResource(uri: string, ctx: ExtensionContext, signal: AbortSignal): Promise<void> {

@@ -180,9 +180,17 @@ test('operator settings stay private, route by service, and require confirmed sc
         const ready = new Promise<void>((resolve) => { opened = resolve; });
         const pending = click(link('alpha'));
         await ready;
-        await click(link('beta'));
+        for (const width of [20, 28, 140]) {
+          const lines = countsWidget!.render(width);
+          assert.equal(lines.length, 1, 'Active dialogs collapse Full counters to a single header row');
+          assert.ok(visibleWidth(lines[0]) <= width);
+          assert.ok(!lines[0].includes('✓'), 'Per-service counters cannot crowd active controls');
+        }
+        const headerLink = countsWidget!.render(140).join('\n').match(/\x1b\]8;;(pi-gateway-action:[^\x07]+)/)![1];
+        await click(headerLink);
         assert.equal(notices.at(-1), 'Finish the current gateway dialog first');
         opened = undefined; release!(); await pending;
+        assert.ok(countsWidget!.render(28).length > 1, 'Full counters return after the dialog closes');
         const before = screens.length;
         const noticesBefore = notices.length;
         await click(link('disabled'));
@@ -242,6 +250,8 @@ test('operator settings stay private, route by service, and require confirmed sc
         panel.focused=true;
         assert.equal(panel.focused,true);
         assert.ok(panel.render(78).length <= 8, 'Input leaves room for footer/widgets');
+        terminal.columns = 28;
+        assert.ok(panel.render(28).some((line: string) => line.includes('Enter') && line.includes('Esc')), 'Narrow inputs retain both action hints');
         panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput('"edited"'); panel.handleInput('\r');
         return answer;
       } finally {panel.dispose();}
@@ -302,7 +312,7 @@ test('operator settings stay private, route by service, and require confirmed sc
         await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
           assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}); updates++;
           return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}};
-        }, new AbortController().signal, 1000);
+        }, new AbortController().signal);
       } finally { t.mock.timers.reset(); }
       assert.equal(updates, 1);
     }

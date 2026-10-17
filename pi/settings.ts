@@ -177,7 +177,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);
         const [border] = new DynamicBorder((text) => theme.fg('border', text)).render(width);
         return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...input.render(width), '',
-          truncateToWidth(theme.fg('muted', 'JSON value  Enter stage  Esc back'), width), border];
+          truncateToWidth(theme.fg('muted', width < 40 ? 'Enter stage · Esc' : 'JSON value  Enter stage  Esc back'), width), border];
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
@@ -212,7 +212,7 @@ export function settingsValidationSchema(schema: ObjectValue): ObjectValue {
 
 /** Schema-driven operator editor; no parent model catalogue, tool calls or model messages. */
 export async function editSettings(ctx: ExtensionContext, initial: SettingsDocument,
-  update: (revision: string, patch: ObjectValue) => Promise<SettingsDocument>, signal: AbortSignal, timeout: number): Promise<void> {
+  update: (revision: string, patch: ObjectValue) => Promise<SettingsDocument>, signal: AbortSignal): Promise<void> {
   let document = initial;
   // Human navigation has no RPC deadline; shutdown still cancels the draft.
   const options = { signal };
