@@ -96,11 +96,22 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     });
     const linked = (text: string) => url ? `\x1b]8;;${url}\x07${text}\x1b]8;;\x07` : text;
     if (display === 'full') {
+      const serviceLinks = new Map<string, string>();
+      if (connected && state === 'up') for (const service of configuredServices) {
+        if (disconnectedServices.has(service)) continue;
+        const link = footerBridge?.link(service, async () => {
+          renderFooter();
+          if (footerContext !== ctx || shuttingDown) return false;
+          try { await gatewayCommand({ settings: service }).handler('', ctx); return true; }
+          finally { renderFooter(); }
+        });
+        if (link) serviceLinks.set(service, link);
+      }
       ctx.ui.setStatus('gateway', undefined);
       ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
         render: (width: number) => callCountLines(width, theme,
           `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`,
-          configuredServices, callCounts?.counts ?? new Map(), disconnectedServices),
+          configuredServices, callCounts?.counts ?? new Map(), disconnectedServices, serviceLinks),
         invalidate() {},
       }), { placement: 'belowEditor' });
     } else {
@@ -332,7 +343,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  const gatewayCommand = (initialAction?: 'services') => ({
+  const gatewayCommand = (initialAction?: 'services' | { settings: string }) => ({
     description: initialAction ? 'Open this gateway’s Services menu. No model turn.' : 'Open gateway services, packages and connection menus. No model turn.',
     handler: async (_args: string, ctx: ExtensionContext) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
@@ -348,8 +359,12 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         try { await openSettings(service, ctx); }
         catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Settings unavailable: ${String(error)}`), 'error'); }
       };
-      let nextAction = connected ? initialAction : undefined;
+      let nextAction = connected && initialAction === 'services' ? initialAction : undefined;
       try {
+        if (typeof initialAction === 'object') {
+          await serviceSettings(initialAction.settings);
+          return;
+        }
         while (!signal.aborted) {
           let autoUpdate: boolean | undefined, autoUpdateError = '';
           let menuDisplay: Display | undefined, displayError = '';

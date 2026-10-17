@@ -6,6 +6,9 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { visibleWidth } from '@earendil-works/pi-tui';
+const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 import { confirmSettings, editSettings, inputSettings, selectSettingsOption } from '../pi/settings.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
@@ -43,7 +46,7 @@ test('operator settings stay private, route by service, and require confirmed sc
     });
     await server.connect(new StdioServerTransport());
   `;
-  await writeFile(config, JSON.stringify({ servers: {
+  await writeFile(config, JSON.stringify({ display: 'full', servers: {
     alpha: { command: process.execPath, args: ['--input-type=module', '-e', service], cwd: root, settings: { tokenEnv: 'SERVICE_SETTINGS_TOKEN' } },
     beta: { command: process.execPath, args: ['--input-type=module', '-e', service], cwd: root, settings: { tokenEnv: 'SERVICE_SETTINGS_TOKEN' } },
     disabled: { command: process.execPath, args: ['--input-type=module', '-e', service], cwd: root },
@@ -77,8 +80,12 @@ test('operator settings stay private, route by service, and require confirmed sc
     const navigation = ['Services', 'alpha', 'Settings'];
     let confirmations = 0;
     const notices: string[] = [];
+    let countsWidget: { render(width: number): string[] } | undefined;
     const ctx = { cwd: root, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'settings-test', getBranch: () => [] }, ui: {
-      theme: { fg: (_color: string, text: string) => text }, setStatus() {}, setWidget() {},
+      theme: { fg: (_color: string, text: string) => text }, setStatus() {},
+      setWidget(key: string, factory: any) {
+        if (key === 'gateway-call-counts') countsWidget = factory?.({}, this.theme);
+      },
       select: async (title: string, choices: string[]) => {
         switch (step++) {
           case 1: return choices.find((s) => s.includes('worker/model'));
@@ -139,6 +146,49 @@ test('operator settings stay private, route by service, and require confirmed sc
       await ext.commands.get('gateway').handler('', ctx);
       assert.equal(confirmations, 2);
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
+      await t.test('Full-display service clicks open only their settings, renew links, and reject busy dialogs', async () => {
+        const link = (name: string) => [...countsWidget!.render(140).join('\n').matchAll(/\x1b\]8;;(pi-gateway-action:[^\x07]+)\x07([^\x1b]+)/g)]
+          .find((match) => match[2].startsWith(name + ' '))![1];
+        const screens: string[] = [];
+        let release: (() => void) | undefined;
+        let opened: (() => void) | undefined;
+        ctx.ui.custom = async (factory: Function) => {
+          let answer: unknown;
+          const panel = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, ctx.ui.theme, {}, (value: unknown) => { answer = value; });
+          try {
+            const lines: string[] = panel.render(98);
+            assert.ok(lines.some((line) => line.includes('Reusable service settings')));
+            assert.ok(!lines.some((line) => line.startsWith('Gateway')));
+            screens.push(lines.join('\n'));
+            if (opened) await new Promise<void>((resolve) => { release = resolve; opened!(); });
+            panel.handleInput('\x1b');
+            return answer;
+          } finally { panel.dispose(); }
+        };
+        for (const width of [1, 12, 24, 80, 140]) assert.ok(countsWidget!.render(width).every((line) => visibleWidth(line) <= width));
+        for (const name of ['alpha', 'beta', 'alpha']) {
+          const old = link(name);
+          await click(old);
+          assert.match(screens.at(-1)!, new RegExp(`enabled: ${name === 'alpha' ? 'true' : 'false'}`));
+          await assert.rejects(click(old), /Action unavailable/);
+        }
+        const ready = new Promise<void>((resolve) => { opened = resolve; });
+        const pending = click(link('alpha'));
+        await ready;
+        await click(link('beta'));
+        assert.equal(notices.at(-1), 'Finish the current gateway dialog first');
+        opened = undefined; release!(); await pending;
+        const before = screens.length;
+        await click(link('disabled'));
+        assert.equal(screens.length, before);
+        assert.match(notices.at(-1)!, /Settings unavailable/);
+        await click(link('beta'));
+        assert.equal(screens.length, before + 1, 'Failure releases dialog ownership');
+        const stale = link('alpha');
+        await dispatch('session_shutdown');
+        assert.equal(countsWidget, undefined);
+        await assert.rejects(click(stale));
+      });
       // Close/reload creates new fixture state, so inspect the returned menu above for saved feedback.
     } finally { await dispatch('session_shutdown'); }
     // Exercise large lists and valid choice schemas without explicit types, plus
