@@ -147,7 +147,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
     if (uiBusy || !connected || shuttingDown) return false;
     uiBusy = true;
-    try { return await run(); } finally { uiBusy = false; }
+    try { return await run(); } finally { uiBusy = false; renderFooter(); }
   });
   pi.registerEntryRenderer<{ title: string; text: string }>('gateway-native-preview', (entry, _options, theme) => {
     if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
@@ -234,7 +234,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       }
       return { action: choice === 'Decline' ? 'decline' : 'cancel' };
     } catch { return { action: 'cancel' }; }
-    finally { if (acquired) uiBusy = false; release(); }
+    finally { if (acquired) { uiBusy = false; renderFooter(); } release(); }
   }
 
   async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string, update = false): Promise<void> {
@@ -534,7 +534,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
             }
           } catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Gateway: ${String(error)}`), 'error'); }
         }
-      } finally { if (managerController === controller) managerController = undefined; uiBusy = false; }
+      } finally { if (managerController === controller) managerController = undefined; uiBusy = false; renderFooter(); }
     },
   });
   pi.registerCommand('gateway', gatewayCommand());

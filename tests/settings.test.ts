@@ -81,10 +81,11 @@ test('operator settings stay private, route by service, and require confirmed sc
     let confirmations = 0;
     const notices: string[] = [];
     let countsWidget: { render(width: number): string[] } | undefined;
+    let footerUpdates = 0;
     const ctx = { cwd: root, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'settings-test', getBranch: () => [] }, ui: {
       theme: { fg: (_color: string, text: string) => text }, setStatus() {},
       setWidget(key: string, factory: any) {
-        if (key === 'gateway-call-counts') countsWidget = factory?.({}, this.theme);
+        if (key === 'gateway-call-counts') { countsWidget = factory?.({}, this.theme); footerUpdates++; }
       },
       select: async (title: string, choices: string[]) => {
         switch (step++) {
@@ -145,7 +146,9 @@ test('operator settings stay private, route by service, and require confirmed sc
     const dispatch = async (event: string) => { for (const handler of ext.handlers.get(event) ?? []) await handler({ type: event }, ctx); };
     try {
       await dispatch('session_start');
+      const beforeMenu = footerUpdates;
       await ext.commands.get('gateway').handler('', ctx);
+      assert.ok(footerUpdates > beforeMenu, 'Closing slash menus explicitly redraws the Full counters');
       assert.equal(confirmations, 2);
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
       await t.test('Full-display service clicks open their screen without requiring settings, renew links, and reject busy dialogs', async () => {
