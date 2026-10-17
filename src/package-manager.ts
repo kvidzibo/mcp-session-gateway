@@ -266,7 +266,8 @@ export class PackageManager {
 
 /** Explicit config opt-in authorizes updates, not first installs or external checkout writes. */
 export async function updateManagedPackages(config: GatewayConfig, signal: AbortSignal,
-  failed: (name: string, error: unknown) => void): Promise<{ name: string; from: string; version: string }[]> {
+  failed: (name: string, error: unknown) => void,
+  progress: (name: string, stage: 'checking' | 'updating') => void = () => {}): Promise<{ name: string; from: string; version: string }[]> {
   const updates: { name: string; from: string; version: string }[] = [];
   if (!config.autoUpdate) return updates;
   const manager = new PackageManager(config.packageStore);
@@ -275,8 +276,10 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
     signal.throwIfAborted();
     try {
       if (!(await manager.state(pkg, signal)).active) continue;
+      progress(pkg.name, 'checking');
       const plan = await manager.plan(pkg, signal);
       if (!plan.from || plan.version === plan.from) continue;
+      progress(pkg.name, 'updating');
       await manager.prepare(pkg, plan, signal, () => {});
       const state = await manager.state(pkg, signal);
       if (state.active?.version !== plan.from || state.prepared?.version !== plan.version) {

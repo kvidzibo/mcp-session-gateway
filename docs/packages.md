@@ -99,6 +99,11 @@ Shutdown cancels and awaits pending update work. No existing processes in other
 sessions are restarted; activation affects their next launch as usual.
 Manual Connection-menu restarts do not check for updates.
 
+During initial startup/reload, the animated startup loader names each service
+being checked. When a newer version is found, it shows **Updating service <name>**
+while preparing, building, validating and activating the package, before connecting
+services. Up-to-date services never show an updating stage.
+
 After activation, one display-only chat entry says **MCP servers were updated**
 and lists package IDs and old/new versions. Nothing is posted when up to date,
 disabled, ineligible or entirely failed. The entry never starts a model turn.

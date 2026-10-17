@@ -125,27 +125,49 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
         on: (event: string, handler: Function) => handlers.set(event, handler),
         appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
       } as any);
-      const ctx: any = { cwd: dir, mode: 'print', hasUI: false, ui: { notify: (text: string) => warnings.push(text) } };
+      const widgets = new Map<string, any>(), progressFrames: string[] = [];
+      const theme = { fg: (_: string, text: string) => text };
+      const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, ui: {
+        theme, setStatus() {}, notify: (text: string) => warnings.push(text),
+        setWidget(key: string, factory: any) {
+          widgets.get(key)?.dispose?.(); widgets.delete(key);
+          if (typeof factory !== 'function') return;
+          const panel = factory({ requestRender() {
+            const loader = widgets.get(key);
+            if (loader) progressFrames.push(loader.render(100).join('\n'));
+          } }, theme);
+          widgets.set(key, panel);
+        },
+      } };
       const stop = () => handlers.get('session_shutdown')!({}, ctx);
-      const start = () => handlers.get('session_start')!({}, ctx);
+      const start = () => handlers.get('session_start')!({ reason: 'reload' }, ctx);
       const runningVersion = async () => (await tools.get('gateway_call').execute('version', { name: 'worker__version', arguments: {} })).content;
       try {
         assert.equal(config.autoUpdate, false);
         await start();
         assert.deepEqual(await runningVersion(), [{ type: 'text', text: 'one' }]);
         assert.deepEqual(entries, [], 'Disabled startup neither updates nor posts');
+        assert.ok(!progressFrames.some((text) => text.includes('Updating service')));
         await stop();
         await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: 'true' }));
         await assert.rejects(loadConfig(file), /autoUpdate must be a boolean/);
         await writeFile(file, JSON.stringify({ ...declaration, autoUpdate: true }));
         await start();
         assert.deepEqual(await runningVersion(), [{ type: 'text', text: 'two' }], 'New servers must use the updated release immediately');
+        const checking = progressFrames.findIndex((text) => text.includes('Checking service worker'));
+        const updating = progressFrames.findIndex((text) => text.includes('Updating service worker'));
+        const connecting = progressFrames.findIndex((text, i) => i > updating && text.includes('connecting services'));
+        assert.ok(checking >= 0 && updating > checking && connecting > updating, 'Named update loader precedes service startup');
+        assert.equal(widgets.size, 0, 'Startup removes the loader after success');
         assert.deepEqual(entries, [{ type: 'gateway-package-updates', data: {
           text: `MCP servers were updated:\n- worker: ${first} → ${second}`,
         } }]);
         await stop();
         const prepared = (await manager.state(pkg, signal)).log;
+        progressFrames.length = 0;
         await start();
+        assert.ok(progressFrames.some((text) => text.includes('Checking service worker')));
+        assert.ok(!progressFrames.some((text) => text.includes('Updating service')));
         assert.equal(entries.length, 1, 'An up-to-date startup is quiet');
         assert.equal((await manager.state(pkg, signal)).log, prepared, 'No redundant preparation');
         await stop();
@@ -184,6 +206,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
           await assert.rejects(access(join(config.packageStore, pkg.name, '.lock')), { code: 'ENOENT' });
           assert.equal((await manager.state(pkg, signal)).active?.version, second);
           assert.equal(entries.length, 1, 'Cancelled startup must not post or start servers');
+          assert.equal(widgets.size, 0, 'Cancellation removes the startup loader');
           await assert.rejects(tools.get('gateway_tools').execute(), /disconnected/);
         } finally { wrapped.mock.restore(); }
       } finally {

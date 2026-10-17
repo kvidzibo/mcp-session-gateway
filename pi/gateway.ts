@@ -220,9 +220,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
     if (update && config.autoUpdate) {
-      startupProgress(ctx, 'updating managed packages');
+      startupProgress(ctx, 'checking for service updates');
       const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
-        ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'));
+        ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'),
+      (name, stage) => {
+        const services = config.services.filter((service) => service.package === name).map((service) => service.name);
+        startupProgress(ctx, `${stage === 'updating' ? 'Updating' : 'Checking'} service ${services.join(', ')}`);
+      });
       startupWork = work;
       try {
         const updates = await work.catch((error) => { renderFooter('off'); throw error; });
