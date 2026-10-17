@@ -8,6 +8,7 @@ export const GatewayStatusSchema = z.object({
     name: z.string().regex(/^[a-z][a-z0-9-]*$/),
     state: z.enum(['connected', 'stopped', 'disconnected']),
     tools: z.number().int().nonnegative(),
+    toolNames: z.array(z.string()).optional(), // Optional for saved snapshots from older gateways.
   })),
 });
 export type GatewayStatus = z.infer<typeof GatewayStatusSchema>;
