@@ -5,7 +5,7 @@ import { checkoutIdentity } from '../src/checkout-lock.js';
 
 /** Called under the checkout lock. Running adapters never import replaceable checkout files. */
 export async function snapshotInstallation(root: string, signal: AbortSignal): Promise<string> {
-  const identity = await checkoutIdentity(root);
+  const identity = await checkoutIdentity(root, signal);
   const store = join(root, '.gateway-runtimes');
   await mkdir(store, { recursive: true, mode: 0o700 });
   if (!(await lstat(store)).isDirectory()) throw new Error('Gateway runtime store must not be a symlink');
@@ -30,7 +30,7 @@ export async function snapshotInstallation(root: string, signal: AbortSignal): P
         continue;
       }
       await cp(join(root, path), join(staging, path), { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE,
-        filter: (source) => source !== join(root, 'dist/.gateway-build.lock') });
+        filter: (source) => { signal.throwIfAborted(); return source !== join(root, 'dist/.gateway-build.lock'); } });
     }
     // Preserve internal .bin links, but never retain links into the mutable installation.
     const canonical = await realpath(root);
@@ -55,7 +55,7 @@ export async function snapshotInstallation(root: string, signal: AbortSignal): P
     };
     await links(staging);
     signal.throwIfAborted();
-    if (identity !== await checkoutIdentity(root)) throw new Error('Gateway installation changed while copying; retry reload');
+    if (identity !== await checkoutIdentity(root, signal)) throw new Error('Gateway installation changed while copying; retry reload');
     await writeFile(join(staging, '.ready'), identity, { mode: 0o600 });
     await rename(staging, destination);
     return destination;

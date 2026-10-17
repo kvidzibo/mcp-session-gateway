@@ -76,7 +76,7 @@ five-minute deadline. The dependency-light loader runs automatic updates in a di
 before importing a versioned runtime copy, including on `/reload`. Copying holds the checkout
 lock; compilation and the child handshake hold the copy's build lock. Discovery only registers
 lightweight tools/commands; runtime imports happen at session startup or on demand for recovery
-commands. Readiness is checked before runtime registration. Shutdown cancels compilation;
+commands. Readiness blocks service startup, not recovery menus. Shutdown cancels copying and compilation;
 already-running gateway copies are never replaced or restarted.
 
 Failure leaves the gateway disconnected, not stale. Finish gateway jobs and wait for all updates

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { watch } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { withCheckoutLock } from '../src/checkout-lock.js';
@@ -19,11 +20,13 @@ test('the dependency-light bootstrap waits for an install in a linked checkout b
       await copyFile(new URL('../' + path, import.meta.url), join(root, path));
     }
     for (const path of ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json']) await writeFile(join(root, path), '{}');
-    await writeFile(join(root, 'pi/self-update.ts'), 'export async function assertGatewayReady() {}');
+    await writeFile(join(root, 'pi/self-update.ts'), `import { existsSync } from 'node:fs';
+export async function assertGatewayReady(root) { if (existsSync(root + '/pending')) throw new Error('pending build'); }
+export const checkGatewayUpdate = assertGatewayReady;`);
     await writeFile(join(root, 'pi/runtime.ts'), `import command from 'fixture-dependency';
-export default function(pi, _check, _identity, lifecycle) {
+export default function(pi, check, _identity, lifecycle) {
   pi.registerCommand('gateway', { handler(_args, ctx) { ctx.ui.notify(command); } });
-  lifecycle.start = (_event, ctx) => ctx.ui.notify('started');
+  lifecycle.start = async (_event, ctx) => { await check('', false, new AbortController().signal, () => {}, () => {}); ctx.ui.notify('started'); };
 }`);
     const { loadExtensions } = await import(new URL('../node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/loader.js', import.meta.url).href);
     const result = await loadExtensions([join(root, 'pi/gateway.ts')], root);
@@ -45,14 +48,22 @@ export default function(pi, _check, _identity, lifecycle) {
     await Promise.all([starting, command]);
     assert.deepEqual(notes.sort(), ['installed', 'started'], 'A concurrent command cannot swallow the snapshotted startup event');
     await writeFile(join(root, 'node_modules/fixture-dependency/index.js'), 'module.exports = "updated";');
-    await writeFile(join(root, 'package-lock.json'), '{"version":"new"}');
     const reloaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(reloaded.errors, []);
     await reloaded.extensions[0].handlers.get('session_start')[0]({ reason: 'reload' }, ctx);
     await reloaded.extensions[0].commands.get('gateway').handler('', ctx);
-    assert.equal(notes.at(-1), 'updated', 'Reload imports fresh dependency paths, not Node cached modules');
+    assert.equal(notes.at(-1), 'updated', 'A dependency-content-only change must get fresh module paths, even with an unchanged lockfile');
     await result.extensions[0].commands.get('gateway').handler('', ctx);
     assert.equal(notes.at(-1), 'installed', 'An earlier session remains pinned to its original dependency copy');
+    await writeFile(join(root, 'pending'), 'failed build');
+    const recovery = await loadExtensions([join(root, 'pi/gateway.ts')], root);
+    await assert.rejects(recovery.extensions[0].handlers.get('session_start')[0]({ reason: 'reload' }, ctx), /pending build/);
+    await recovery.extensions[0].commands.get('gateway').handler('', ctx);
+    assert.equal(notes.at(-1), 'updated', 'Failed builds block launches but leave recovery commands usable');
+    await rm(join(root, 'pending'));
+    const previousCopy = await snapshotInstallation(root, signal);
+    await writeFile(join(root, 'tsconfig.build.json'), '{"compilerOptions":{"target":"ES2022"}}');
+    assert.notEqual(await snapshotInstallation(root, signal), previousCopy, 'Compiler configuration changes invalidate runtime copies');
     const cancelled = new AbortController();
     await withCheckoutLock(root, signal, async () => {
       const pending = withCheckoutLock(root, cancelled.signal, async () => assert.fail('Cancelled waiter acquired the lock'));
@@ -60,6 +71,15 @@ export default function(pi, _check, _identity, lifecycle) {
       await assert.rejects(pending);
       await readFile(join(root, 'common/mcp-gateway-build.lock'));
     });
+    await writeFile(join(root, 'node_modules/fixture-dependency/index.js'), 'module.exports = "cancel-copy";');
+    const copyAbort = new AbortController();
+    const store = join(root, '.gateway-runtimes');
+    const copying = watch(store, { recursive: true }, (_event, name) => {
+      if (String(name).includes('/node_modules/')) copyAbort.abort(new Error('cancel dependency copy'));
+    });
+    try { await assert.rejects(snapshotInstallation(root, copyAbort.signal), /cancel dependency copy/); }
+    finally { copying.close(); }
+    assert.ok((await readdir(store)).every((name) => !name.startsWith('.preparing-')), 'Cancelled copies are removed, never published');
     await rm(join(root, '.git'));
     await withCheckoutLock(root, signal, async () => {
       const copy = await snapshotInstallation(root, signal);

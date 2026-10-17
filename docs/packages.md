@@ -99,7 +99,7 @@ Concurrency defaults to `min(4, max(1, floor(available CPU cores / 2)))`, using 
 sequential. It limits whole package operations, whose steps remain sequential. Builds/tests may use
 more cores; higher limits increase RAM/disk contention. Canonical Git-common-directory peers
 serialize. Competing automatic managed updates wait up to five minutes, then re-plan under the
-package lock; preparation and activation share that lock. Only one session builds a given update.
+package lock; preparation and activation share that lock (including confirmed bulk updates). Only one session builds a given update.
 Manual release previews still reject contention or changed revisions. Results retain config order.
 
 No same-startup retries. Managed failures warn and retain activation. Refused local updates may
@@ -136,7 +136,8 @@ the installation shared by configurations/sessions using this checkout—not jus
 **Startup and `/reload` update before loading the adapter.** A disposable TypeScript worker
 imports the updater under the dependency lock, then installs/builds/validates and exits. Pi copies
 the completed installation under the same lock and loads that version's unique module paths.
-Unchanged copies are reused. Extension discovery/help starts no updater or services. Opening a
+Copies are keyed by source/configuration, dependency contents and symlink identities; unchanged
+copies are reused. Extension discovery/help starts no updater or services. Opening a
 recovery command before session startup loads a copy without updating or connecting.
 
 Runtime copies live in Git-ignored `.gateway-runtimes/<fingerprint>` in the gateway checkout.

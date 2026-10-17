@@ -23,7 +23,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     ...definition,
     execute: (...args) => {
       const tool = tools.get(definition.name);
-      if (!tool) throw new Error('Gateway is not ready; check its startup error and restart Pi');
+      if (!tool) throw new Error('Gateway is not ready; check its startup error and /reload');
       return tool(...args);
     },
   });
@@ -32,7 +32,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       await load(ctx);
       const command = commands.get(name);
-      if (!command) { ctx.ui.notify('Gateway is not ready; check its startup error and restart Pi', 'warning'); return; }
+      if (!command) { ctx.ui.notify('Gateway is not ready; check its startup error and /reload', 'warning'); return; }
       await command.handler(args, ctx);
     },
   });
@@ -91,10 +91,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       try {
         const installation = await snapshotInstallation(root, signal);
         const { assertGatewayReady, checkGatewayUpdate } = await import(pathToFileURL(join(installation, 'pi/self-update.ts')).href);
-        await assertGatewayReady(root, signal);
         const { default: register } = await import(pathToFileURL(join(installation, 'pi/runtime.ts')).href);
         const checkUpdate: typeof import('./self-update.js').checkGatewayUpdate = async (_root, _autoUpdate, operation, progress, notify) => {
-          if (checked) { checked = false; if (updateFailure) throw updateFailure; return; }
+          if (checked) {
+            checked = false;
+            if (updateFailure) throw updateFailure;
+            await withCheckoutLock(root, operation, () => assertGatewayReady(root, operation));
+            return;
+          }
           // Already-loaded runtimes stay pinned. Connection-menu restarts only check the source.
           await withCheckoutLock(root, operation, () => checkGatewayUpdate(root, false, operation, progress, notify));
         };
