@@ -327,7 +327,7 @@ export class NativeUI {
             id: `control:${control.id}`,
             label: `${control.icon ? `${oneLine(control.icon)} ` : ''}${oneLine(control.label)}${control.kind !== 'action' ? `: ${oneLine(String(control.value ?? ''))}` : ''}`,
             description: control.description ?? '',
-          })), undefined, { signal: refresh.signal, shortcuts: [
+          })), undefined, { signal: refresh.signal, searchable: true, shortcuts: [
             ...(navigation ? [{ key: Key.tab, label: 'Tab settings', id: 'settings' }, { key: Key.ctrl('o'), label: 'Ctrl+O features', id: 'features' }] : []),
             { key: Key.ctrl('r'), label: 'Ctrl+R refresh', id: 'refresh' },
           ] });
