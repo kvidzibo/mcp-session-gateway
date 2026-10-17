@@ -1,9 +1,10 @@
 import { fileURLToPath } from 'node:url';
-import type { ExtensionAPI, ExtensionContext, SessionStartEvent, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { EntryRenderer, ExtensionAPI, ExtensionContext, SessionStartEvent, ToolDefinition } from '@earendil-works/pi-coding-agent';
 import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 import { readAutoUpdate } from './auto-update.js';
-import { gatewayCommands, gatewayTools } from './definitions.js';
+import { gatewayCommands, gatewayEntries, gatewayTools } from './definitions.js';
 import { updateBeforeLoad } from './startup-update.js';
+import type { GatewayLifecycle } from './runtime.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const identityKey = Symbol.for('local-stdio-mcp-gateway.loaded-installations');
@@ -14,6 +15,11 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   const tools = new Map<string, ToolDefinition['execute']>();
   const commands = new Map<string, Parameters<ExtensionAPI['registerCommand']>[1]>();
+  const renderers = new Map<string, EntryRenderer>();
+  for (const type of gatewayEntries) pi.registerEntryRenderer(type, (entry, options, theme) => ({
+    render: (width) => renderers.get(type)?.(entry, options, theme)?.render(width) ?? [],
+    invalidate() {}, // Recreate the real component on each render, including after lazy loading.
+  }));
   for (const definition of Object.values(gatewayTools)) pi.registerTool({
     ...definition,
     execute: (...args) => {
@@ -34,7 +40,17 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let initialized = false;
   let controller = new AbortController();
   let pending: Promise<void> | undefined;
-  pi.on('session_start', (event, ctx) => load(ctx, event));
+  let starting: Promise<unknown> | undefined;
+  const lifecycle: GatewayLifecycle = {};
+  pi.on('session_start', async (event, ctx) => {
+    if (controller.signal.aborted) controller = new AbortController();
+    await load(ctx, event);
+    if (controller.signal.aborted) return;
+    const work = Promise.resolve(lifecycle.start?.(event, ctx));
+    starting = work;
+    try { await work; }
+    finally { if (starting === work) starting = undefined; }
+  });
   async function load(ctx: ExtensionContext, event?: SessionStartEvent): Promise<void> {
     if (initialized) return;
     if (pending) return pending;
@@ -44,9 +60,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     try { await work; }
     finally { if (pending === work) pending = undefined; }
   }
-  pi.on('session_shutdown', async () => {
+  pi.on('session_shutdown', async (event, ctx) => {
     controller.abort();
-    await pending?.catch(() => {});
+    const stop = lifecycle.shutdown;
+    // Cancel the runtime's own lifetime before awaiting its startup work.
+    await stop?.(event, ctx);
+    await Promise.allSettled([pending, starting]);
+    if (!stop) await lifecycle.shutdown?.(event, ctx);
   });
 
   async function initialize(ctx: ExtensionContext, event?: SessionStartEvent): Promise<void> {
@@ -54,7 +74,6 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const config = pi.getFlag('gateway-config');
     let checked = false;
     let updateFailure: unknown;
-    let start: (() => Promise<void> | void) | undefined;
     // A fresh process can update in a disposable worker before importing any runtime dependencies.
     // Reloads keep the old behavior: already-imported code must never adopt a new installation.
     if (event && !state[identityKey]?.has(root) && typeof config === 'string' && config) {
@@ -87,9 +106,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
           registerFlag() {},
           registerTool: (tool) => { tools.set(tool.name, tool.execute as ToolDefinition['execute']); },
           registerCommand: (name, command) => { commands.set(name, command); },
+          registerEntryRenderer: (type, renderer) => { renderers.set(type, renderer as EntryRenderer); },
         };
-        // Startup must run after releasing the import lock: it acquires its own build lock.
-        start = () => register(runtimePi, checkUpdate, identity, event ? { event, ctx } : undefined);
+        signal.throwIfAborted();
+        register(runtimePi, checkUpdate, identity, lifecycle);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'MODULE_NOT_FOUND' && code !== 'ERR_MODULE_NOT_FOUND') throw error;
@@ -98,6 +118,5 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     });
     signal.throwIfAborted();
     initialized = true;
-    await start!();
   }
 }

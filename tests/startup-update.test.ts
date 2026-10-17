@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { watch } from 'node:fs';
 import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +11,7 @@ test('a fresh Pi updates dependencies before importing the adapter and starts se
   const dir = await mkdtemp(join(tmpdir(), 'gateway-startup-update-'));
   const root = fileURLToPath(new URL('../', import.meta.url));
   const remote = join(dir, 'remote'), local = join(dir, 'local'), bin = join(dir, 'bin');
+  const serviceRemote = join(dir, 'service-remote'), service = join(dir, 'service');
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
   const realNpm = execFileSync('which', ['npm'], { encoding: 'utf8' }).trim();
   const previousPath = process.env.PATH;
@@ -47,7 +49,8 @@ test('a fresh Pi updates dependencies before importing the adapter and starts se
     await writeFile(join(dependency, 'package.json'), '{"name":"fixture-dependency","main":"index.js"}');
     await writeFile(join(dependency, 'index.js'), 'module.exports = "old";');
     await writeFile(join(bin, 'git'), `#!${process.execPath}
-const args=process.argv.slice(2).map(a=>a==='https://github.com/kvidzibo/mcp-session-gateway.git'?${JSON.stringify(pathToFileURL(remote).href)}:a);
+const urls={'https://github.com/kvidzibo/mcp-session-gateway.git':${JSON.stringify(pathToFileURL(remote).href)},'https://example.invalid/service.git':${JSON.stringify(pathToFileURL(serviceRemote).href)}};
+const args=process.argv.slice(2).map(a=>urls[a]??a);
 const result=require('child_process').spawnSync(${JSON.stringify(realGit)},['-c','protocol.file.allow=always',...args],{stdio:'inherit'});process.exit(result.status??1);
 `);
     await writeFile(join(bin, 'npm'), `#!${process.execPath}
@@ -74,6 +77,42 @@ else { const result=require('child_process').spawnSync(${JSON.stringify(realNpm)
     assert.equal(await readFile(join(dir, 'installs'), 'utf8'), 'x', 'Only one dependency installation is performed');
     assert.ok(notes.some((text) => /Gateway updated/.test(text)));
     assert.ok(notes.every((text) => !/Restart Pi|services were not started/.test(text)), notes.join('\n'));
+    for (const handler of [...handlers.get('session_shutdown')!]) await handler({ reason: 'exit' }, ctx);
+    handlers.clear();
+
+    // The bootstrap must cancel the runtime before awaiting its initial service build.
+    await mkdir(serviceRemote);
+    await writeFile(join(serviceRemote, '.gitignore'), 'dist/\n');
+    git(serviceRemote, 'init', '-b', 'main'); git(serviceRemote, 'add', '.'); git(serviceRemote, 'commit', '-m', 'service');
+    git(dir, 'clone', serviceRemote, service);
+    git(service, 'remote', 'set-url', 'origin', 'https://example.invalid/service.git');
+    const marker = join(dir, 'service-building');
+    await writeFile(config, JSON.stringify({ autoUpdate: true,
+      packages: { worker: { source: { type: 'local', path: service }, localUpdate: {
+        build: [{ command: process.execPath, args: ['-e', `require('fs').writeFileSync(${JSON.stringify(marker)},'started');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`] }],
+        validate: [{ command: process.execPath, args: ['-e', ''] }], outputs: ['dist/server.js'], timeoutMs: 30_000,
+      } } },
+      mcpServers: { worker: { package: 'worker', command: process.execPath, args: ['{{packageRoot}}/dist/server.js'] } },
+    }));
+    register({
+      registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, registerCommand() {}, appendEntry() {},
+      registerTool: (tool: any) => tools.set(tool.name, tool), events: { on() {} },
+      on: (event: string, handler: Function) => { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); },
+    });
+    let building!: () => void;
+    const ready = new Promise<void>((resolve) => { building = resolve; });
+    const watcher = watch(dir, (_event, name) => { if (name === 'service-building') building(); });
+    const startup = assert.rejects(handlers.get('session_start')![0]({ reason: 'reload' }, ctx));
+    try {
+      await ready;
+      const before = Date.now();
+      for (const handler of [...handlers.get('session_shutdown')!]) await handler({ reason: 'exit' }, ctx);
+      await startup;
+      assert.ok(Date.now() - before < 5000, 'Shutdown must cancel, not wait for the 30-second build timeout');
+      await assert.rejects(readFile(join(service, '.git/mcp-gateway-local.lock')), { code: 'ENOENT' });
+      await assert.rejects(readFile(join(service, '.git/mcp-gateway-build.lock')), { code: 'ENOENT' });
+      await assert.rejects(async () => tools.get('gateway_tools').execute('', {}), /disconnected/);
+    } finally { watcher.close(); }
   } finally {
     for (const handler of [...handlers.get('session_shutdown') ?? []]) await handler({ reason: 'exit' }, ctx);
     process.env.PATH = previousPath;

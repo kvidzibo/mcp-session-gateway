@@ -18,6 +18,8 @@ export const gatewayTools = {
   },
 };
 
+export const gatewayEntries = ['gateway-native-preview', 'gateway-package-updates', 'gateway-startup'] as const;
+
 export const gatewayCommands = {
   gateway: 'Open gateway services, packages and connection menus. No model turn.',
   'pi-services': 'Open this gateway’s Services menu. No model turn.',

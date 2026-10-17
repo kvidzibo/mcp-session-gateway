@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { gatewayCommands, gatewayTools } from './definitions.js';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { ExtensionAPI, ExtensionContext, ExtensionHandler, SessionStartEvent, SessionShutdownEvent } from '@earendil-works/pi-coding-agent';
 import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
@@ -33,8 +33,13 @@ import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
+export interface GatewayLifecycle {
+  start?: ExtensionHandler<SessionStartEvent>;
+  shutdown?: ExtensionHandler<SessionShutdownEvent>;
+}
+
 export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGatewayUpdate, identity?: string,
-  initialStart?: { event: import('@earendil-works/pi-coding-agent').SessionStartEvent; ctx: ExtensionContext }): Promise<void> | void {
+  lifecycle?: GatewayLifecycle): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   let client: Client | undefined;
   let transport: StdioClientTransport | undefined;
@@ -382,7 +387,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     }
     if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
   }
-  const onStart = async (event: import('@earendil-works/pi-coding-agent').SessionStartEvent, ctx: ExtensionContext) => {
+  const onStart: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
     shuttingDown = false;
     countsSaveWarning = false;
     const scope = resolve(String(pi.getFlag('gateway-config') ?? ''));
@@ -390,8 +395,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     try { await start(ctx, false, event.reason, true); }
     finally { await showStartup(ctx, event.reason); }
   };
-  pi.on('session_start', onStart);
-  pi.on('session_shutdown', async (event) => {
+  if (lifecycle) lifecycle.start = onStart;
+  else pi.on('session_start', onStart);
+  const onShutdown: ExtensionHandler<SessionShutdownEvent> = async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
     shuttingDown = true;
     if (footerContext) startupProgress(footerContext);
@@ -399,7 +405,9 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     footerContext?.ui.setStatus('gateway', undefined);
     footerContext?.ui.setWidget('gateway-call-counts', undefined); footerContext = undefined;
     try { await close(); } finally { await bridge?.stop(); }
-  });
+  };
+  if (lifecycle) lifecycle.shutdown = onShutdown;
+  else pi.on('session_shutdown', onShutdown);
   pi.on('session_tree', async (_event, ctx) => {
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
@@ -625,5 +633,4 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       return clean(result.contents.map((item) => 'text' in item ? item.text : '[non-text resource]').join('\n'));
     }, signal, lifetimeSignal);
   }
-  if (initialStart) return onStart(initialStart.event, initialStart.ctx);
 }
