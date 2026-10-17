@@ -54,14 +54,16 @@ export class CallCounts {
 }
 
 /** Render each service as one horizontal cell; wrap whole cells before truncating. */
-export function callCountLines(width: number, theme: Pick<Theme, 'fg'>, header: string, names: readonly string[], counts: ReadonlyMap<string, Counts>, disconnected: ReadonlySet<string>): string[] {
+export function callCountLines(width: number, theme: Pick<Theme, 'fg'>, header: string, names: readonly string[], counts: ReadonlyMap<string, Counts>, disconnected: ReadonlySet<string>, serviceLinks: ReadonlyMap<string, string> = new Map()): string[] {
   if (width < 1) return [];
   const lines = wrapTextWithAnsi(header, width);
   let row = '';
   for (const name of [...new Set([...names, ...counts.keys()])]) {
     const c = counts.get(name) ?? empty();
     const historic = !names.includes(name) ? ' (previous)' : '';
-    const cell = `${theme.fg('muted', name + historic)} ${theme.fg(c.success ? 'success' : 'muted', `✓${c.success}`)} ${theme.fg(c.failure ? 'error' : 'muted', `✗${c.failure}`)}${c.pending ? ` ${theme.fg('warning', `…${c.pending}`)}` : ''}${disconnected.has(name) ? theme.fg('warning', ' !') : ''}`;
+    const content = `${theme.fg('muted', name + historic)} ${theme.fg(c.success ? 'success' : 'muted', `✓${c.success}`)} ${theme.fg(c.failure ? 'error' : 'muted', `✗${c.failure}`)}${c.pending ? ` ${theme.fg('warning', `…${c.pending}`)}` : ''}${disconnected.has(name) ? theme.fg('warning', ' !') : ''}`;
+    const url = serviceLinks.get(name);
+    const cell = url ? `\x1b]8;;${url}\x07${content}\x1b]8;;\x07` : content;
     const separator = theme.fg('muted', '  │  ');
     if (row && visibleWidth(row + separator + cell) > width) { lines.push(row); row = ''; }
     if (visibleWidth(cell) > width) {
