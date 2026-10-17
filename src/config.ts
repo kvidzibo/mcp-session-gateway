@@ -78,10 +78,11 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     if (value.cwd !== undefined && typeof value.cwd !== 'string') {
       throw new Error(`Server ${name}: cwd must be a string`);
     }
-    const managed = packages.find((pkg) => pkg.name === value.package)?.managed;
+    const pkg = packages.find((pkg) => pkg.name === value.package);
+    const managed = pkg?.managed || pkg?.localUpdate;
     const hasRoot = [value.command, ...args, ...Object.values(env), value.cwd ?? ''].some((text) => String(text).includes('{{packageRoot}}'));
-    if (hasRoot && !managed) throw new Error(`Server ${name}: packageRoot requires a managed package`);
-    if (managed && !hasRoot) throw new Error(`Server ${name}: managed launch must reference {{packageRoot}}`);
+    if (hasRoot && !managed) throw new Error(`Server ${name}: packageRoot requires a managed or localUpdate package`);
+    if (managed && !hasRoot) throw new Error(`Server ${name}: managed/localUpdate launch must reference {{packageRoot}}`);
     const settings = value.settings;
     if (settings !== undefined && (!object(settings) || Object.keys(settings).some((key) => key !== 'tokenEnv') ||
         typeof settings.tokenEnv !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(settings.tokenEnv) ||

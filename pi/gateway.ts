@@ -222,7 +222,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (update && config.autoUpdate) {
       startupProgress(ctx, 'checking for service updates');
       const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
-        ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'),
+        ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Inspect package configuration and logs; incomplete local builds block startup.`), 'warning'),
       (name, stage) => {
         const services = config.services.filter((service) => service.package === name).map((service) => service.name);
         startupProgress(ctx, `${stage === 'updating' ? 'Updating' : 'Checking'} service ${services.join(', ')}`);
@@ -321,7 +321,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
             { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
-              description: autoUpdateError || 'Enter toggles and saves immediately. On authorizes trusted downloads/builds/validation with OS permissions at startup/reload, without confirmations. Already-activated managed packages only.' },
+              description: autoUpdateError || 'Enter toggles and saves. On permits startup/reload updates and trusted builds with OS permissions: activated releases + configured localUpdate Git checkouts. No prompts.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;

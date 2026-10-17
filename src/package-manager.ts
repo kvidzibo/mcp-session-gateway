@@ -6,6 +6,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import semver from 'semver';
 import { z } from 'zod';
 import type { GatewayConfig, ServiceConfig } from './config.js';
+import { localPackageRoot, updateLocalPackage } from './local-packages.js';
 import { git, gitEnvironment, hasGitFilters, inspectPackage, readMetadata, safeGitArgs, type PackageConfig } from './packages.js';
 
 const releaseSchema = z.object({ id: z.uuid(), version: z.string().min(1).max(128) }).strict();
@@ -264,7 +265,7 @@ export class PackageManager {
   }
 }
 
-/** Explicit config opt-in authorizes updates, not first installs or external checkout writes. */
+/** Explicit config opt-in authorizes release updates and declared local checkout writes. */
 export async function updateManagedPackages(config: GatewayConfig, signal: AbortSignal,
   failed: (name: string, error: unknown) => void,
   progress: (name: string, stage: 'checking' | 'updating') => void = () => {}): Promise<{ name: string; from: string; version: string }[]> {
@@ -272,9 +273,14 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
   if (!config.autoUpdate) return updates;
   const manager = new PackageManager(config.packageStore);
   for (const pkg of config.packages) {
-    if (!pkg.managed || !config.services.some((service) => service.package === pkg.name)) continue;
+    if ((!pkg.managed && !pkg.localUpdate) || !config.services.some((service) => service.package === pkg.name)) continue;
     signal.throwIfAborted();
     try {
+      if (pkg.localUpdate) {
+        const updated = await updateLocalPackage(pkg, signal, (stage) => progress(pkg.name, stage));
+        if (updated) updates.push(updated);
+        continue;
+      }
       if (!(await manager.state(pkg, signal)).active) continue;
       progress(pkg.name, 'checking');
       const plan = await manager.plan(pkg, signal);
@@ -290,6 +296,9 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
     } catch (error) {
       signal.throwIfAborted();
       failed(pkg.name, error);
+      // A skipped local check may retain a known-good checkout. Once mutation/build
+      // started, its durable marker blocks all launch paths until a successful retry.
+      if (pkg.localUpdate) await localPackageRoot(pkg, signal);
     }
   }
   return updates;
@@ -298,11 +307,15 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
 /** Called only at gateway startup. Missing activation leaves a managed service stopped. */
 export async function bindManagedService(config: GatewayConfig, service: ServiceConfig): Promise<ServiceConfig | undefined> {
   const pkg = config.packages.find((pkg) => pkg.name === service.package);
-  if (!pkg?.managed) return service;
-  const manager = new PackageManager(config.packageStore);
-  const state = await manager.state(pkg, new AbortController().signal);
-  if (!state.active) return undefined;
-  const root = manager.releasePath(pkg, state.active);
+  if (!pkg?.managed && !pkg?.localUpdate) return service;
+  let root: string;
+  if (pkg.localUpdate) root = await localPackageRoot(pkg, new AbortController().signal);
+  else {
+    const manager = new PackageManager(config.packageStore);
+    const state = await manager.state(pkg, new AbortController().signal);
+    if (!state.active) return undefined;
+    root = manager.releasePath(pkg, state.active);
+  }
   await realpath(root); // Fail closed on a missing release; never launch an unresolved placeholder.
   const bind = (text: string) => text.replaceAll('{{packageRoot}}', root);
   return { ...service, command: bind(service.command), args: service.args.map(bind), cwd: resolve(bind(service.cwd)),

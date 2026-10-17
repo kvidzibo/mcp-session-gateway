@@ -29,17 +29,20 @@ const stepSchema = z.object({
   args: z.array(z.string().max(8192)).max(100).default([]),
   cwd: pathSchema.default('.'),
 }).strict();
+const commandsSchema = z.object({
+  build: z.array(stepSchema).max(20).default([]),
+  validate: z.array(stepSchema).min(1).max(20),
+  timeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
+}).strict();
 const packageSchema = z.object({
   source: sourceSchema,
   installedPath: pathSchema.optional(),
-  managed: z.object({
-    build: z.array(stepSchema).max(20).default([]),
-    validate: z.array(stepSchema).min(1).max(20),
-    timeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
-  }).strict().optional(),
+  managed: commandsSchema.optional(),
+  localUpdate: commandsSchema.extend({ outputs: z.array(pathSchema).max(100).default([]) }).optional(),
 }).strict()
   .refine((value) => value.source.type !== 'local' || value.installedPath === undefined, 'Local sources use source.path, not installedPath')
-  .refine((value) => !value.managed || (value.source.type !== 'local' && !value.installedPath), 'Managed sources must be npm/Git without installedPath');
+  .refine((value) => !value.managed || (value.source.type !== 'local' && !value.installedPath), 'Managed sources must be npm/Git without installedPath')
+  .refine((value) => !value.localUpdate || value.source.type === 'local', 'localUpdate requires a local source');
 export type PackageConfig = z.infer<typeof packageSchema> & { name: string };
 
 export function parsePackages(value: unknown, directory: string): PackageConfig[] {
@@ -140,6 +143,17 @@ async function npmVersion(name: string, tag: string, signal: AbortSignal): Promi
   return result.version;
 }
 
+/** Resolve an explicit local checkout's public main/master upstream without invoking remote helpers. */
+export async function localGitSource(directory: string, signal: AbortSignal): Promise<{ url: string; branch: string }> {
+  const branch = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], directory, signal);
+  if (!['main', 'master'].includes(branch)) throw new Error('Local updates require main/master, not a feature or detached branch');
+  const upstream = (await git(['for-each-ref', '--format=%(upstream:remotename)%00%(upstream:remoteref)', `refs/heads/${branch}`], directory, signal)).split('\0');
+  if (!upstream[0] || upstream[0] === '.' || upstream[1] !== `refs/heads/${branch}`) throw new Error('Local branch must track the same main/master branch on a remote');
+  const remote = await git(['config', '--get', `remote.${upstream[0]}.url`], directory, signal);
+  const url = httpsURL.parse(remote.replace(/^git@github\.com:/, 'https://github.com/').replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/'));
+  return { url, branch };
+}
+
 /** Read declared installation metadata, never infer a running executable's version. */
 export async function inspectPackage(pkg: PackageConfig, checkRemote: boolean, signal: AbortSignal): Promise<PackageStatus> {
   const result: PackageStatus = { name: pkg.name, status: 'Not checked', notes: [] };
@@ -149,7 +163,7 @@ export async function inspectPackage(pkg: PackageConfig, checkRemote: boolean, s
     try {
       signal.throwIfAborted();
       if (!(await stat(directory)).isDirectory()) throw new Error('Not a directory');
-      if (source.type === 'git') {
+      if (source.type === 'git' || pkg.localUpdate) {
         const root = await git(['rev-parse', '--show-toplevel'], directory, signal);
         if (await realpath(root) !== await realpath(directory)) throw new Error('Not a repository root');
         result.installed = await git(['rev-parse', '--verify', 'HEAD'], directory, signal);
@@ -174,21 +188,23 @@ export async function inspectPackage(pkg: PackageConfig, checkRemote: boolean, s
       result.notes.push('Cannot verify installed metadata; check the declared path and package identity.');
     }
   } else result.notes.push('No installedPath declared; installed version is unknown.');
-  if (source.type === 'local') { result.status = 'Externally managed'; return result; }
+  if (source.type === 'local' && !pkg.localUpdate) { result.status = 'Externally managed'; return result; }
+  if (pkg.localUpdate) result.notes.push('Local checkout: in-place fast-forward/build on startup when autoUpdate is enabled.');
   if (!checkRemote) return result;
   try {
     signal.throwIfAborted();
     if (source.type === 'npm') result.available = await npmVersion(source.name, source.tag, signal);
     else {
-      const ref = `refs/heads/${source.branch}`;
-      const output = await git(['ls-remote', '--exit-code', '--heads', '--', source.url, ref], tmpdir(), signal);
+      const remote = source.type === 'git' ? source : await localGitSource(source.path, signal);
+      const ref = `refs/heads/${remote.branch}`;
+      const output = await git(['ls-remote', '--exit-code', '--heads', '--', remote.url, ref], tmpdir(), signal);
       const entry = output.split('\n').map((line) => line.split(/\s+/)).find((line) => line[1] === ref);
       if (!entry || !/^[a-f0-9]{40,64}$/.test(entry[0])) throw new Error('Branch unavailable');
       result.available = entry[0];
     }
     result.checkedAt = new Date().toISOString();
     result.status = !result.installed ? 'Installed version unknown' : result.installed === result.available ? 'Matches source' :
-      source.type === 'git' ? 'Remote differs (ancestry unknown)' : semver.gt(result.available, result.installed) ? 'Update available' :
+      source.type !== 'npm' ? 'Remote differs (ancestry unknown)' : semver.gt(result.available, result.installed) ? 'Update available' :
       semver.eq(result.available, result.installed) ? 'Matches source' : 'Installed newer than target';
   } catch {
     signal.throwIfAborted();

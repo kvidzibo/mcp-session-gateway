@@ -12,7 +12,8 @@ the explicit startup opt-in below.
 ## Git main: managed configuration
 
 Use a Git source tracking `main` (also the default). The manager clones its own
-copies; it never adopts, pulls into, or rewrites an existing development checkout.
+copies; it never adopts an existing development checkout. To update a checkout
+in place instead, explicitly configure [local packages](#local-git-packages).
 
 ```json
 {
@@ -69,7 +70,8 @@ can create a project-local Python environment.
   in the commands; private package registries and credential setup are not supported.
 - `{{packageRoot}}` is replaced in linked service commands, arguments, cwd and env
   at gateway startup. Managed launches must reference it. It is not a shell
-  expression. `packageRoot` placeholders are rejected on external services.
+  expression. Explicit `localUpdate` packages also support it; placeholders are
+  rejected on other external services.
 - Before first activation a managed service stays stopped, so the manager remains
   usable to install it. An invalid state/missing active directory fails closed.
 
@@ -88,29 +90,110 @@ Alternatively set top-level `"autoUpdate": true` in the gateway config (default
 `false`; only a boolean is accepted). Enabling this authorizes the **Pi adapter** to check public sources
 on startup/reload and prepare, build, validate and activate changed versions
 without individual confirmations, before starting any child servers.
-Only already-activated managed packages linked to configured services qualify;
-first installs, unlinked packages and external/local checkouts remain manual.
+Already-activated managed packages and explicitly configured `localUpdate` Git
+checkouts linked to services qualify. First managed installs, unlinked packages
+and other external/local folders remain manual.
 The standalone stdio gateway does not run this adapter policy.
 
 All existing pinned-version, clean-tree, ancestry/downgrade, locking, validation,
-logging and cancellation checks still apply. Failures warn, leave the current
-activation in use and do not automatically retry; other eligible packages continue.
+logging and cancellation checks still apply. Managed-release failures warn and
+leave the current activation in use. Local checks may skip an unchanged checkout,
+but incomplete local builds block startup (see below). No same-startup retries.
 Shutdown cancels and awaits pending update work. No existing processes in other
-sessions are restarted; activation affects their next launch as usual.
+sessions are restarted. Managed activation affects their next launch; **local
+updates mutate shared files immediately**, including dependencies and build output
+that running processes may still read.
 Manual Connection-menu restarts do not check for updates.
 
 During initial startup/reload, the animated startup loader names each service
 being checked. When a newer version is found, it shows **Updating service <name>**
 while preparing, building, validating and activating the package, before connecting
-services. Up-to-date services never show an updating stage.
+services. Local packages also show this stage when rebuilding missing output or
+validating a checkout for the first time. Fully current services show only checking.
 
-After activation, one display-only chat entry says **MCP servers were updated**
+After successful version changes, one display-only chat entry says **MCP servers were updated**
 and lists package IDs and old/new versions. Nothing is posted when up to date,
 disabled, ineligible or entirely failed. The entry never starts a model turn.
 
 Enabling this setting grants ongoing permission to execute the configured trusted
 build/validation code with your OS permissions, not in a sandbox. Enable it only
-for trusted sources and commands; use `false` to retain per-operation approvals.
+for trusted sources and commands. `false` disables startup writes; managed-release
+operations remain separately confirmed. Local updates have no manual release UI.
+
+## Local Git packages
+
+Declare the existing repository root, opt it into `localUpdate`, and link its
+service explicitly. No repository is inferred from an executable, cwd or argument.
+A plain local source remains read-only inventory.
+
+```json
+{
+  "autoUpdate": true,
+  "packages": {
+    "example": {
+      "source": { "type": "local", "path": "/absolute/path/to/example-mcp" },
+      "localUpdate": {
+        "build": [
+          { "command": "npm", "args": ["ci"] },
+          { "command": "npm", "args": ["run", "build"] }
+        ],
+        "validate": [{ "command": "npm", "args": ["test"] }],
+        "outputs": ["dist/server.js"],
+        "timeoutMs": 300000
+      }
+    }
+  },
+  "mcpServers": {
+    "example": {
+      "package": "example",
+      "command": "node",
+      "args": ["{{packageRoot}}/dist/server.js"],
+      "cwd": "{{packageRoot}}"
+    }
+  }
+}
+```
+
+- `source.path` resolves relative to the gateway config and must be a Git root.
+  Use one package per checkout; multiple services can link to that package.
+  `localUpdate` cannot accompany `managed` or `installedPath`.
+- Updates require a clean attached **main/master** branch tracking the same branch
+  on a public remote. The updater fetches the exact upstream ref and fast-forwards
+  to its pinned commit. It never resets, stashes, rebases, force-pulls or changes
+  branches. Dirty, ahead/diverged, feature/detached branches, executable Git
+  filters and submodules are refused; nothing is automatically repaired.
+- HTTPS remotes are supported. GitHub `git@github.com:owner/repo.git` and
+  `ssh://git@github.com/owner/repo.git` are checked over public HTTPS, without SSH
+  or credentials. Private repositories and other SSH remotes are unsupported.
+- Build and validation commands are explicit, not inferred from package scripts.
+  Include dependency setup (`npm ci`, `uv sync --locked`, etc.) when needed. All
+  configured steps run after a pull, on the first enabled startup, when commands
+  change, or when a declared `outputs` path is missing. Otherwise builds are
+  reused. `outputs` is optional; include dependency directories such as
+  `node_modules` or `.venv` if their absence should also trigger setup. No content
+  fingerprint of output files is taken. Build outputs must be Git-ignored. Steps and outputs must stay inside the root.
+- `validate` requires at least one command; `build` may be empty. The same minimal
+  environment, private HOME/cache, per-command timeouts and process-group cleanup
+  as managed builds apply. Service env/API credentials are not passed to builds.
+- `{{packageRoot}}` binds to the checkout, and must appear in its service launch.
+  Successful local changes appear in the normal startup-update summary. An
+  initial build or output-only rebuild does not claim a version update.
+- The Git directory contains `mcp-gateway-local.json` (successful HEAD/command
+  receipt or pending-build marker) and `mcp-gateway-local.log` (latest bounded
+  operation output). A marker is written **before** modifying files. Build or
+  validation failure does not roll back developer files: startup stops rather
+  than launching stale output. Earlier package updates may already have applied;
+  there is no cross-package rollback. A later auto-update startup retries the build.
+  Manual/standalone launches also reject pending builds, changed receipts or
+  missing declared outputs, even with auto-update disabled. Fix the failure and
+  reload with auto-update enabled; inspect the log rather than deleting receipts.
+- A common-Git-directory `mcp-gateway-local.lock` serializes sessions and worktrees.
+  It uses the same durable owner/process-group journal and stale-lock recovery
+  requirements as managed packages below. Never delete a live lock.
+- **Unlike managed releases, these are in-place writes.** Other running sessions
+  are not restarted, but may observe changed files or dependencies. Finish their
+  jobs before enabling this for a shared development checkout. There is no local
+  activation/rollback operation in Manage releases.
 
 ## Workflow
 
@@ -166,7 +249,7 @@ not the prefix. Validation must suit the published package (development/test fil
 may not be published). Lower npm targets are refused for preparation; switching
 back uses the separately approved previous-release rollback action.
 
-Without `managed`, existing read-only inventory remains unchanged:
+Without `managed` or `localUpdate`, existing read-only inventory remains unchanged:
 
 ```json
 {
@@ -184,7 +267,8 @@ Without `managed`, existing read-only inventory remains unchanged:
 Existing npm/Git installations may declare `installedPath`; omission means the
 installed version is unknown, not necessarily absent. Local sources use
 `source.path`. No PATH/global-npm scan, `--version` execution or service-settings
-inspection occurs. Unlinked services/local folders remain externally managed.
+inspection occurs. Local folders without `localUpdate` remain externally managed;
+unlinked local declarations are never updated.
 A `package` reference links inventory but does not prove an external command
 launches that installation. Several services may link to one package.
 
@@ -197,7 +281,8 @@ Edit configuration explicitly and reload to change that wiring.
 
 ## Checks and safety limits
 
-- Public npm registry only; public HTTPS Git branch sources only. No SSH, private
+- Public npm registry only; public HTTPS Git branch sources only (local GitHub SSH
+  remotes are normalized to HTTPS as above). No authenticated SSH, private
   registries, embedded URL credentials, tags or commit-pin source declarations.
   URLs reject whitespace, backslashes and control characters; Git receives the
   canonical validated URL. No service UI protocol is needed for package management.
@@ -217,7 +302,7 @@ Edit configuration explicitly and reload to change that wiring.
 - Versions describe declared installations, not running processes. npm distinguishes
   newer/older targets. Git inventory reports differing hashes as **ancestry unknown**;
   preparation performs the actual ancestry check in the new clone.
-- Managed builds currently require **POSIX** for process-group termination.
+- Managed and local builds currently require **POSIX** for process-group termination.
   Escape/shutdown cancels pending work, terminates the command group, and waits
   for cleanup before finishing, including when Pi shuts down. Detached/unmanaged descendants are unsupported;
   trusted scripts must not daemonize or detach workers.
@@ -265,7 +350,10 @@ real temporary Git repositories and MCP services, npm subprocess wiring, prepare
 activate/rollback isolation, stale revisions, dirty/divergent checkouts, validation
 failure/log retention, lock contention, durable process-group receipts/gated
 execution, process-group cancellation and operator
-confirmation/decline. It does not install into personal directories.
+confirmation/decline. A focused local-checkout case covers fast-forward/build
+reuse, missing outputs, explicit eligibility, dirty/feature/filter refusals,
+locking, validation failure recovery, stale-launch guards and cancellation.
+Tests do not install into personal directories.
 
 Visual checks use Xvfb, private D-Bus and temporary Pi HOME/profile/project/store.
 Never use production task databases/workers as test fixtures.
