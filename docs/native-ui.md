@@ -18,6 +18,13 @@ use `\n` for line breaks), preserving tabs and boundary whitespace exactly. Foot
 status area. Footer actions use the same controls and confirmations as the app menu;
 no Pinote-specific code is required. Clicks never start a model turn.
 
+<a id="terminal-clicks"></a>
+
+The gateway's own ` MCP N services` footer segment uses this same click transport
+to open Services directly, or recovery when disconnected. Its count describes the
+configuration loaded at the last start/restart, not service health. This segment
+remains available after a gateway disconnect; session shutdown clears its links.
+
 For terminal clicks, append [`pi/kitty/open-actions.conf`](../pi/kitty/open-actions.conf)
 to Kitty's existing open-actions file, replacing its absolute helper path. Reload
 Kitty with Ctrl+Shift+F5. Regular mode uses normal link clicks; fullscreen uses
