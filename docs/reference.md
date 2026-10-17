@@ -82,9 +82,11 @@ dependencies changed, finish gateway jobs, then retry `/reload`. Remove a crash-
 **`/gateway` → Display: Minimal / Full** saves raw configuration and applies immediately; other
 sessions follow on reload or their next toggle.
 
-Minimal shows ` MCP 3 services`: the last start/restart's configured count, **not health**. `?`
-means configuration unavailable; `· !N` counts observed child disconnects; `· off` means closed.
-Full adds a wrapping panel below the editor, preserving Pi's footer/service actions:
+Minimal shows ` MCP 3 services`: the last start/restart's count excluding disabled/unactivated
+services, **not health**. `?` means configuration unavailable; `· !N` counts observed child
+disconnects; `· off` means closed. Full also omits disabled/unactivated service counters without
+erasing saved usage or changing the session total. If startup status is unavailable, only explicit
+configuration disables are excluded. Full adds a wrapping panel below the editor:
 
 ```text
  MCP 3 services · 31 tool calls
@@ -118,7 +120,7 @@ not animate. [Package progress/concurrency](packages.md#automatic-startup-update
 
 New TUI sessions print display-only **Startup snapshot** cards: observed connection state, exposed
 tool count, and names wrapping beneath each service. Call via `service__tool` through
-`gateway_call`. Unactivated managed services show `stopped · package not activated`.
+`gateway_call`. Disabled and unactivated managed services show `disabled`.
 
 `experimental["gateway-status-v1"] = {}` advertises private read-only `gateway/status`: waits for
 successful startup, rejects while closing, returns:
@@ -127,13 +129,14 @@ successful startup, rejects while closing, returns:
 {services: [{name, state, tools, toolNames}]}
 ```
 
-- `state`: `connected`, `stopped` (unactivated managed package), or `disconnected`.
+- `state`: `connected`, `stopped` (disabled or unactivated managed package), or `disconnected`.
 - `tools`: model-visible tool count, excluding gateway-owned/app-only tools.
 - `toolNames`: original unprefixed names; older saved snapshots still render counts.
 
 These are in-memory observations, not health checks, model tools, or a live dashboard. The adapter
-reads once per new session, saving config-scoped entries outside model context. Cards remain
-historical after restart; reload/resume/fork append none; matching saved entries prevent duplicates.
+reads at startup/restart for footer visibility, saving config-scoped entries outside model context
+only for new sessions. Cards remain historical after restart; reload/resume/fork append none;
+matching saved entries prevent duplicates.
 Footer indicates connection; `/pi-services` opens current navigation. Failed/missing reads show
 **Startup status unavailable** without closing working connections.
 

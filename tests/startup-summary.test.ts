@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -15,12 +15,14 @@ test('startup snapshot reports observed connections including zero-tool and stop
   let entries: any[] = [];
   let snapshots = 0;
   const widgets = new Map<string, any>();
+  const statuses = new Map<string, string | undefined>();
+  const footer = () => statuses.get('gateway')?.replace(/\x1b\]8;;[^\x07]*\x07/g, '');
   const progressFrames = new Set<string>();
   let renders = 0;
   const theme: any = { fg: (_: string, text: string) => text };
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
     sessionManager: { getBranch: () => entries, getSessionId: () => 'startup-test' },
-    ui: { theme, setStatus() {}, notify() {},
+    ui: { theme, setStatus: (key: string, value: string | undefined) => statuses.set(key, value), notify() {},
       setWidget(key: string, factory: any) {
         widgets.get(key)?.dispose?.(); widgets.delete(key);
         if (typeof factory === 'function') {
@@ -64,10 +66,12 @@ test('startup snapshot reports observed connections including zero-tool and stop
         demo: { command: process.execPath, args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname] },
         zero: { command: process.execPath, args: ['--input-type=module', '-e', zero], cwd: new URL('../', import.meta.url).pathname },
         pending: { package: 'pending', command: process.execPath, args: ['{{packageRoot}}/server.mjs'] },
+        disabled: { enabled: false, command: '/not-launched' },
       },
     }));
     await start('startup');
     assert.equal(snapshots, 1);
+    assert.equal(footer(), ' MCP 2 services', 'Disabled and unactivated services are excluded from the footer count');
     assert.equal(widgets.size, 0, 'Startup loader is removed after success');
     assert.ok(progressFrames.size > 1, 'Loader renders changing animation frames/stages');
     assert.ok([...progressFrames].some((text) => text.includes('Starting MCP services')));
@@ -79,6 +83,7 @@ test('startup snapshot reports observed connections including zero-tool and stop
       { name: 'demo', state: 'connected', tools: 1, toolNames: ['increment'] },
       { name: 'zero', state: 'connected', tools: 0, toolNames: [] },
       { name: 'pending', state: 'stopped', tools: 0, toolNames: [] },
+      { name: 'disabled', state: 'stopped', tools: 0, toolNames: [] },
     ]);
     const renderer = renderers.get('gateway-startup')!(entry, {}, theme);
     for (const width of [8, 28, 48, 100]) {
@@ -86,9 +91,11 @@ test('startup snapshot reports observed connections including zero-tool and stop
       assert.ok(lines.every((line) => visibleWidth(line) <= width), `Overflows width ${width}`);
     }
     const text = renderer.render(100).join('\n');
-    assert.match(text, /Startup snapshot · 2\/3 connected · 1 service tool/);
+    assert.match(text, /Startup snapshot · 2\/4 connected · 1 service tool/);
     assert.match(text, /zero\s+connected · 0 tools/);
-    assert.match(text, /pending\s+stopped · package not activated/);
+    assert.match(text, /pending\s+disabled\s*│/);
+    assert.match(text, /disabled\s+disabled\s*│/);
+    assert.doesNotMatch(text, /stopped|package not activated/);
     assert.match(text, /increment/);
     assert.doesNotMatch(text, /app_only|gateway__identity/);
     assert.match(startupSummary({ services: [{ name: 'legacy', state: 'connected', tools: 2 }] }, theme).render(100).join('\n'), /legacy\s+connected · 2 tools/);
@@ -99,9 +106,29 @@ test('startup snapshot reports observed connections including zero-tool and stop
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
       assert.ok(lines.every((line) => !/[\x1b\n]/.test(line.replaceAll('\x1b[0m', ''))), 'Tool names cannot inject terminal controls');
     }
+    entries.push({ type: 'custom', customType: 'gateway-call-counts', data: {
+      session: 'startup-test', scope: config, counts: { pending: { success: 1, failure: 0, pending: 0 } },
+    } });
     for (const reason of ['reload', 'resume', 'fork', 'startup']) {
-      await stop(); await start(reason);
+      await stop();
+      const saved = JSON.parse(await readFile(config, 'utf8'));
+      saved.display = reason === 'reload' ? 'full' : 'minimal';
+      await writeFile(config, JSON.stringify(saved));
+      await start(reason);
       assert.equal(snapshots, 1, `No duplicate on ${reason}`);
+      if (reason === 'reload') {
+        assert.equal(footer(), undefined);
+        for (const width of [28, 100]) {
+          const lines: string[] = widgets.get('gateway-call-counts').render(width);
+          assert.ok(lines.every((line) => visibleWidth(line) <= width));
+          const rendered = lines.join('\n').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+          assert.match(rendered, / MCP 2 services · 1 tool\s+calls/);
+          assert.match(rendered, /demo/);
+          assert.match(rendered, /zero/);
+          assert.doesNotMatch(rendered, /pending|disabled|previous/);
+        }
+        assert.equal(entries[1].data.counts.pending.success, 1, 'Hiding a service must not erase saved usage');
+      } else assert.equal(footer(), ' MCP 2 services', `Hidden services stay excluded on ${reason}`);
     }
     await stop(); entries = [];
     await start('new');

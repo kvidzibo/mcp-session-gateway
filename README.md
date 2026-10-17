@@ -132,9 +132,10 @@ Use arrows/Enter to navigate; viewers support Arrow/Page keys and **r** refresh 
 is local). Menus remember selection, explain unavailable features and have no inactivity deadline;
 shutdown cancels dialogs.
 
-The footer's ` MCP 3 services` is the last configured count, **not health**. Click it to open
-Services/recovery; Kitty needs the [click handler](docs/native-ui.md#terminal-clicks). **Display:
-Minimal / Full** saves immediately; Full adds clickable service counters. See [counter
+The footer's ` MCP 3 services` excludes disabled/unactivated services at the last startup,
+**not a health check**. Click it to open Services/recovery; Kitty needs the
+[click handler](docs/native-ui.md#terminal-clicks). **Display: Minimal / Full** saves immediately;
+Full adds clickable service counters. See [counter
 semantics](docs/reference.md#display-and-call-counts) and the historical [startup
 snapshot](docs/reference.md#startup-snapshot).
 
