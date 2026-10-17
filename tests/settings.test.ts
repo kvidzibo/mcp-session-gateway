@@ -78,7 +78,7 @@ test('operator settings stay private, route by service, and require confirmed sc
     let confirmations = 0;
     const notices: string[] = [];
     const ctx = { cwd: root, hasUI: true, mode: 'tui', ui: {
-      theme: { fg: (_color: string, text: string) => text }, setStatus() {},
+      theme: { fg: (_color: string, text: string) => text }, setStatus() {}, setWidget() {},
       select: async (title: string, choices: string[]) => {
         switch (step++) {
           case 1: return choices.find((s) => s.includes('worker/model'));

@@ -163,8 +163,14 @@ or healthy-service count**. Observed child disconnects add `· !N`; a closed gat
 shows `· off`. Before configuration is available the count is `?`. No status
 polling is added.
 
+During startup/reload, an animated indicator above the editor shows the current
+stage: configuration, optional package updates, build check, service connection,
+tool discovery, apps and live panels. It clears on success, failure or shutdown;
+noninteractive sessions do not animate.
+
 New sessions also print a compact, display-only **startup snapshot** listing each
-service's observed connection state and exposed tool count. Unactivated managed
+service's observed connection state, exposed tool count and tool names. Names wrap
+beneath their service; call them as `service__tool` through `gateway_call`. Unactivated managed
 services show `stopped · package not activated`. The snapshot excludes gateway-owned
 tools and is not a health check or live dashboard. It is saved outside model
 context; reload/resume/fork do not append duplicate cards. Status-read failures show

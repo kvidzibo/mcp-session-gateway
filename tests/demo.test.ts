@@ -159,7 +159,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     const ctx = {
       cwd: root, mode: 'tui', hasUI: true,
       ui: {
-        theme: { fg: (_color: string, text: string) => text }, setStatus() {},
+        theme: { fg: (_color: string, text: string) => text }, setStatus() {}, setWidget() {},
         select: async (_title: string, _options: string[], opts: { signal: AbortSignal }) => {
           if (!waitForCancel) return choice;
           promptReady?.();

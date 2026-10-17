@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { Type } from 'typebox';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Text } from '@earendil-works/pi-tui';
+import { Loader, Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
@@ -47,6 +47,22 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let footerBridge: FooterActions | undefined;
   let footerCount: number | undefined;
   let footerState: 'starting' | 'up' | 'off' = 'starting';
+  let startupLoader: Loader | undefined;
+  function startupProgress(ctx: ExtensionContext, stage?: string): void {
+    if (ctx.mode !== 'tui' || !ctx.hasUI) return;
+    if (!stage) {
+      startupLoader?.stop(); startupLoader = undefined;
+      ctx.ui.setWidget('gateway-startup-progress', undefined);
+    } else if (startupLoader) {
+      startupLoader.setMessage(`Starting MCP services · ${stage}`);
+    } else {
+      ctx.ui.setWidget('gateway-startup-progress', (tui, theme) => {
+        const loader = new Loader(tui, (text) => theme.fg('accent', text), (text) => theme.fg('muted', text), `Starting MCP services · ${stage}`);
+        startupLoader = loader;
+        return Object.assign(loader, { dispose: () => loader.stop() });
+      });
+    }
+  }
   const disconnectedServices = new Set<string>();
   function renderFooter(state = footerState): void {
     footerState = state;
@@ -118,6 +134,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
+    if (footerContext) startupProgress(footerContext);
     renderFooter('off');
     configurationLoaded = false;
     liveJobs?.stop();
@@ -179,6 +196,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   }
 
   async function start(ctx: ExtensionContext, preserveMenu = false, reason?: string, update = false): Promise<void> {
+    try { await startGateway(ctx, preserveMenu, reason, update); }
+    finally { startupProgress(ctx); }
+  }
+  async function startGateway(ctx: ExtensionContext, preserveMenu: boolean, reason: string | undefined, update: boolean): Promise<void> {
     if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
@@ -189,6 +210,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     configurationLoaded = false;
+    startupProgress(ctx, 'reading configuration');
     const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
@@ -197,6 +219,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
     if (update && config.autoUpdate) {
+      startupProgress(ctx, 'updating managed packages');
       const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
         ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'));
       startupWork = work;
@@ -208,6 +231,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         });
       } finally { if (startupWork === work) startupWork = undefined; }
     }
+    startupProgress(ctx, 'checking gateway build');
     const build = ensureGatewayBuild(fileURLToPath(new URL('../', import.meta.url)), lifetime.signal);
     startupBuild = build;
     try { await build; }
@@ -231,14 +255,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) handleElicitation(current, transport, (params, signal) => approve(params, AbortSignal.any([signal, lifetime.signal]), ctx));
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});
+    startupProgress(ctx, 'connecting services');
     try {
       await current.connect(transport, { timeout, signal: lifetime.signal });
       const inventory = current.getServerCapabilities()?.experimental?.['gateway-services-v1'] as { names?: unknown } | undefined;
       launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
       connected = true;
+      startupProgress(ctx, 'discovering tools');
       await tools(lifetime.signal); // Wait for child startup before declaring success.
+      startupProgress(ctx, 'loading service apps');
       await native.start(ctx, resolve(configPath), reason);
       if (ctx.mode === 'tui' && ctx.hasUI) {
+        startupProgress(ctx, 'loading live panels');
         liveJobs = new LiveJobs(current, ctx, timeout);
         await liveJobs.start();
       }
@@ -253,6 +281,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.on('session_shutdown', async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
     shuttingDown = true;
+    if (footerContext) startupProgress(footerContext);
     const bridge = footerBridge; footerBridge = undefined;
     footerContext?.ui.setStatus('gateway', undefined); footerContext = undefined;
     try { await close(); } finally { await bridge?.stop(); }

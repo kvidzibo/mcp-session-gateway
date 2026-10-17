@@ -146,7 +146,8 @@ test('subscriptions route by service and live Pi widget follows jobs without tra
     let rows = 24;
     const ctx = { cwd: dir, hasUI: true, mode: 'tui', ui: {
       theme, setStatus() {},
-      setWidget: (_key: string, factory: Function | undefined) => {
+      setWidget: (key: string, factory: Function | undefined) => {
+        if (key === 'gateway-startup-progress') return; // Observe only the live-jobs widget.
         if (factory) { mounts++; widget = factory({ terminal: { get rows() { return rows; } }, requestRender() {} }, theme); }
         else widget = undefined;
       },

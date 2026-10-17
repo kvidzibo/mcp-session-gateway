@@ -72,9 +72,12 @@ export class Gateway {
       if (!this.startupComplete || this.closing) throw new McpError(ErrorCode.InvalidRequest, 'Gateway startup did not complete or is closing');
       return { services: this.config.services.map(({ name }) => {
         const service = this.services.find((item) => item.config.name === name);
+        const toolNames = service?.connected
+          ? [...service.tools.values()].filter((tool) => modelVisible(tool.definition)).map((tool) => tool.originalName)
+          : [];
         return {
           name, state: service?.connected ? 'connected' : service ? 'disconnected' : 'stopped',
-          tools: service?.connected ? [...service.tools.values()].filter((tool) => modelVisible(tool.definition)).length : 0,
+          tools: toolNames.length, toolNames,
         };
       }) };
     }));
