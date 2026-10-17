@@ -73,7 +73,8 @@ itself never installs dependencies or updates sources; the separate [gateway sta
 policy](packages.md#gateway-self-updates) can do both. Standalone/built-in launches need manual builds. Concurrent
 launches, dependency imports and automatic updates share a **five-minute lock-wait limit**;
 builds also have a five-minute deadline. The dependency-light adapter loader waits before importing
-packages that an update may be replacing. Shutdown cancels compilation; already-running gateways
+packages that an update may be replacing; the launch lock stays held through the child handshake.
+Readiness and loaded-installation identity are rechecked under that lock. Shutdown cancels compilation; already-running gateways
 are never rebuilt/restarted.
 
 Failure leaves the gateway disconnected, not stale. Finish gateway jobs and wait for all updates

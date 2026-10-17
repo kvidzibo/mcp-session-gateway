@@ -1,27 +1,57 @@
-import { mkdir, open, readFile, realpath, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
 /** Resolve Git's shared directory without importing dependencies that npm may be replacing. */
-async function lockPath(root: string): Promise<string> {
+async function gitDirectories(root: string): Promise<{ gitDir: string; common: string } | undefined> {
   let gitDir = join(root, '.git');
   try {
     const value = await readFile(gitDir, 'utf8');
     if (!value.startsWith('gitdir: ')) throw new Error(`Invalid Git directory file: ${gitDir}`);
     gitDir = resolve(root, value.slice(8).trim());
   } catch (error) {
-    if (missing(error)) {
-      await mkdir(join(root, 'dist'), { recursive: true });
-      return join(root, 'dist/.gateway-build.lock'); // Archive, not a checkout.
-    }
+    if (missing(error)) return; // Archive, not a checkout.
     if ((error as NodeJS.ErrnoException).code !== 'EISDIR') throw error;
   }
   let common = gitDir;
   try { common = resolve(gitDir, (await readFile(join(gitDir, 'commondir'), 'utf8')).trim()); }
   catch (error) { if (!missing(error)) throw error; }
-  return join(await realpath(common), 'mcp-gateway-build.lock');
+  return { gitDir, common: await realpath(common) };
+}
+
+async function lockPath(root: string): Promise<string> {
+  const git = await gitDirectories(root);
+  if (git) return join(git.common, 'mcp-gateway-build.lock');
+  await mkdir(join(root, 'dist'), { recursive: true });
+  return join(root, 'dist/.gateway-build.lock');
+}
+
+/** Snapshot adapter sources, dependency metadata and the update receipt while holding the mutex. */
+export async function checkoutIdentity(root: string): Promise<string> {
+  const hash = createHash('sha256');
+  const file = async (path: string) => {
+    hash.update(JSON.stringify(path));
+    try { hash.update(await readFile(path)); }
+    catch (error) { if (!missing(error)) throw error; hash.update('missing'); }
+    hash.update('\0');
+  };
+  const tree = async (path: string): Promise<void> => {
+    let entries;
+    try { entries = await readdir(path, { withFileTypes: true }); }
+    catch (error) { if (missing(error)) return; throw error; }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.isDirectory()) await tree(join(path, entry.name));
+      else if (entry.isFile()) await file(join(path, entry.name));
+    }
+  };
+  for (const path of ['src', 'pi']) await tree(join(root, path));
+  for (const path of ['package.json', 'package-lock.json', 'node_modules/.package-lock.json']) await file(join(root, path));
+  const git = await gitDirectories(root);
+  if (git) await file(join(git.gitDir, 'mcp-gateway-local.json'));
+  return hash.digest('hex');
 }
 
 /** Serialize installs, dependency imports and builds. Never remove stale locks automatically. */

@@ -32,7 +32,7 @@ import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
-export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGatewayUpdate): void {
+export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGatewayUpdate, identity?: string): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   let client: Client | undefined;
   let transport: StdioClientTransport | undefined;
@@ -300,11 +300,18 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       } finally { if (startupWork === work) startupWork = undefined; }
     }
     startupProgress(ctx, 'checking gateway build');
-    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal);
+    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal, () => connectGateway(ctx, configPath, reason), identity);
     startupBuild = build;
     try { await build; }
-    catch (error) { renderFooter('off'); throw error; }
-    finally { if (startupBuild === build) startupBuild = undefined; }
+    catch (error) {
+      if (startupBuild === build) startupBuild = undefined;
+      renderFooter('off');
+      await close(preserveMenu);
+      throw error;
+    } finally { if (startupBuild === build) startupBuild = undefined; }
+  }
+
+  async function connectGateway(ctx: ExtensionContext, configPath: string, reason?: string): Promise<void> {
     if (shuttingDown || lifetime.signal.aborted) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
@@ -329,32 +336,30 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     // Gateway already owns a diagnostic file. Drain its stderr without feeding it to the model.
     transport.stderr?.on('data', () => {});
     startupProgress(ctx, 'connecting services');
-    try {
-      await current.connect(transport, { timeout, signal: lifetime.signal });
-      const inventory = current.getServerCapabilities()?.experimental?.['gateway-services-v1'] as { names?: unknown } | undefined;
-      launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
-      connected = true;
-      startupProgress(ctx, 'discovering tools');
-      await tools(lifetime.signal); // Wait for child startup before declaring success.
-      if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
-        try {
-          startupStatus = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal: lifetime.signal, timeout });
-          for (const service of startupStatus.services) {
-            if (service.state === 'stopped') disabledServices.add(service.name);
-            if (service.state === 'disconnected') disconnectedServices.add(service.name);
-          }
-          footerCount = configuredServices.filter((name) => !disabledServices.has(name)).length;
-        } catch { /* Status is display-only; keep working connections on read failure. */ }
-      }
-      startupProgress(ctx, 'loading service apps');
-      await native.start(ctx, resolve(configPath), reason);
-      if (ctx.mode === 'tui' && ctx.hasUI) {
-        startupProgress(ctx, 'loading live panels');
-        liveJobs = new LiveJobs(current, ctx, timeout);
-        await liveJobs.start();
-      }
-      if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
-    } catch (error) { await close(preserveMenu); throw error; }
+    await current.connect(transport, { timeout, signal: lifetime.signal });
+    const inventory = current.getServerCapabilities()?.experimental?.['gateway-services-v1'] as { names?: unknown } | undefined;
+    launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
+    connected = true;
+    startupProgress(ctx, 'discovering tools');
+    await tools(lifetime.signal); // Wait for child startup before declaring success.
+    if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
+      try {
+        startupStatus = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal: lifetime.signal, timeout });
+        for (const service of startupStatus.services) {
+          if (service.state === 'stopped') disabledServices.add(service.name);
+          if (service.state === 'disconnected') disconnectedServices.add(service.name);
+        }
+        footerCount = configuredServices.filter((name) => !disabledServices.has(name)).length;
+      } catch { /* Status is display-only; keep working connections on read failure. */ }
+    }
+    startupProgress(ctx, 'loading service apps');
+    await native.start(ctx, resolve(configPath), reason);
+    if (ctx.mode === 'tui' && ctx.hasUI) {
+      startupProgress(ctx, 'loading live panels');
+      liveJobs = new LiveJobs(current, ctx, timeout);
+      await liveJobs.start();
+    }
+    if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
   }
   pi.on('session_start', async (event, ctx) => {
     shuttingDown = false;

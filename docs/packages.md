@@ -125,7 +125,9 @@ With Auto update on, startup/reload uses the local-update safeguards below: clea
 fast-forward only, serialized updates, and no hooks, executable filters, submodules or credentials.
 Shared/out-of-checkout `node_modules` or `dist` directories are refused before commands run.
 Dependency imports, launch builds and local updates use the same Git-common-directory build lock,
-so automatic dependency installation cannot overlap adapter loading or compilation.
+so automatic dependency installation cannot overlap adapter loading, compilation or the child
+startup handshake. Each process remembers its loaded installation; a changed source/dependency
+snapshot requires a fresh Pi, including after another session updates it. Reload cannot reset this guard.
 It runs `npm ci --include=dev`, `npm run build`, then `npm run check`. The first enabled launch also
 builds/validates the current revision; later unchanged launches reuse that receipt. This updates
 the installation shared by configurations/sessions using this checkout—not just one config.

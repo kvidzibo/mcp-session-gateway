@@ -11,6 +11,10 @@ export function gatewayNeedsRestart(root: string): boolean {
   return processState[restartKey]?.has(resolve(root)) ?? false;
 }
 
+export function requireGatewayRestart(root: string): void {
+  (processState[restartKey] ??= new Set()).add(resolve(root));
+}
+
 function gatewayPackage(root: string): PackageConfig {
   const step = (...args: string[]) => ({ command: 'npm', args, cwd: '.' });
   return {
@@ -68,7 +72,7 @@ export async function checkGatewayUpdate(root: string, autoUpdate: boolean, sign
     try {
       if (autoUpdate) {
         const updated = await updateLocalPackage(pkg, signal, (stage) => {
-          if (stage === 'updating') (processState[restartKey] ??= new Set()).add(resolve(root));
+          if (stage === 'updating') requireGatewayRestart(root);
           progress(stage);
         });
         if (updated) notify(`Gateway updated to ${updated.version.slice(0, 12)}.`, 'info');

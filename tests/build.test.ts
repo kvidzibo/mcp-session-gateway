@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ensureGatewayBuild } from '../pi/build.js';
-import { withCheckoutLock } from '../src/checkout-lock.js';
+import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 
 test('launch builds missing/stale output once, detects content changes, and never accepts a failed build', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-build-'));
@@ -63,6 +63,26 @@ test('launch builds missing/stale output once, detects content changes, and neve
       assert.ok(pending);
     });
     await pending;
+    assert.equal(await count(), 8);
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const handshake = new Promise<void>((resolve) => { release = resolve; });
+    const launching = ensureGatewayBuild(root, signal, async () => { enter(); await handshake; });
+    await entered;
+    let installing = false;
+    const installer = withCheckoutLock(root, signal, async () => { installing = true; });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(installing, false, 'Dependency replacement must wait for the child handshake');
+    } finally { release(); await Promise.all([launching, installer]); }
+    assert.equal(installing, true);
+
+    const identity = await checkoutIdentity(root);
+    await withCheckoutLock(root, signal, async () => {
+      pending = ensureGatewayBuild(root, signal, async () => assert.fail('An outdated adapter launched'), identity);
+      await writeFile(source, 'four');
+    });
+    await assert.rejects(pending!, /Restart Pi/, 'A successful queued update requires a fresh adapter process');
     assert.equal(await count(), 8);
     await withCheckoutLock(root, signal, async () => {
       pending = build();

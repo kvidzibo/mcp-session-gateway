@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { withCheckoutLock } from '../src/checkout-lock.js';
+import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 import { runPackageCommand } from '../src/package-manager.js';
-import { assertGatewayReady } from './self-update.js';
+import { assertGatewayReady, requireGatewayRestart } from './self-update.js';
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
@@ -28,41 +28,53 @@ async function fingerprint(root: string, paths: string[]): Promise<string> {
 }
 
 /** Check/build only at launch, never at extension load or while a gateway is running. */
-export async function ensureGatewayBuild(root: string, signal: AbortSignal): Promise<void> {
+export async function ensureGatewayBuild(root: string, signal: AbortSignal,
+  launch?: () => Promise<void>, identity?: string): Promise<void> {
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(300_000)]);
   bounded.throwIfAborted();
   await mkdir(join(root, 'dist'), { recursive: true });
-  const stampPath = join(root, 'dist/.gateway-build.json');
   await withCheckoutLock(root, bounded, async (recordGroup) => {
     await assertGatewayReady(root, bounded);
-    const inputs = [...await sources(root, 'src'), ...await sources(root, 'examples'),
-      'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json'];
-    const outputs = inputs.filter((path) => path.endsWith('.ts')).flatMap((path) => {
-      const base = path.startsWith('src/') ? path.slice(4, -3) : path.slice(0, -3);
-      return [`dist/${base}.js`, `dist/${base}.d.ts`];
-    });
-    const input = await fingerprint(root, inputs);
-    try {
-      const stamp = JSON.parse(await readFile(stampPath, 'utf8'));
-      if (stamp?.input === input && stamp.output === await fingerprint(root, outputs)) {
-        bounded.throwIfAborted();
-        return;
-      }
-    } catch (error) {
-      if (!missing(error) && !(error instanceof SyntaxError)) throw error;
+    if (identity !== undefined && identity !== await checkoutIdentity(root)) {
+      requireGatewayRestart(root);
+      throw new Error('Gateway installation changed after adapter loading. Restart Pi to load matching sources and dependencies.');
     }
-    // Failed/aborted compilers can leave partial output. Never accept it next time.
-    await rm(stampPath, { force: true });
-    let output = '';
-    try {
-      await runPackageCommand('npm', ['run', 'build'], root, process.env, bounded, 300_000,
-        (chunk) => { output = (output + chunk).slice(-8000); }, (pid) => recordGroup(pid, 'npm', root));
-      bounded.throwIfAborted();
-      const currentInputs = [...await sources(root, 'src'), ...await sources(root, 'examples'), ...inputs.filter((path) => !path.endsWith('.ts'))];
-      if (await fingerprint(root, currentInputs) !== input) throw new Error('Build inputs changed during compilation; retry startup');
-      await writeFile(stampPath, JSON.stringify({ input, output: await fingerprint(root, outputs) }), { mode: 0o600 });
-    } catch (error) {
-      throw new Error(`Gateway build failed; no gateway was launched. Run npm ci && npm run build in ${root} if dependencies are missing.\n${String(error)}\n${output}`);
-    }
+    await buildGateway(root, bounded, recordGroup);
+    bounded.throwIfAborted();
+    await launch?.();
   });
+}
+
+async function buildGateway(root: string, bounded: AbortSignal,
+  recordGroup: (pid: number, command: string, cwd: string) => Promise<void>): Promise<void> {
+  const stampPath = join(root, 'dist/.gateway-build.json');
+  const inputs = [...await sources(root, 'src'), ...await sources(root, 'examples'),
+    'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json'];
+  const outputs = inputs.filter((path) => path.endsWith('.ts')).flatMap((path) => {
+    const base = path.startsWith('src/') ? path.slice(4, -3) : path.slice(0, -3);
+    return [`dist/${base}.js`, `dist/${base}.d.ts`];
+  });
+  const input = await fingerprint(root, inputs);
+  try {
+    const stamp = JSON.parse(await readFile(stampPath, 'utf8'));
+    if (stamp?.input === input && stamp.output === await fingerprint(root, outputs)) {
+      bounded.throwIfAborted();
+      return;
+    }
+  } catch (error) {
+    if (!missing(error) && !(error instanceof SyntaxError)) throw error;
+  }
+  // Failed/aborted compilers can leave partial output. Never accept it next time.
+  await rm(stampPath, { force: true });
+  let output = '';
+  try {
+    await runPackageCommand('npm', ['run', 'build'], root, process.env, bounded, 300_000,
+      (chunk) => { output = (output + chunk).slice(-8000); }, (pid) => recordGroup(pid, 'npm', root));
+    bounded.throwIfAborted();
+    const currentInputs = [...await sources(root, 'src'), ...await sources(root, 'examples'), ...inputs.filter((path) => !path.endsWith('.ts'))];
+    if (await fingerprint(root, currentInputs) !== input) throw new Error('Build inputs changed during compilation; retry startup');
+    await writeFile(stampPath, JSON.stringify({ input, output: await fingerprint(root, outputs) }), { mode: 0o600 });
+  } catch (error) {
+    throw new Error(`Gateway build failed; no gateway was launched. Run npm ci && npm run build in ${root} if dependencies are missing.\n${String(error)}\n${output}`);
+  }
 }

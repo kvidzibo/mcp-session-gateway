@@ -33,6 +33,9 @@ export default function(pi) { pi.registerCommand(command, { handler() {} }); }`)
     const result = await loading;
     assert.deepEqual(result.errors, []);
     assert.ok(result.extensions[0].commands.has('installed'));
+    await writeFile(join(root, 'pi/runtime.ts'), 'throw new Error("must not import changed runtime");');
+    const reloaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
+    assert.match(reloaded.errors[0].error, /Restart Pi/, 'A reload cannot reset the installation identity');
     const cancelled = new AbortController();
     await withCheckoutLock(root, signal, async () => {
       const pending = withCheckoutLock(root, cancelled.signal, async () => assert.fail('Cancelled waiter acquired the lock'));
