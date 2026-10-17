@@ -29,6 +29,12 @@ limit with an integer from **1 to 128** (`1` runs sequentially). See
 [startup update concurrency](packages.md#automatic-startup-updates) for the default
 and resource/cleanup behavior. It does not enable `autoUpdate` by itself.
 
+`display` is `"minimal"` (default) or `"full"`. The Pi adapter's `/gateway` →
+Display row saves it in the raw configuration and applies it immediately to the
+current session. Other sessions pick up the saved preference on reload or their
+next toggle. Full shows colored per-service tool-call counts in a wrapping
+below-editor panel; see [counter semantics](../README.md#operator-menu).
+
 ### Environment variables
 
 Children receive the MCP SDK's minimal default environment plus configured
@@ -66,7 +72,11 @@ For managed sources, package references, and `{{packageRoot}}`, see
 
 The gateway is usable without Pi packages. Transport is local stdio, with no HTTP
 server, shared daemon, or custom job events. Standard MCP subscriptions are
-forwarded.
+forwarded. `notifications/gateway/tool-call` is display-only telemetry with
+`{id, service, phase}` (`started`, `success`, `failure`), emitted at child tool
+dispatch and settlement. It contains no arguments/results and adds no polling.
+Each dispatch ID is a UUID; pre-dispatch rejection and gateway-owned tools emit
+nothing.
 
 Tools use `<server>__<tool>`, for example `files__read_file`. Pi adds its own MCP
 namespace. Namespaced names must fit MCP's **128-character limit**; duplicate or

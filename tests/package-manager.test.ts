@@ -123,11 +123,11 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
         registerFlag() {}, getFlag: () => file, registerEntryRenderer() {}, events: { on() {} },
         registerCommand() {}, registerTool: (tool: any) => tools.set(tool.name, tool),
         on: (event: string, handler: Function) => handlers.set(event, handler),
-        appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
+        appendEntry: (type: string, data: unknown) => { if (type !== 'gateway-call-counts') entries.push({ type, data }); },
       } as any);
       const widgets = new Map<string, any>(), progressFrames: string[] = [];
       const theme = { fg: (_: string, text: string) => text };
-      const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, ui: {
+      const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'packages-test', getBranch: () => [] }, ui: {
         theme, setStatus() {}, notify: (text: string) => warnings.push(text),
         setWidget(key: string, factory: any) {
           widgets.get(key)?.dispose?.(); widgets.delete(key);

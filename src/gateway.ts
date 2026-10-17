@@ -26,6 +26,7 @@ import { errorMessage, writeDiagnostic } from './diagnostics.js';
 import { gatewayIdentity } from './identity.js';
 import { GATEWAY_STATUS, GatewayStatusRequestSchema } from './status.js';
 import { modelVisible } from './tools.js';
+import type { CallEvent } from './call-events.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
 import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
 import { ActionSchema, ActionResultSchema, ChangedSchema } from './native-ui.js';
@@ -202,8 +203,14 @@ export class Gateway {
           const finished = new AbortController();
           const signal = AbortSignal.any([extra.signal, finished.signal, service.closed.signal]);
           service.active = { id: extra.requestId, signal, tool: request.params.name };
+          const id = randomUUID();
+          const report = (phase: CallEvent['phase']) => {
+            void this.server.notification({ method: 'notifications/gateway/tool-call',
+              params: { id, service: service.config.name, phase } }).catch(() => {});
+          };
+          report('started');
           try {
-            return await service.client.callTool({
+            const result = await service.client.callTool({
               name: tool.originalName,
               arguments: request.params.arguments,
               _meta: {
@@ -223,6 +230,11 @@ export class Gateway {
                 },
               } : {}),
             });
+            report(result.isError ? 'failure' : 'success');
+            return result;
+          } catch (error) {
+            report('failure');
+            throw error;
           } finally {
             finished.abort();
             service.active = undefined;

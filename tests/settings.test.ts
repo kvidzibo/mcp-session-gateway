@@ -77,7 +77,7 @@ test('operator settings stay private, route by service, and require confirmed sc
     const navigation = ['Services', 'alpha', 'Settings'];
     let confirmations = 0;
     const notices: string[] = [];
-    const ctx = { cwd: root, hasUI: true, mode: 'tui', ui: {
+    const ctx = { cwd: root, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'settings-test', getBranch: () => [] }, ui: {
       theme: { fg: (_color: string, text: string) => text }, setStatus() {}, setWidget() {},
       select: async (title: string, choices: string[]) => {
         switch (step++) {

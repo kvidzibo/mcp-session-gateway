@@ -165,6 +165,32 @@ or healthy-service count**. Observed child disconnects add `· !N`; a closed gat
 shows `· off`. Before configuration is available the count is `?`. No status
 polling is added.
 
+**`/gateway` → Display: Minimal / Full** toggles and saves the presentation
+immediately. Minimal is the default above. Full adds a horizontal, wrapping panel
+below the editor, leaving Pi's footer and service action links intact:
+
+```text
+ MCP 3 services · 31 tool calls
+ delegate ✓12 ✗0  │  pinote ✓17 ✗2  │  browser ✓0 ✗0
+```
+
+Nonzero successes are green (`✓`), failures red (`✗`), and in-flight calls amber
+(`…`); zeros and names are muted. Counts cover child tool dispatches in this Pi
+session, including calls made while Minimal is selected. Discovery, resource
+reads, settings and native app actions do not count. Success means a non-error
+tool response, not a verified outcome. Errors, timeouts, cancellations after
+dispatch, and interrupted/unconfirmed calls on disconnect or reload count as
+failures; calls rejected before dispatch do not count. Child-side approval denials
+count when the child returns an error. Background queries implemented as tool
+calls also count.
+
+Counts are stored outside model context and survive gateway restarts, reload and
+resume; new sessions and forks start at zero. Tree navigation does not rewind
+usage. Totals are scoped to the session and configuration path, and cover only
+activity recorded after this feature was installed (not reconstructed history).
+Removed services with recorded calls remain labelled `previous`. A crash can lose
+unflushed notifications; counters are operational feedback, not an audit log.
+
 During startup/reload, an animated indicator above the editor shows the current
 stage: configuration, optional package updates, build check, service connection,
 tool discovery, apps and live panels. It clears on success, failure or shutdown;
@@ -201,6 +227,7 @@ Gateway
 │  └─ Manage releases → package → prepare / activate / roll back / log
 ├─ Update all packages → confirm a one-time update; no restart
 ├─ Auto update: Off / On → toggle and save immediately
+├─ Display: Minimal / Full → toggle and save immediately
 └─ Connection
    ├─ Connection details
    └─ Restart gateway services…
