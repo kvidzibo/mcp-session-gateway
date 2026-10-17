@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { watch } from 'node:fs';
 import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,6 +29,8 @@ test('local Git startup updates fast-forward, rebuild only when needed, and bloc
     // Test-only subprocess boundary: no production file-protocol escape hatch.
     await writeFile(join(bin, 'git'), `#!${process.execPath}\nconst args=process.argv.slice(2).map(a=>a==='https://github.com/example/local.git'?${JSON.stringify(pathToFileURL(remote).href)}:a);
 args.unshift('-c','protocol.file.allow=always');
+if(args.includes('merge')&&!args.includes('--no-autostash'))process.exit(20);
+if(args.includes('fetch')&&!args.includes('--no-auto-maintenance'))process.exit(21);
 const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{stdio:'inherit'});process.exit(child.status??1);\n`);
     await chmod(join(bin, 'git'), 0o700);
     process.env.PATH = `${bin}:${path}`;
@@ -53,7 +56,10 @@ const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{
       (_name, error) => warnings.push(String(error)), (name, stage) => stages.push(`${name}:${stage}`));
     assert.deepEqual(await run({ ...config, autoUpdate: false }), []);
     await assert.rejects(access(join(local, 'built.txt')), { code: 'ENOENT' });
-    assert.equal((await bindManagedService(config, config.services[0]))?.cwd, local, 'Never-updated local checkout can launch manually');
+    await assert.rejects(bindManagedService(config, config.services[0]), /successful startup build/, 'Missing outputs block even the first manual launch');
+    await writeFile(join(local, 'built.txt'), 'prebuilt');
+    assert.equal((await bindManagedService(config, config.services[0]))?.cwd, local, 'Existing local output can launch manually before opting into startup updates');
+    await rm(join(local, 'built.txt'));
     process.env.GATEWAY_TEST_SECRET = 'must-not-inherit';
     assert.deepEqual(await run(), [], 'Initial validation/build is not a version update');
     delete process.env.GATEWAY_TEST_SECRET;
@@ -78,6 +84,7 @@ const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{
     assert.equal(status.installed, first); assert.equal(status.available, second);
     stages.length = 0;
     git(local, 'config', 'remote.origin.uploadpack', 'touch should-not-run');
+    git(local, 'config', 'merge.autoStash', 'true');
     await writeFile(join(local, '.git/hooks/post-merge'), '#!/bin/sh\ntouch should-not-run\n');
     await chmod(join(local, '.git/hooks/post-merge'), 0o700);
     assert.deepEqual(await run(), [{ name: 'worker', from: first, version: second }]);
@@ -119,11 +126,14 @@ const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{
     await assert.rejects(access(lock), { code: 'ENOENT' });
 
     const waiting = structuredClone(config);
-    waiting.packages[0].localUpdate!.build = [{ command: process.execPath, args: ['-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], cwd: '.' }];
+    waiting.packages[0].localUpdate!.build = [{ command: process.execPath, args: ['-e', "const fs=require('fs');process.on('SIGTERM',()=>{});fs.writeFileSync('count.txt',String(+fs.readFileSync('count.txt','utf8')+1));setInterval(()=>{},1000)"], cwd: '.' }];
     const controller = new AbortController();
-    const cancel = setTimeout(() => controller.abort(), 1500);
+    const countBeforeCancel = +await readFile(join(local, 'count.txt'), 'utf8');
+    const started = watch(join(local, 'count.txt'), () => controller.abort());
+    const timeout = setTimeout(() => controller.abort(), 15_000);
     try { await assert.rejects(run(waiting, controller.signal)); }
-    finally { clearTimeout(cancel); }
+    finally { started.close(); clearTimeout(timeout); }
+    assert.equal(+await readFile(join(local, 'count.txt'), 'utf8'), countBeforeCancel + 1, 'Cancellation occurs after the actual build starts');
     await assert.rejects(access(lock), { code: 'ENOENT' });
     await assert.rejects(bindManagedService(config, config.services[0]), /successful startup build/);
     await run();

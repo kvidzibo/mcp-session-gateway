@@ -11,6 +11,7 @@ const receiptSchema = z.object({ ready: z.boolean(), head: z.string(), definitio
 const definition = (pkg: PackageConfig) => createHash('sha256').update(JSON.stringify(pkg.localUpdate)).digest('hex');
 const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 const hash = (value: string) => /^[a-f0-9]{40,64}$/.test(value);
+const localGitArgs = [...safeGitArgs, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0'];
 
 async function checkout(pkg: PackageConfig, signal: AbortSignal) {
   if (pkg.source.type !== 'local' || !pkg.localUpdate) throw new Error('Not an update-enabled local package');
@@ -51,7 +52,7 @@ export async function localPackageRoot(pkg: PackageConfig, signal: AbortSignal):
   const paths = await checkout(pkg, signal);
   if (await exists(paths.lock)) throw new Error(`Local package ${pkg.name} is locked; inspect ${paths.lock} before recovery`);
   const state = await receipt(paths.receipt, signal);
-  if (state && (!state.ready || state.head !== await git(['rev-parse', 'HEAD'], paths.root, signal) || state.definition !== definition(pkg) || !await outputsExist(pkg, paths.root))) {
+  if ((state && (!state.ready || state.head !== await git(['rev-parse', 'HEAD'], paths.root, signal) || state.definition !== definition(pkg))) || !await outputsExist(pkg, paths.root)) {
     throw new Error(`Local package ${pkg.name} needs a successful startup build/validation; enable autoUpdate and reload. Log: ${paths.log}`);
   }
   return paths.root;
@@ -86,6 +87,7 @@ export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal
     await clean();
     log = await open(paths.log, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
     if (!(await log.stat()).isFile()) throw new Error('Local log must be a regular file');
+    await log.chmod(0o600);
     const report = (text: string) => {
       const chunk = Buffer.from(text).subarray(0, Math.max(0, 8_000_000 - bytes));
       bytes += chunk.length;
@@ -98,7 +100,7 @@ export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal
     const ref = `refs/mcp-gateway/${randomUUID()}`;
     let target: string;
     try {
-      await run('git', [...safeGitArgs, '-c', 'fetch.recurseSubmodules=false', 'fetch', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', '--', url, `refs/heads/${branch}:${ref}`], paths.root, gitEnvironment());
+      await run('git', [...localGitArgs, '-c', 'fetch.recurseSubmodules=false', 'fetch', '--no-auto-maintenance', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', '--', url, `refs/heads/${branch}:${ref}`], paths.root, gitEnvironment());
       target = await git(['rev-parse', '--verify', ref], paths.root, signal);
     } finally {
       // Cleanup must work after cancellation; no checkout or upstream ref is changed.
@@ -119,7 +121,7 @@ export async function updateLocalPackage(pkg: PackageConfig, signal: AbortSignal
     progress('updating');
     // Durable failure marker precedes any checkout/build mutation. No silent rollback on failure.
     await save(paths.receipt, { ...next, ready: false });
-    if (target !== before) await run('git', [...safeGitArgs, '-c', 'submodule.recurse=false', 'merge', '--ff-only', '--no-edit', target], paths.root, gitEnvironment());
+    if (target !== before) await run('git', [...localGitArgs, '-c', 'submodule.recurse=false', 'merge', '--ff-only', '--no-autostash', '--no-edit', target], paths.root, gitEnvironment());
     home = await mkdtemp(join(tmpdir(), 'gateway-local-build-'));
     await writeFile(join(home, 'user.npmrc'), '');
     await writeFile(join(home, 'global.npmrc'), '');

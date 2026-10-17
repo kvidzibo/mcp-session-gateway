@@ -169,8 +169,9 @@ A plain local source remains read-only inventory.
   Include dependency setup (`npm ci`, `uv sync --locked`, etc.) when needed. All
   configured steps run after a pull, on the first enabled startup, when commands
   change, or when a declared `outputs` path is missing. Otherwise builds are
-  reused. `outputs` is optional; no content fingerprint of output files is taken.
-  Build outputs must be Git-ignored. Steps and outputs must stay inside the root.
+  reused. `outputs` is optional; include dependency directories such as
+  `node_modules` or `.venv` if their absence should also trigger setup. No content
+  fingerprint of output files is taken. Build outputs must be Git-ignored. Steps and outputs must stay inside the root.
 - `validate` requires at least one command; `build` may be empty. The same minimal
   environment, private HOME/cache, per-command timeouts and process-group cleanup
   as managed builds apply. Service env/API credentials are not passed to builds.
@@ -181,7 +182,8 @@ A plain local source remains read-only inventory.
   receipt or pending-build marker) and `mcp-gateway-local.log` (latest bounded
   operation output). A marker is written **before** modifying files. Build or
   validation failure does not roll back developer files: startup stops rather
-  than launching stale output. A later auto-update startup retries the build.
+  than launching stale output. Earlier package updates may already have applied;
+  there is no cross-package rollback. A later auto-update startup retries the build.
   Manual/standalone launches also reject pending builds, changed receipts or
   missing declared outputs, even with auto-update disabled. Fix the failure and
   reload with auto-update enabled; inspect the log rather than deleting receipts.
