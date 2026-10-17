@@ -8,6 +8,8 @@ export const UI_FEATURES = 'native-ui/features';
 export const UI_STALE_ACTION = -33003;
 export const ActionRevisionFeaturesSchema = z.object({ actionRevisions: z.literal(true) });
 export const FooterSecondaryFeaturesSchema = z.object({ footerSecondaryActions: z.literal(true) });
+export const FooterStylesFeaturesSchema = z.object({ footerStyles: z.literal(true) });
+export const FooterDoubleFeaturesSchema = z.object({ footerDoubleActions: z.literal(true) });
 export const StaleActionDataSchema = z.object({ 'native-ui/action': z.object({ status: z.literal('not-applied'), reason: z.literal('stale-view') }) });
 const text = z.string().max(20_000);
 const scalar = z.union([text, z.number().finite(), z.boolean(), z.null()]);
@@ -24,12 +26,15 @@ export const ViewSchema = z.object({
   version: z.literal(1), title: text, revision: z.string().min(1).max(256),
   state: StateSchema, body: text.optional(), retainOnNew: z.boolean().optional(),
   controls: z.array(control).max(256),
-  footer: z.array(z.object({ text, url: z.string().max(2048).optional(), action: z.string().min(1).max(256).optional(), secondaryAction: z.string().min(1).max(256).optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
+  footer: z.array(z.object({ text, url: z.string().max(2048).optional(), action: z.string().min(1).max(256).optional(), secondaryAction: z.string().min(1).max(256).optional(), doubleAction: z.string().min(1).max(256).optional(), style: z.object({ italic: z.boolean().optional(), color: z.enum(['accent', 'muted', 'text']).optional() }).strict().optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
 }).strict().superRefine((view, ctx) => {
   if (new Set(view.controls.map((c) => c.id)).size !== view.controls.length) ctx.addIssue({ code: 'custom', message: 'Duplicate control IDs' });
   for (const item of view.footer ?? []) {
     if (item.secondaryAction && (!item.action || !view.controls.some((c) => c.id === item.secondaryAction && c.kind === 'action'))) {
       ctx.addIssue({ code: 'custom', message: 'Secondary footer actions require a primary action and an action control' });
+    }
+    if (item.doubleAction && (item.url !== undefined || !view.controls.some((c) => c.id === item.doubleAction && c.kind === 'action'))) {
+      ctx.addIssue({ code: 'custom', message: 'Double footer actions must reference an action control and cannot have a URL' });
     }
     if (item.action && (item.url !== undefined || !view.controls.some((c) => c.id === item.action && c.kind === 'action'))) {
       ctx.addIssue({ code: 'custom', message: 'Footer actions must reference an action control and cannot have a URL' });
@@ -59,12 +64,13 @@ export function editorText(text: string): string {
   if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(text)) throw new Error('Unsupported terminal controls in editor text');
   return text;
 }
-export function footerText(view: NativeView, clip: (text: string, width: number) => string = (text) => text, actionUrl?: (action: string, secondaryAction?: string) => string | undefined): string {
-  return (view.footer ?? []).map(({ text, url, action, secondaryAction, width }) => {
-    const label = clip(clean(text).replace(/\n/g, ' '), width ?? 60);
+export function footerText(view: NativeView, clip: (text: string, width: number) => string = (text) => text, actionUrl?: (action: string | undefined, secondaryAction?: string, doubleAction?: string) => string | undefined, styleText: (text: string, style: NonNullable<NonNullable<NativeView['footer']>[number]['style']>) => string = (text) => text): string {
+  return (view.footer ?? []).map(({ text, url, action, secondaryAction, doubleAction, style, width }) => {
+    const clipped = clip(clean(text).replace(/\n/g, ' '), width ?? 60);
+    const label = style ? styleText(clipped, style) : clipped;
     // Only the host can mint action capabilities; services cannot supply custom schemes.
-    if (action) {
-      const target = actionUrl?.(action, secondaryAction);
+    if (action || doubleAction) {
+      const target = actionUrl?.(action, secondaryAction, doubleAction);
       return target && /^pi-gateway-action:\/\/[1-9][0-9]*-[0-9a-f]{8}\/[0-9a-f]{32}$/.test(target)
         ? `\x1b]8;;${target}\x1b\\${label}\x1b]8;;\x1b\\` : label;
     }

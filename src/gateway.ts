@@ -54,7 +54,7 @@ export class Gateway {
   onclose?: () => void;
   private readonly server = new Server(
     gatewayIdentity,
-    { capabilities: { tools: { listChanged: true }, resources: { subscribe: true, listChanged: true }, experimental: { 'native-ui-v1': { actionRevisions: true, footerSecondaryActions: true } } } },
+    { capabilities: { tools: { listChanged: true }, resources: { subscribe: true, listChanged: true }, experimental: { 'native-ui-v1': { actionRevisions: true, footerSecondaryActions: true, footerStyles: true, footerDoubleActions: true } } } },
   );
   private readonly services: Service[] = [];
   private initialized = false;
