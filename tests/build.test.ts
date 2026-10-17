@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,7 +54,7 @@ test('launch builds missing/stale output once, detects content changes, and neve
     await build();
     assert.equal(await count(), 7, 'Failure cannot reuse the earlier successful stamp');
     // The updater and compiler must not race npm ci against tsc.
-    await mkdir(join(root, '.git'));
+    execFileSync('git', ['init', root], { stdio: 'ignore' });
     await writeFile(source, 'three');
     await withCheckoutLock(root, signal, async () => {
       pending = build();
@@ -63,6 +64,13 @@ test('launch builds missing/stale output once, detects content changes, and neve
     });
     await pending;
     assert.equal(await count(), 8);
+    await withCheckoutLock(root, signal, async () => {
+      pending = build();
+      await writeFile(join(root, '.git/mcp-gateway-local.json'),
+        JSON.stringify({ ready: false, head: 'failed-update', definition: 'failed-update' }));
+    });
+    await assert.rejects(pending!, /successful startup build/, 'A queued launch must reread a failed update receipt, even with fresh output');
+    assert.equal(await count(), 8, 'Never compile or reuse output after another updater fails');
     const cancelled = new AbortController();
     cancelled.abort();
     await assert.rejects(ensureGatewayBuild(root, cancelled.signal), { name: 'AbortError' });

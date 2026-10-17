@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withCheckoutLock } from '../src/checkout-lock.js';
 import { runPackageCommand } from '../src/package-manager.js';
+import { assertGatewayReady } from './self-update.js';
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
@@ -33,6 +34,7 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal): Pro
   await mkdir(join(root, 'dist'), { recursive: true });
   const stampPath = join(root, 'dist/.gateway-build.json');
   await withCheckoutLock(root, bounded, async (recordGroup) => {
+    await assertGatewayReady(root, bounded);
     const inputs = [...await sources(root, 'src'), ...await sources(root, 'examples'),
       'package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.build.json', 'tsconfig.examples-build.json'];
     const outputs = inputs.filter((path) => path.endsWith('.ts')).flatMap((path) => {
