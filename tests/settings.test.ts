@@ -70,6 +70,7 @@ test('operator settings stay private, route by service, and require confirmed sc
     const loaded = await loadExtensions([join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(loaded.errors, []);
     loaded.runtime.flagValues.set('gateway-config', config);
+    loaded.runtime.appendEntry = (customType: string) => assert.equal(customType, 'gateway-startup');
     const ext = loaded.extensions[0];
     assert.deepEqual([...ext.tools.keys()].sort(), ['gateway_call', 'gateway_tools']);
     let step = 1;

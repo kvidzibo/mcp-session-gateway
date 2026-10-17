@@ -148,6 +148,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     loaded.runtime.flagValues.set('gateway-config', config);
+    loaded.runtime.appendEntry = (customType: string) => assert.equal(customType, 'gateway-startup');
     const ext = loaded.extensions[0];
     assert.deepEqual([...ext.tools.keys()].sort(), ['gateway_call', 'gateway_tools']);
     let choice = 'Allow once';

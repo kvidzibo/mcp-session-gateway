@@ -146,6 +146,13 @@ or healthy-service count**. Observed child disconnects add `· !N`; a closed gat
 shows `· off`. Before configuration is available the count is `?`. No status
 polling is added.
 
+New sessions also print a compact, display-only **startup snapshot** listing each
+service's observed connection state and exposed tool count. Unactivated managed
+services show `stopped · package not activated`. The snapshot excludes gateway-owned
+tools and is not a health check or live dashboard. It is saved outside model
+context; reload/resume/fork do not append duplicate cards. Status-read failures show
+an unavailable summary without stopping a working gateway.
+
 Click the whole MCP segment to open Services (or recovery when disconnected),
 without starting a model turn. Kitty needs the existing
 [footer-link handler](docs/native-ui.md#terminal-clicks); `/pi-services` is the

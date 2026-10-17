@@ -139,6 +139,7 @@ test('subscriptions route by service and live Pi widget follows jobs without tra
     const loaded = await loadExtensions([path.join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(loaded.errors, []);
     loaded.runtime.flagValues.set('gateway-config', config);
+    loaded.runtime.appendEntry = (customType: string) => assert.equal(customType, 'gateway-startup');
     const ext = loaded.extensions[0];
     let widget: { render: (width: number) => string[] } | undefined;
     let mounts = 0;

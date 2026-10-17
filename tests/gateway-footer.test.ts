@@ -84,6 +84,27 @@ test('gateway footer counts configuration, opens Services repeatedly, and keeps 
     await click(link());
     assert.deepEqual(screens.splice(0), ['Gateway'], 'Disconnected footer opens recovery instead');
     assert.equal(text(), ' MCP 2 services · off');
+
+    // The second resource discovery belongs to LiveJobs, which catches read
+    // failures. Its return must not overwrite the gateway's off state with up.
+    const race = `
+      import {Server} from '@modelcontextprotocol/sdk/server/index.js';
+      import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+      import {ListResourcesRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+      const server = new Server({name:'race',version:'1'}, {capabilities:{resources:{}}});
+      let reads = 0;
+      server.setRequestHandler(ListResourcesRequestSchema, async () => {
+        if (++reads === 2) process.kill(process.ppid, 'SIGTERM');
+        return {resources:[]};
+      });
+      await server.connect(new StdioServerTransport());
+    `;
+    await writeFile(config, JSON.stringify({ mcpServers: { race: {
+      command: process.execPath, args: ['--input-type=module', '-e', race], cwd: new URL('../', import.meta.url).pathname,
+    } } }));
+    await handlers.get('session_start')!({ reason: 'reload' }, ctx);
+    await waitFor(/off$/);
+    assert.equal(text(), ' MCP 1 service · off');
     const beforeShutdown = link();
     await handlers.get('session_shutdown')!({}, ctx);
     assert.equal(statuses.get('gateway'), undefined);

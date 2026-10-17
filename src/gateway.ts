@@ -24,6 +24,7 @@ import { ServiceTransport } from './service-transport.js';
 import { bindManagedService } from './package-manager.js';
 import { errorMessage, writeDiagnostic } from './diagnostics.js';
 import { gatewayIdentity } from './identity.js';
+import { GATEWAY_STATUS, GatewayStatusRequestSchema } from './status.js';
 import { modelVisible } from './tools.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
 import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
@@ -56,6 +57,7 @@ export class Gateway {
   );
   private readonly services: Service[] = [];
   private initialized = false;
+  private startupComplete = false;
   private ready: Promise<void> = Promise.resolve();
   private resolveReady!: () => void;
   private resolveInitialized!: () => void;
@@ -64,7 +66,18 @@ export class Gateway {
 
   constructor(private readonly config: GatewayConfig, private readonly operatorToken?: string) {
     if (operatorToken && !validToken(operatorToken)) throw new Error('Invalid gateway operator token');
-    this.server.registerCapabilities({ experimental: { 'gateway-services-v1': { names: config.services.map((service) => service.name) } } });
+    this.server.registerCapabilities({ experimental: { 'gateway-services-v1': { names: config.services.map((service) => service.name) }, 'gateway-status-v1': {} } });
+    this.server.setRequestHandler(GatewayStatusRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
+      await this.ready;
+      if (!this.startupComplete || this.closing) throw new McpError(ErrorCode.InvalidRequest, 'Gateway startup did not complete or is closing');
+      return { services: this.config.services.map(({ name }) => {
+        const service = this.services.find((item) => item.config.name === name);
+        return {
+          name, state: service?.connected ? 'connected' : service ? 'disconnected' : 'stopped',
+          tools: service?.connected ? [...service.tools.values()].filter((tool) => modelVisible(tool.definition)).length : 0,
+        };
+      }) };
+    }));
     if (operatorToken) {
       this.server.registerCapabilities({ experimental: { [OPERATOR_EXTENSION]: { version: 1, audience: 'operator', authorization: 'token' } } });
       this.server.setRequestHandler(OperatorListSchema, async (request, extra) => this.withRequest(extra, async () => {
@@ -422,7 +435,7 @@ export class Gateway {
     this.ready = new Promise<void>((resolve) => { this.resolveReady = resolve; });
     const initialized = new Promise<void>((resolve) => { this.resolveInitialized = resolve; });
     const transport = new StdioServerTransport(input);
-    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', 'resources/subscribe', 'resources/unsubscribe', OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, 'native-ui/action']);
+    this.requests = trackRequests(transport, ['tools/list', 'tools/call', 'resources/list', 'resources/read', 'resources/subscribe', 'resources/unsubscribe', GATEWAY_STATUS, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, 'native-ui/action']);
     await this.server.connect(transport);
     // Learn upstream elicitation capability before children initialize.
     await initialized;
@@ -434,6 +447,7 @@ export class Gateway {
       await this.close();
       throw failure.reason;
     }
+    this.startupComplete = true;
     this.resolveReady();
     if (this.closing) return;
     this.log(`Started with ${this.services.length} service(s)`);

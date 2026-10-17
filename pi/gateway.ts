@@ -13,6 +13,8 @@ import { loadConfig } from '../src/config.js';
 import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
+import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
+import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -89,7 +91,26 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (typeof entry.data?.text !== 'string') return;
     return new Text(theme.fg('success', clean(entry.data.text)), 0, 0);
   });
+  pi.registerEntryRenderer<StartupSummary>('gateway-startup', (entry, _options, theme) => {
+    const parsed = GatewayStatusSchema.safeParse(entry.data);
+    if (parsed.success) return startupSummary({ ...parsed.data, ...(entry.data?.unavailable ? { unavailable: true } : {}) }, theme);
+  });
   let liveJobs: LiveJobs | undefined;
+
+  async function showStartup(ctx: ExtensionContext, reason?: string): Promise<void> {
+    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
+    const scope = resolve(String(pi.getFlag('gateway-config')));
+    if (ctx.sessionManager?.getBranch().some((entry) => entry.type === 'custom' && entry.customType === 'gateway-startup' && (entry.data as { scope?: string })?.scope === scope)) return;
+    const current = client, signal = lifetime.signal;
+    let data: StartupSummary = { services: [], unavailable: true };
+    if (connected && current?.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
+      try { data = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal, timeout }); }
+      catch { /* A missing snapshot must never turn configured services into running ones. */ }
+    }
+    if (shuttingDown || current !== client || footerContext !== ctx) return;
+    if (signal.aborted || !connected) data = { services: [], unavailable: true };
+    pi.appendEntry('gateway-startup', { scope, ...data });
+  }
 
   async function close(preserveMenu = false): Promise<void> {
     if (!preserveMenu) managerController?.abort();
@@ -213,10 +234,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         liveJobs = new LiveJobs(current, ctx, timeout);
         await liveJobs.start();
       }
-      renderFooter('up');
+      if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
     } catch (error) { await close(preserveMenu); throw error; }
   }
-  pi.on('session_start', async (event, ctx) => { shuttingDown = false; await start(ctx, false, event.reason, true); });
+  pi.on('session_start', async (event, ctx) => {
+    shuttingDown = false;
+    try { await start(ctx, false, event.reason, true); }
+    finally { await showStartup(ctx, event.reason); }
+  });
   pi.on('session_shutdown', async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
     shuttingDown = true;
