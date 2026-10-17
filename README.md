@@ -131,8 +131,8 @@ model.
 
 Use arrows/Enter to navigate; viewers support Arrow/Page keys and **r** refresh (inventory refresh
 is local). Navigation and settings lists/inputs use Pi's compact native components inline, not
-centered overlays. Settings choices support typing to filter; service-app text/number inputs also
-edit inline. Confirmations stay isolated and require reviewing every change. Menus remember selection and follow Pi's selection keybindings, with no inactivity deadline;
+centered overlays. Settings choices and service-app menus support typing to filter; app searches
+cover the displayed controls and survive refreshes. Service-app text/number inputs also edit inline. Confirmations stay isolated and require reviewing every change. Menus remember selection and follow Pi's selection keybindings, with no inactivity deadline;
 shutdown cancels dialogs. Service controls show available actions in this order: Open app, Settings,
 Resources, Connection / restart…, Enable/disable service, then Back.
 

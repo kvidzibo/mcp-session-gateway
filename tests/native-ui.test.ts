@@ -61,13 +61,35 @@ test('native apps reuse inline Pi menus with live refresh, native bindings, and 
           assert.equal(finished, false, 'Hidden actions cannot run in a tiny terminal');
           terminal.rows = 30; terminal.columns = 100;
           render();
+          panel.focused = true;
+          assert.equal(panel.focused, true, 'Search receives native input focus');
+          panel.handleInput('TASK 2');
+          assert.match(render().join('\n'), /Search: .*TASK 2/);
+          assert.match(render().join('\n'), /→ Task 2:/);
+          assert.doesNotMatch(render().join('\n'), /Task 1:/);
+          panel.handleInput('nomatch');
+          panel.handleInput('\x19');
+          assert.equal(finished, false, 'Typing then confirming before repaint cannot select a hidden result or Back');
+          assert.match(render().join('\n'), /No matching choices/);
+          panel.handleInput('\x15');
+          panel.handleInput('TASK 2');
           await host.refresh(uri);
           assert.equal(finished, true, 'View updates close the old menu before reopening');
         } else if (phase === 2) {
           assert.ok(lines.some((line) => line.startsWith('→ Task 2:')), 'Live updates preserve focus');
+          assert.match(lines.join('\n'), /Search: .*TASK 2/, 'Live updates preserve the search');
+          assert.doesNotMatch(lines.join('\n'), /Task 1:/);
+          panel.handleInput('X');
+          assert.match(render().join('\n'), /Search: .*TASK 2X/, 'Refresh preserves the search cursor');
+          panel.handleInput('\x7f');
+          terminal.rows = 16; terminal.columns = 40;
+          assert.match(render().join('\n'), /Search: .*TASK 2/, 'Search fits a narrow terminal');
+          terminal.rows = 30; terminal.columns = 100;
+          render();
           panel.handleInput('\x12');
         } else if (phase === 3) {
           assert.ok(lines.some((line) => line.startsWith('→ Task 2:')), 'Manual refresh preserves focus');
+          assert.match(lines.join('\n'), /Search: .*TASK 2/);
           panel.handleInput('\x19');
         } else if (phase === 4) panel.handleInput('\x18');
         else controller.abort();
