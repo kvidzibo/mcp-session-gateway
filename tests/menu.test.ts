@@ -218,16 +218,17 @@ test('Auto update toggles and saves from the root, preserves raw config, and ref
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('service selection opens its app directly; Tab opens private settings and returns to the caller', async () => {
+test('service controls open apps; Tab opens private settings and returns to the caller', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-app-tab-'));
   const config = join(dir, 'gateway.json');
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const screens: string[] = [], notices: string[] = [];
   const steps = [
     ['Gateway › Services', '\t'], ['Service settings', escape],
-    ['Gateway › Services', '\r'], ['Service app', '\t'], ['Service settings', escape],
+    ['Gateway › Services', '\r'], ['Gateway › Services › demo', 'open-app'],
+    ['Service app', '\t'], ['Service settings', escape],
     ['Service app', '\x0f'], ['Gateway › Services › demo', escape],
-    ['Gateway › Services', '\r'], ['Service app', escape],
+    ['Gateway › Services', '\r'], ['Gateway › Services › demo', '\r'], ['Service app', escape],
     ['Gateway › Services', escape], ['Gateway', escape],
   ];
   const fixture = `
@@ -273,7 +274,11 @@ test('service selection opens its app directly; Tab opens private settings and r
             assert.ok(rendered.every((line) => visibleWidth(line) <= columns - 2));
             if (step[0] === 'Gateway › Services' || step[0] === 'Service app') assert.match(rendered.join('\n'), /Tab settings/);
           }
-          panel.handleInput(step[1]);
+          if (step[1] === 'open-app') {
+            for (let i = 0; i < 10 && !panel.render(98).includes('→ Open app'); i++) panel.handleInput(down);
+            assert.ok(panel.render(98).includes('→ Open app'));
+            panel.handleInput('\r');
+          } else panel.handleInput(step[1]);
           assert.ok(finished, 'Shortcut must complete the current overlay before opening another');
           return answer;
         } finally { panel.dispose(); }
@@ -425,11 +430,11 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
     assert.equal(queryReply.handled, true, 'Changed configuration must not reuse ownership from the previous launch');
     assert.match(queryReply.error, /not ready/);
     await launching;
-    navigation.push('Services', 'alpha', 'Resources', 'Back', 'Resources', 'Open app', 'Back', 'Back', 'Close');
+    navigation.push('Services', 'alpha', 'Open app', 'Resources', 'Back', 'Resources', 'Open app', 'Back', 'Back', 'Close');
     await commands.get('gateway').handler('', ctx);
     assert.deepEqual(navigation, [], 'Slow aggregate listing must reach Resources without retiring healthy children');
     assert.ok(notices.some((text) => text.includes('Resources unavailable:') && text.includes('Unrelated service discovery failed')));
-    assert.equal(appsOpened, 2, 'Selection opens the app directly, and unrelated resource-list errors cannot block reopening it');
+    assert.equal(appsOpened, 2, 'Controls open the app, and unrelated resource-list errors cannot block reopening it');
     await handlers.get('session_shutdown')!({}, ctx);
     const count = notices.length;
     await commands.get('gateway').handler('', { ...ctx, mode: 'rpc' });

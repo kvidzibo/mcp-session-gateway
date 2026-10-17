@@ -6,6 +6,9 @@
 
 - Prefer `mcpServers`; legacy `servers` works, but specifying both fails. Other clients' options are
   not necessarily supported.
+- Per-service `enabled`: boolean, default `true`. `false` skips process launch and environment
+  expansion but retains the entry for re-enabling. Saved changes apply on next launch/restart;
+  existing processes in every session stay unchanged.
 - Commands are executables with literal arguments, not shell expressions.
 - `cwd` defaults to the config directory; relative values resolve there.
 - Service names: lowercase letters, digits, hyphens; start with a letter; `gateway` is reserved.
@@ -17,7 +20,7 @@
 ### Environment variables
 
 Children receive SDK defaults plus configured `env`, **not the full parent environment**.
-`${VARIABLE}` reads the gateway environment; missing variables fail startup. The adapter passes Pi's
+`${VARIABLE}` reads the gateway environment; missing variables in enabled services fail startup. The adapter passes Pi's
 environment to the gateway, not children. No argument/shell interpolation occurs.
 
 `MCP_GATEWAY_WORKSPACE` gives every child the gateway launch directory (the adapter's session

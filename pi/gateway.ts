@@ -10,7 +10,7 @@ import { Loader, Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
-import { readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, type Display } from './auto-update.js';
+import { readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
 import { CallEventSchema } from '../src/call-events.js';
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
 import { updateManagedPackages } from '../src/package-manager.js';
@@ -370,7 +370,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
           try { autoUpdate = await readAutoUpdate(configPath); }
           catch (error) { autoUpdateError = clean(String(error)); }
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
-            { id: 'services', label: 'Services', description: 'Choose a service to open its app, edit settings or read resources.', disabled: !connected },
+            { id: 'services', label: 'Services', description: 'Enable/disable services, open apps, edit settings or read resources.' },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
             { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
@@ -389,16 +389,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
               const enabled = await toggleAutoUpdate(configPath, autoUpdate, signal);
               ctx.ui.notify(`Auto update ${enabled ? 'on' : 'off'} · saved for next startup/reload`, 'info');
             } else if (action === 'services') {
-              while (!signal.aborted && connected) {
-                const config = await loadConfig(configPath);
+              while (!signal.aborted) {
+                const config = await loadConfig(configPath, { expandEnvironment: false });
                 const names = [...new Set([...config.services.map((s) => s.name), ...(launchedServices ?? [])])];
                 const service = directService ?? await menu.choose(['Gateway', 'Services'], 'Choose a service · listed does not mean running',
-                  names.map((name) => ({ id: name, label: name, description: 'Enter opens the app when available; Tab opens settings. Listed does not mean running.' })),
+                  names.map((name) => ({ id: name, label: `${name}${config.services.find((s) => s.name === name)?.enabled === false ? ' (disabled)' : ''}`, description: 'Enter opens service controls; Tab opens settings. Enable/disable applies on restart/reload, not immediately.' })),
                   { label: 'settings', action: serviceSettings });
                 directService = undefined;
                 if (!service) break;
-                let openApp = native.has(service);
-                while (!signal.aborted && connected) {
+                let openApp = false;
+                while (!signal.aborted) {
+                  const current = (await loadConfig(configPath, { expandEnvironment: false })).services.find((s) => s.name === service);
+                  const enabled = current?.enabled !== false;
                   if (openApp) {
                     openApp = false;
                     if (await native.open(service, ctx, { settings: () => serviceSettings(service) }) !== 'features') break;
@@ -407,16 +409,24 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                   const options = { signal: lifetime.signal, timeout };
                   let editable = false, settingsError = '';
                   try {
-                    const settings = operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
+                    const settings = connected && operatorToken ? await connection().request({ method: OPERATOR_LIST, params: { token: operatorToken } }, OperatorServicesSchema, options) : { services: [] };
                     editable = settings.services.some((s) => s.name === service);
                   } catch (error) { settingsError = clean(`Settings discovery failed: ${String(error)}`); }
-                  const app = native.has(service);
-                  const selected = await menu.choose(['Gateway', 'Services', service], 'Available service features', [
+                  const app = connected && native.has(service);
+                  const selected = await menu.choose(['Gateway', 'Services', service], `Next launch: ${enabled ? 'enabled' : 'disabled'} · saved changes do not stop/start running services`, [
+                    { id: 'toggle-enabled', label: enabled ? 'Disable service' : 'Enable service', disabled: !current,
+                      description: current ? 'Save for future launches in all sessions sharing this config. Running services stay unchanged; use Connection to confirm a restart here.' : 'Service is no longer configured.' },
+                    { id: 'restart', label: 'Connection / restart…', description: 'Apply saved choices using a separately confirmed restart of ALL gateway services in this session. Active/queued jobs will be cancelled.' },
                     { id: 'app', label: 'Open app', description: app ? 'Open the service-provided interactive menu.' : 'This service has no available native app.', disabled: !app },
                     { id: 'settings', label: 'Settings', description: editable ? 'Edit a draft; review and confirm before saving.' : settingsError || 'Settings are not enabled or advertised by this service.', disabled: !editable },
-                    { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.' },
+                    { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.', disabled: !connected },
                   ]);
                   if (!selected) break;
+                  if (selected === 'toggle-enabled') {
+                    const next = await toggleServiceEnabled(configPath, service, enabled, signal);
+                    ctx.ui.notify(`${service}: ${next ? 'enabled' : 'disabled'} for next startup/reload · running services unchanged`, 'info');
+                  }
+                  if (selected === 'restart') { nextAction = 'connection'; break; }
                   if (selected === 'app') openApp = true;
                   if (selected === 'settings') await serviceSettings(service);
                   if (selected === 'resources') {
@@ -436,18 +446,19 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                     }
                   }
                 }
+                if (nextAction) break;
                 // A counter opens one service, not the parent menus on close.
                 if (typeof initialAction === 'object') return;
               }
             } else if (action === 'update-all') {
               if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before updating packages', 'warning'); continue; }
-              const config = await loadConfig(configPath);
+              const config = await loadConfig(configPath, { expandEnvironment: false });
               const work = updateAllPackages(ctx, config, signal);
               managerWork = work;
               try { await work; } finally { if (managerWork === work) managerWork = undefined; }
             } else if (action === 'packages') {
               while (!signal.aborted) {
-                const config = await loadConfig(configPath);
+                const config = await loadConfig(configPath, { expandEnvironment: false });
                 const selected = await menu.choose(['Gateway', 'Packages'], 'Preparation → activation → restart are separate decisions', [
                   { id: 'status', label: 'Installed versions', description: 'Read local package metadata only. Versions describe installations, not running processes.' },
                   { id: 'check', label: 'Check for updates', description: 'Contact public package sources to compare versions. Nothing is installed.', disabled: !config.packages.length },
@@ -471,12 +482,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                   await menu.info(['Gateway', 'Connection', 'Details'],
                     `${connected ? 'Connected' : 'Disconnected'}\n\nConfiguration\n${configPath}\n\nLast launch (not a health check)\n${launchedServices?.join('\n') || 'No runtime inventory available.'}\n\nPackage activation changes future launches. Restarting here affects only this Pi session.`);
                 } else {
-                  const config = await loadConfig(configPath);
+                  const config = await loadConfig(configPath, { expandEnvironment: false });
                   if (connected && !launchedServices) { ctx.ui.notify('Runtime service inventory unavailable; build/reload the matching gateway before using managed restart', 'warning'); continue; }
                   if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before restarting', 'warning'); continue; }
-                  const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${(launchedServices ?? []).map((name) => `- ${name}`).join('\n') || '(none known)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.map((service) => `- ${service.name}`).join('\n')}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
+                  const preview = `Stop ALL services from this gateway's launch snapshot (some may already be stopped):\n${(launchedServices ?? []).map((name) => `- ${name}`).join('\n') || '(none known)'}\n\nConfigured for NEW launches (unactivated packages stay stopped):\n${config.services.filter((service) => service.enabled !== false).map((service) => `- ${service.name}`).join('\n') || '(none enabled)'}\n\nThis CANCELS any active or queued background jobs. Job count is unknown; finish work first or decline.\n\nOther Pi sessions are not restarted. New processes use the active package versions/configuration at startup; another session may change activation. The gateway run ID changes; saved conversation selection is restored.\n\nA startup failure leaves this gateway disconnected. Roll back and retry explicitly; there is no automatic restart or fallback.`;
                   if (!await confirmSettings(ctx, preview, { signal, timeout: 300_000, title: 'Restart gateway services?', actionLabel: 'stop and restart' }) || signal.aborted) continue;
                   if (!ctx.isIdle()) { ctx.ui.notify('Agent became busy; restart was cancelled', 'warning'); continue; }
+                  // Validate enabled-service environment variables before stopping healthy children.
+                  await loadConfig(configPath);
                   await close(true);
                   if (!shuttingDown) { await start(ctx, true); ctx.ui.notify('Gateway services restarted', 'info'); }
                 }
