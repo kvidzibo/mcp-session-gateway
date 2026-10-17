@@ -48,6 +48,7 @@ const overlay = { overlay: true, overlayOptions: { width: '100%' as const, ancho
 
 // Browsing/editing stays in Pi's compact inline area; confirmations remain
 // isolated so editor widgets/footers cannot hide required review controls.
+const inlineHeight = (rows: number) => Math.max(1, rows - 6); // Leave room for Pi's footer and service counters.
 export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: DialogOptions): Promise<string | undefined> {
   if (options.signal.aborted || !choices.length) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
@@ -75,7 +76,7 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
       set focused(value: boolean) { input.focused = value; },
       render(width: number) {
         geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
-        const height = Math.max(1, tui.terminal.rows - 2);
+        const height = inlineHeight(tui.terminal.rows);
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 7));
@@ -170,7 +171,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
       set focused(value: boolean) { input.focused = value; },
       render(width: number) {
         geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
-        const height = Math.max(1, tui.terminal.rows - 2);
+        const height = inlineHeight(tui.terminal.rows);
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);

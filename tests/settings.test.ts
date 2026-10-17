@@ -208,10 +208,10 @@ test('operator settings stay private, route by service, and require confirmed sc
       const terminal = {rows:18,columns:80};
       const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
       try {
-        for (let i=0;i<20;i++) { assert.ok(panel.render(78).length <= terminal.rows-2); panel.handleInput('\u001b[B'); }
+        for (let i=0;i<20;i++) { assert.ok(panel.render(78).length <= terminal.rows-6); panel.handleInput('\u001b[B'); }
         assert.ok(panel.render(78).some((line: string) => line.includes('service-20')));
-        terminal.rows=10;
-        assert.ok(panel.render(78).length <= 8, 'Tiny selectors fit their entire chrome');
+        terminal.rows=14;
+        assert.ok(panel.render(78).length <= 8, 'Short selectors leave room for footer/widgets');
         panel.handleInput('\r'); return answer;
       } finally {panel.dispose();}
     }}} as unknown as ExtensionContext, 'Many services', Array.from({length:35}, (_, i) => `service-${i} ${'wrapped label '.repeat(30)}`), dialog);
@@ -236,12 +236,12 @@ test('operator settings stay private, route by service, and require confirmed sc
     const inputValue = await inputSettings({ui:{custom: async (factory: Function, options?: {overlay:boolean}) => {
       assert.equal(options, undefined, 'Settings input uses the inline area');
       let answer: unknown;
-      const terminal = {rows:10,columns:80};
+      const terminal = {rows:14,columns:80};
       const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
       try {
         panel.focused=true;
         assert.equal(panel.focused,true);
-        assert.ok(panel.render(78).length <= 8, 'Input fits independently of footer/widgets');
+        assert.ok(panel.render(78).length <= 8, 'Input leaves room for footer/widgets');
         panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput('"edited"'); panel.handleInput('\r');
         return answer;
       } finally {panel.dispose();}

@@ -20,7 +20,7 @@ test('settings search filters immediately, preserves original choice identity an
     const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; completed = true; });
     const render = () => {
       const lines: string[] = panel.render(terminal.columns);
-      assert.ok(lines.length <= terminal.rows - 2);
+      assert.ok(lines.length <= terminal.rows - 6, 'Leave room for footer and service counters');
       assert.ok(lines.every((line) => visibleWidth(line) <= terminal.columns));
       assert.ok(lines.some((line) => line.includes('Enter') && line.includes('Esc')), 'Selection and Back hints remain visible');
       return lines.join('\n');
@@ -33,7 +33,7 @@ test('settings search filters immediately, preserves original choice identity an
       assert.match(render(), /1401\. Grok fast/);
       assert.doesNotMatch(render(), /provider\/model-/);
       panel.handleInput(nextKey);
-      terminal.rows = 10; terminal.columns = 28;
+      terminal.rows = 14; terminal.columns = 28;
       assert.match(render(), /→ 1451\. Grok reasoning/);
       panel.handleInput('nomatch');
       assert.match(render(), /No matching choices/);
@@ -41,6 +41,12 @@ test('settings search filters immediately, preserves original choice identity an
       assert.equal(completed, false, 'Enter cannot select a hidden stale result');
       panel.handleInput('\u0001'); panel.handleInput('\u000b');
       assert.match(render(), /→ 1\. Model 0/);
+      terminal.rows = 10;
+      assert.match(panel.render(terminal.columns).join('\n'), /Enlarge terminal/);
+      panel.handleInput(confirmKey);
+      assert.equal(completed, false, 'Undersized inline settings cannot select');
+      terminal.rows = 14;
+      render();
       panel.handleInput('grok reasoningX'); panel.handleInput('\u007f');
       // Input and Enter can arrive before the scheduled repaint.
       panel.handleInput(confirmKey);
