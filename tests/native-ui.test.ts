@@ -18,20 +18,24 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   const fixture = `
     import {Server} from '@modelcontextprotocol/sdk/server/index.js';
     import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
-    import {ListResourcesRequestSchema,ReadResourceRequestSchema,ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js';
+    import {ListResourcesRequestSchema,ReadResourceRequestSchema,ListToolsRequestSchema,McpError} from '@modelcontextprotocol/sdk/types.js';
     import {z} from 'zod';
     const server = new Server({name:'ui-test',version:'1'}, {capabilities:{tools:{},resources:{},experimental:{'native-ui-v1':{}}}});
-    const view = (state={}) => ({version:1,title:'Remote settings',revision:'r1',state,controls:[{id:'save',kind:'text',label:'Label',value:state.label??'Original',confirm:'Save label?'}],footer:[{text:'Remote footer'}]});
+    const view = (state={},scoped=false) => ({version:1,title:'Remote settings',revision:'r1',state,controls:[{id:'save',kind:'text',label:'Label',value:state.label??'Original',confirm:'Save label?',...(scoped?{revision:'action1'}:{})}],footer:[{text:'Remote footer'}]});
     server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[]}));
     server.setRequestHandler(ListResourcesRequestSchema,async()=>({resources:[{uri:'test://root',name:'Remote',mimeType:'application/vnd.mcp-native-ui+json'}]}));
-    server.setRequestHandler(ReadResourceRequestSchema,async r=>({contents:[{uri:'test://root',mimeType:'application/vnd.mcp-native-ui+json',text:JSON.stringify(view(r.params._meta?.['native-ui/context']?.state))}]}));
+    server.setRequestHandler(ReadResourceRequestSchema,async r=>({contents:[{uri:'test://root',mimeType:'application/vnd.mcp-native-ui+json',text:JSON.stringify(view(r.params._meta?.['native-ui/context']?.state,r.params._meta?.['native-ui/features']?.actionRevisions===true))}]}));
     server.setRequestHandler(z.object({method:z.literal('native-ui/action'),params:z.any()}),async r=>{
       if(r.params.action==='disconnect') process.exit(0);
       if(r.params.uri!=='test://root'||r.params.action!=='save') throw Error('Wrong routing');
-      if(r.params.revision!=='r1') throw Error('Stale revision');
+      const scoped=r.params._meta?.['native-ui/features']?.actionRevisions===true;
+      if(r.params.revision!==(scoped?'action1':'r1')) throw Error('Stale revision');
+      if(r.params.value==='stale') throw new McpError(-33003,'View changed; refresh before acting',{'native-ui/action':{status:'not-applied',reason:'stale-view'}});
+      if(r.params.value==='unknown') throw Error('View changed; refresh before acting');
+      if(r.params.value==='malformed') throw new McpError(-33003,'View changed; refresh before acting',{'native-ui/action':{status:'not-applied',reason:'other'}});
       if(r.params._meta['local-stdio-mcp-gateway/serviceId']!=='demo') throw Error('Missing service identity');
       if(r.params._meta['native-ui/context'].conversationId!=='conversation') throw Error('Wrong conversation');
-      return {view:view({label:r.params.value})};
+      return {view:view({label:r.params.value},scoped)};
     });
     await server.connect(new StdioServerTransport());
   `;
@@ -44,7 +48,7 @@ test('native UI routes privately, renders safely, persists host state, and rejec
   let rounds = 0, confirms = 0;
   const updated = ' \tUpdated\n ' + ' '.repeat(80) + 'tail';
   let inputValue: string | undefined = JSON.stringify(updated);
-  let onInput = () => {};
+  let onInput: () => void | Promise<void> = () => {};
   const ctx: any = { mode: 'tui', hasUI: true, sessionManager: { getSessionId: () => 'conversation', getBranch: () => entries }, ui: {
     setStatus: (key: string, value: string) => statuses.set(key, value), notify: (message: string) => assert.fail(message),
     confirm: async () => assert.fail('Native action confirmations must use the scrollable review'),
@@ -53,13 +57,13 @@ test('native UI routes privately, renders safely, persists host state, and rejec
       const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: unknown) => { result = value; });
       const rendered = component.render(80).join('\n');
       if (rendered.includes('JSON value')) {
-        onInput();
+        await onInput();
         if (inputValue !== undefined) { component.handleInput('\x01'); component.handleInput('\x0b'); component.handleInput(inputValue); }
         component.handleInput('\r');
       } else if (rendered.includes('Save label?')) {
         confirms++;
         const disclosed = rendered.replace(/\n/g, '');
-        assert.ok(disclosed.includes('\\u0020'.repeat(80)), 'Every significant space must remain explicit across wrapping');
+        if (inputValue === JSON.stringify(updated)) assert.ok(disclosed.includes('\\u0020'.repeat(80)), 'Every significant space must remain explicit across wrapping');
         assert.match(rendered, /Enter confirm/);
         component.handleInput('\r');
         assert.equal(result, true);
@@ -105,6 +109,58 @@ test('native UI routes privately, renders safely, persists host state, and rejec
     assert.equal((host.meta('demo')['native-ui/context'] as any).state.label, updated);
     const uri = 'gateway-resource://demo/test%3A%2F%2Froot';
     const originalRead = client.readResource.bind(client);
+    // Exercise actual proxy errors and edits held across unrelated/relevant updates.
+    const notices: string[] = [];
+    const originalNotify = ctx.ui.notify;
+    ctx.ui.notify = (message: string) => notices.push(message);
+    let generation = 0, scopedRevision: string | undefined = 'action1', scopedActions = 0;
+    client.readResource = async (...args) => {
+      const result = await originalRead(...args);
+      const item = result.contents[0];
+      if ('text' in item) {
+        const next = JSON.parse(item.text);
+        next.revision = `view-${generation}`;
+        next.controls[0].revision = scopedRevision;
+        item.text = JSON.stringify(next);
+      }
+      return result;
+    };
+    client.request = ((request: any, ...args: any[]) => {
+      if (request.method === 'native-ui/action') scopedActions++;
+      return (wireRequest as any)(request, ...args);
+    }) as typeof client.request;
+    onInput = async () => { generation++; await host.refresh(uri); };
+    rounds = 0; inputValue = JSON.stringify('Scoped save');
+    await host.open('demo', ctx);
+    assert.equal(scopedActions, 1, 'Unrelated full-view changes must not reject an unchanged control revision');
+    assert.equal(notices.length, 0);
+    const capabilities = client.getServerCapabilities.bind(client);
+    client.getServerCapabilities = () => ({ ...capabilities(), experimental: { 'native-ui-v1': {} } });
+    assert.equal(host.meta('demo')['native-ui/features'], undefined, 'An older gateway must not negotiate unsupported response fields');
+    scopedRevision = undefined;
+    rounds = 0; scopedActions = 0;
+    await host.open('demo', ctx);
+    assert.equal(scopedActions, 0, 'Legacy controls retain the full-view guard');
+    assert.ok(notices.pop()?.includes('Action not applied.'));
+    client.getServerCapabilities = capabilities;
+    scopedRevision = 'action1';
+    onInput = async () => { scopedRevision = 'changed'; await host.refresh(uri); };
+    rounds = 0;
+    await host.open('demo', ctx);
+    assert.equal(scopedActions, 0, 'Relevant control changes are rejected before dispatch');
+    assert.ok(!notices.pop()?.includes('may have committed'));
+    onInput = () => {}; scopedRevision = 'action1';
+    for (const value of ['stale', 'unknown', 'malformed']) {
+      rounds = 0; scopedActions = 0; inputValue = JSON.stringify(value);
+      await host.open('demo', ctx);
+      assert.equal(scopedActions, 1, 'Failed actions must never be replayed');
+      const notice = notices.pop()!;
+      assert.equal(notice.includes('may have committed'), value !== 'stale', 'Only structured pre-write conflicts are definitely rejected');
+      if (value === 'stale') assert.match(notice, /Action not applied: view changed/);
+    }
+    ctx.ui.notify = originalNotify;
+    client.request = wireRequest; client.readResource = originalRead;
+    onInput = () => {}; inputValue = undefined;
     let release!: () => void, started!: () => void, reads = 0;
     const held = new Promise<void>((resolve) => { release = resolve; });
     const reading = new Promise<void>((resolve) => { started = resolve; });

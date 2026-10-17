@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FooterActions } from './footer-actions.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { confirmSettings, inputSettings } from './settings.js';
-import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
+import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
 const transferKey = Symbol.for('gateway.native-ui.new-session');
@@ -151,7 +151,8 @@ export class NativeUI {
 
   meta(service: string): Record<string, unknown> {
     if (!this.contexts.has(service)) this.contexts.set(service, randomUUID());
-    return { [UI_CONTEXT]: ContextSchema.parse({
+    const scoped = ActionRevisionFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
+    return { ...(scoped ? { [UI_FEATURES]: { actionRevisions: true } } : {}), [UI_CONTEXT]: ContextSchema.parse({
       conversationId: this.ctx?.sessionManager?.getSessionId() ?? this.ephemeralId,
       contextId: this.contexts.get(service),
       state: this.states.get(service) ?? {},
@@ -174,7 +175,7 @@ export class NativeUI {
     this.bridge?.clear(service);
     if (ctx?.mode !== 'tui') return;
     ctx.ui.setStatus(`gateway-ui:${service}`, footerText(view, truncateToWidth, (action) => this.bridge?.link(service, () => this.interact(async () => {
-      if (epoch !== this.epoch || this.views.get(uri)?.revision !== view.revision) return false;
+      if (epoch !== this.epoch || this.resources.get(service) !== uri) return false;
       try {
         const control = view.controls.find((c) => c.id === action && c.kind === 'action');
         if (!control) return false;
@@ -221,14 +222,25 @@ export class NativeUI {
     if (uri) await this.refresh(uri);
   }
 
+  private actionCurrent(uri: string, view: NativeView, picked: NativeControl): boolean {
+    const current = this.views.get(uri);
+    const control = current?.controls.find((item) => item.id === picked.id && item.kind === picked.kind);
+    if (!current || !control) return false;
+    return picked.revision !== undefined && control.revision !== undefined
+      ? picked.revision === control.revision
+      : picked.revision === control.revision && current.revision === view.revision;
+  }
+
   private async dispatch(uri: string, view: NativeView, picked: NativeControl, value: NativeControl['value'], ctx: ExtensionContext, epoch: number): Promise<boolean> {
     const service = serviceOf(uri);
+    let attempted = false;
     try {
       const result = await this.serial(service, async () => {
-        if (epoch !== this.epoch || this.resources.get(service) !== uri || this.views.get(uri)?.revision !== view.revision) throw new Error('View changed or disconnected; refresh before acting');
+        if (epoch !== this.epoch || this.resources.get(service) !== uri || !this.actionCurrent(uri, view, picked)) throw new Error('View changed or disconnected; refresh before acting');
         if (typeof value === 'string') editorText(value);
+        attempted = true;
         const result = await this.client().request({ method: 'native-ui/action', params: {
-          uri, action: picked.id, revision: view.revision, ...(value === undefined ? {} : { value }), _meta: this.meta(service),
+          uri, action: picked.id, revision: picked.revision ?? view.revision, ...(value === undefined ? {} : { value }), _meta: this.meta(service),
         } }, ActionResultSchema, this.options());
         if (epoch !== this.epoch || this.resources.get(service) !== uri) throw new Error('Gateway context changed during action');
         this.apply(uri, result.view);
@@ -244,7 +256,10 @@ export class NativeUI {
       return true;
     } catch (error) {
       if (epoch === this.epoch) {
-        ctx.ui.notify(`${clean(String(error))}\nThe action may have committed. Refresh before retrying.`, 'error');
+        const stale = error instanceof McpError && error.code === UI_STALE_ACTION && StaleActionDataSchema.safeParse(error.data).success;
+        ctx.ui.notify(stale
+          ? 'Action not applied: view changed. Refresh and review before retrying.'
+          : `${clean(String(error))}\n${attempted ? 'The action may have committed.' : 'Action not applied.'} Refresh before retrying.`, stale || !attempted ? 'warning' : 'error');
         await this.refresh(uri);
       }
       return false;
@@ -260,6 +275,7 @@ export class NativeUI {
     const uri = this.resources.get(service);
     if (!uri) return navigation ? 'features' : undefined;
     await this.refresh(uri);
+    let selectedControlId: string | undefined;
     while (epoch === this.epoch) {
       const view = this.views.get(uri);
       if (!view) return navigation ? 'features' : undefined;
@@ -267,7 +283,7 @@ export class NativeUI {
         let list: SelectList | undefined;
         let visibleRows = 0;
         const makeList = (rows: number) => {
-          const selected = view.controls.findIndex((control) => control.id === list?.getSelectedItem()?.value);
+          const selected = view.controls.findIndex((control) => control.id === (list?.getSelectedItem()?.value ?? selectedControlId));
           list = new SelectList(view.controls.map((control) => ({
           value: control.id,
           label: `${control.icon ? `${oneLine(control.icon)} ` : ''}${oneLine(control.label)}${control.kind !== 'action' ? `: ${oneLine(String(control.value ?? ''))}` : ''}`,
@@ -278,12 +294,12 @@ export class NativeUI {
         }, { minPrimaryColumnWidth: 20, maxPrimaryColumnWidth: 80,
           truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth),
         });
-        list.onSelect = (item) => done(view.controls.find((c) => c.id === item.value));
+        list.onSelect = (item) => { selectedControlId = item.value; done(view.controls.find((c) => c.id === item.value)); };
           list.onCancel = () => done(undefined);
           list.setSelectedIndex(Math.max(0, selected));
           visibleRows = rows;
         };
-        const changed = () => done('refresh');
+        const changed = () => { selectedControlId = list?.getSelectedItem()?.value ?? selectedControlId; done('refresh'); };
         this.changed = changed;
         return {
           render(width: number) {
