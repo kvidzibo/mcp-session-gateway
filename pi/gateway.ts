@@ -102,7 +102,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         const link = footerBridge?.link(service, async () => {
           renderFooter();
           if (footerContext !== ctx || shuttingDown) return false;
-          try { await gatewayCommand({ settings: service }).handler('', ctx); return true; }
+          try { await gatewayCommand({ service }).handler('', ctx); return true; }
           finally { renderFooter(); }
         });
         if (link) serviceLinks.set(service, link);
@@ -343,7 +343,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  const gatewayCommand = (initialAction?: 'services' | { settings: string }) => ({
+  const gatewayCommand = (initialAction?: 'services' | { service: string }) => ({
     description: initialAction ? 'Open this gateway’s Services menu. No model turn.' : 'Open gateway services, packages and connection menus. No model turn.',
     handler: async (_args: string, ctx: ExtensionContext) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
@@ -359,12 +359,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         try { await openSettings(service, ctx); }
         catch (error) { if (!signal.aborted) ctx.ui.notify(clean(`Settings unavailable: ${String(error)}`), 'error'); }
       };
-      let nextAction = connected && initialAction === 'services' ? initialAction : undefined;
+      let nextAction = connected && initialAction ? 'services' : undefined;
+      let directService = typeof initialAction === 'object' ? initialAction.service : undefined;
       try {
-        if (typeof initialAction === 'object') {
-          await serviceSettings(initialAction.settings);
-          return;
-        }
         while (!signal.aborted) {
           let autoUpdate: boolean | undefined, autoUpdateError = '';
           let menuDisplay: Display | undefined, displayError = '';
@@ -395,9 +392,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
               while (!signal.aborted && connected) {
                 const config = await loadConfig(configPath);
                 const names = [...new Set([...config.services.map((s) => s.name), ...(launchedServices ?? [])])];
-                const service = await menu.choose(['Gateway', 'Services'], 'Choose a service · listed does not mean running',
+                const service = directService ?? await menu.choose(['Gateway', 'Services'], 'Choose a service · listed does not mean running',
                   names.map((name) => ({ id: name, label: name, description: 'Enter opens the app when available; Tab opens settings. Listed does not mean running.' })),
                   { label: 'settings', action: serviceSettings });
+                directService = undefined;
                 if (!service) break;
                 let openApp = native.has(service);
                 while (!signal.aborted && connected) {
@@ -438,6 +436,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                     }
                   }
                 }
+                // A counter opens one service, not the parent menus on close.
+                if (typeof initialAction === 'object') return;
               }
             } else if (action === 'update-all') {
               if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before updating packages', 'warning'); continue; }

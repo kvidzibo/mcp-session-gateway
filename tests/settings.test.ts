@@ -146,7 +146,7 @@ test('operator settings stay private, route by service, and require confirmed sc
       await ext.commands.get('gateway').handler('', ctx);
       assert.equal(confirmations, 2);
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
-      await t.test('Full-display service clicks open only their settings, renew links, and reject busy dialogs', async () => {
+      await t.test('Full-display service clicks open their screen without requiring settings, renew links, and reject busy dialogs', async () => {
         const link = (name: string) => [...countsWidget!.render(140).join('\n').matchAll(/\x1b\]8;;(pi-gateway-action:[^\x07]+)\x07([^\x1b]+)/g)]
           .find((match) => match[2].startsWith(name + ' '))![1];
         const screens: string[] = [];
@@ -157,8 +157,9 @@ test('operator settings stay private, route by service, and require confirmed sc
           const panel = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, ctx.ui.theme, {}, (value: unknown) => { answer = value; });
           try {
             const lines: string[] = panel.render(98);
-            assert.ok(lines.some((line) => line.includes('Reusable service settings')));
-            assert.ok(!lines.some((line) => line.startsWith('Gateway')));
+            assert.match(lines[1], /^Gateway › Services › (alpha|beta|disabled)$/);
+            assert.ok(lines.some((line) => line.includes('Available service features')));
+            assert.ok(!lines.some((line) => line.includes('Reusable service settings')));
             screens.push(lines.join('\n'));
             if (opened) await new Promise<void>((resolve) => { release = resolve; opened!(); });
             panel.handleInput('\x1b');
@@ -168,8 +169,10 @@ test('operator settings stay private, route by service, and require confirmed sc
         for (const width of [1, 12, 24, 80, 140]) assert.ok(countsWidget!.render(width).every((line) => visibleWidth(line) <= width));
         for (const name of ['alpha', 'beta', 'alpha']) {
           const old = link(name);
+          const before = screens.length;
           await click(old);
-          assert.match(screens.at(-1)!, new RegExp(`enabled: ${name === 'alpha' ? 'true' : 'false'}`));
+          assert.equal(screens.length, before + 1, 'Closing returns to the editor, not parent menus');
+          assert.ok(screens.at(-1)!.includes(`Gateway › Services › ${name}`));
           await assert.rejects(click(old), /Action unavailable/);
         }
         const ready = new Promise<void>((resolve) => { opened = resolve; });
@@ -179,11 +182,14 @@ test('operator settings stay private, route by service, and require confirmed sc
         assert.equal(notices.at(-1), 'Finish the current gateway dialog first');
         opened = undefined; release!(); await pending;
         const before = screens.length;
+        const noticesBefore = notices.length;
         await click(link('disabled'));
-        assert.equal(screens.length, before);
-        assert.match(notices.at(-1)!, /Settings unavailable/);
+        assert.equal(screens.length, before + 1);
+        assert.ok(screens.at(-1)!.includes('Gateway › Services › disabled'));
+        assert.match(screens.at(-1)!, /Settings \(unavailable\)/);
+        assert.equal(notices.length, noticesBefore, 'No settings error just for opening a service');
         await click(link('beta'));
-        assert.equal(screens.length, before + 1, 'Failure releases dialog ownership');
+        assert.equal(screens.length, before + 2, 'Closing releases dialog ownership');
         const stale = link('alpha');
         await dispatch('session_shutdown');
         assert.equal(countsWidget, undefined);
