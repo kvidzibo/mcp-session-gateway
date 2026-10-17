@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createRequire } from 'node:module';
+import { FooterActions } from '../pi/footer-actions.js';
 import { NativeUI } from '../pi/native-ui.js';
 import { ViewSchema } from '../src/native-ui.js';
 const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
@@ -120,5 +121,49 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
     const base = view('alpha', {});
     assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', action: 'missing' }] }));
     assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', action: 'increment', url: 'https://example.com' }] }));
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', secondaryAction: 'increment' }] }));
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', action: 'increment', secondaryAction: 'missing' }] }));
   } finally { await host.stop(); }
+});
+
+test('right-click dispatches only the alternate control and shares single-use consent with left-click', async () => {
+  const statuses = new Map<string, string>(), actions: string[] = [];
+  const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => [], getSessionId: () => 'secondary', getSessionFile: () => undefined },
+    ui: { setStatus: (key: string, value: string) => statuses.set(key, value), notify() {} } };
+  const view = { version: 1, title: 'Suggestion', revision: 'r1', state: {},
+    controls: [{ id: 'accept', kind: 'action', label: 'Accept' }, { id: 'dismiss', kind: 'action', label: 'Dismiss' }],
+    footer: [{ text: '+', action: 'accept', secondaryAction: 'dismiss' }] };
+  const client: any = {
+    getServerCapabilities: () => ({ experimental: { 'native-ui-v1': { footerSecondaryActions: true } } }),
+    listResources: async () => ({ resources: [{ uri: 'gateway-resource://demo/root', mimeType: 'application/vnd.mcp-native-ui+json' }] }),
+    readResource: async () => ({ contents: [{ mimeType: 'application/vnd.mcp-native-ui+json', text: JSON.stringify(view) }] }),
+    request: async (request: any) => { actions.push(request.params.action); return { view }; },
+  };
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => run());
+  const link = () => statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b]+/)![0];
+  const bridge = new FooterActions();
+  try {
+    await host.start(ctx, '/secondary-config');
+    assert.deepEqual(host.meta('demo')['native-ui/features'], { footerSecondaryActions: true }, 'Features negotiate independently');
+    const original = link();
+    await click(original, true);
+    assert.deepEqual(actions, ['dismiss'], 'Right-click must never accept');
+    await assert.rejects(click(original));
+    await click(link());
+    assert.deepEqual(actions, ['dismiss', 'accept']);
+    const race = link();
+    const results = await Promise.allSettled([click(race), click(race, true)]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    assert.equal(actions.length, 3);
+    const stale = link();
+    await host.refresh('gateway-resource://demo/root');
+    await assert.rejects(click(stale, true));
+    await bridge.start();
+    let primary = 0;
+    const primaryOnly = bridge.link('test', async () => { primary++; return true; })!;
+    await assert.rejects(click(primaryOnly, true));
+    assert.equal(primary, 0, 'A right-click without an alternate must not invoke primary');
+    await click(primaryOnly);
+    assert.equal(primary, 1);
+  } finally { await host.stop(); await bridge.stop(); }
 });

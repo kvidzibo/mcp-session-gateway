@@ -11,7 +11,7 @@ export class FooterActions {
   private starting?: Promise<void>;
   private stopping?: Promise<void>;
   private clients = new Set<Socket>();
-  private actions = new Map<string, { scope: string; invoke: () => Promise<boolean> }>();
+  private actions = new Map<string, { scope: string; invoke: () => Promise<boolean>; secondary?: () => Promise<boolean> }>();
 
   start(): Promise<void> {
     return this.starting ??= this.listen();
@@ -34,16 +34,18 @@ export class FooterActions {
       client.on('data', (chunk: Buffer) => {
         if (dispatched || this.closed) return;
         input += chunk.toString('utf8');
-        if (Buffer.byteLength(input) > 33) { client.destroy(); return; }
+        if (Buffer.byteLength(input) > 43) { client.destroy(); return; }
         if (!input.includes('\n')) return;
         dispatched = true;
-        const token = input.slice(0, -1);
-        const entry = /^[0-9a-f]{32}\n$/.test(input) ? this.actions.get(token) : undefined;
-        if (!entry) { client.end('rejected\n'); return; }
+        const match = /^([0-9a-f]{32})( secondary)?\n$/.exec(input);
+        const token = match?.[0] === input ? match[1] : undefined;
+        const entry = token ? this.actions.get(token) : undefined;
+        const invoke = match?.[2] ? entry?.secondary : entry?.invoke;
+        if (!entry || !token || !invoke) { client.end('rejected\n'); return; }
         // Consume before dispatch: parallel clicks cannot duplicate a write.
         this.actions.delete(token);
         client.setTimeout(0); // Human confirmations have no inactivity deadline.
-        void Promise.resolve().then(() => this.closed ? false : entry.invoke()).then(
+        void Promise.resolve().then(() => this.closed ? false : invoke()).then(
           (accepted) => { if (!client.destroyed) client.end(accepted ? 'accepted\n' : 'rejected\n'); },
           () => { if (!client.destroyed) client.end('rejected\n'); },
         ); // Accepted operations drain even when a helper disconnects.
@@ -58,10 +60,10 @@ export class FooterActions {
   clear(scope?: string): void {
     for (const [token, entry] of this.actions) if (scope === undefined || entry.scope === scope) this.actions.delete(token);
   }
-  link(scope: string, invoke: () => Promise<boolean>): string | undefined {
+  link(scope: string, invoke: () => Promise<boolean>, secondary?: () => Promise<boolean>): string | undefined {
     if (this.closed || !this.file || !this.server?.listening || this.actions.size >= 4096) return;
     const token = randomBytes(16).toString('hex');
-    this.actions.set(token, { scope, invoke });
+    this.actions.set(token, { scope, invoke, secondary });
     return `pi-gateway-action://${basename(this.file, '.sock')}/${token}`;
   }
   stop(): Promise<void> {

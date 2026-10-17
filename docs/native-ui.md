@@ -33,6 +33,14 @@ can install an equivalent protocol handler or select the service in **`/pi-servi
 The helper signals a private local socket; it never runs a service command itself.
 Installation does not change terminal configuration.
 
+For alternate footer actions, also include [`pi/kitty/mouse.conf`](../pi/kitty/mouse.conf)
+in `kitty.conf`, replacing its absolute kitten path, then reload Kitty. Right-click
+invokes the alternate action in regular and fullscreen mode. It does nothing on
+ordinary links or controls without an alternate; it never falls back to the primary
+action. The mapping reserves right-button release for this helper (including outside
+links); omit it if that conflicts with your terminal/application bindings. App-menu
+actions remain available without the mapping.
+
 ## Service contract
 
 Advertise `capabilities.experimental["native-ui-v1"] = {}`. List exactly one root
@@ -65,7 +73,10 @@ null. IDs must be unique. The exact schemas and limits live in
 properties, unknown versions, duplicate IDs, and unsupported controls fail closed.
 
 A footer item may specify `action` referencing an existing `kind: "action"`
-control, or `url` for a safe HTTP(S) link, never both. Labels/icons remain service
+control, or `url` for a safe HTTP(S) link, never both. An optional `secondaryAction`
+references another action control and requires a primary `action`; right-click uses
+that control's own confirmation and revision. Both choices share one single-use
+capability, so selecting either invalidates both. Labels/icons remain service
 owned. The host mints single-use links tied to the displayed revision and current
 session; no service can inject a socket path or executable link. Refresh, tree
 navigation, disconnect and shutdown invalidate old links. Multiple services can
@@ -95,6 +106,15 @@ scoped revisions to the action's target, displayed values/options, confirmation
 semantics, and relevant persistence dependencies, then validate atomically before
 writing. Read-only actions can use fresh data. Omit control revisions for legacy
 hosts, including in action-result views, so their strict schemas remain valid.
+
+Gateways supporting alternate footer actions advertise
+`capabilities.experimental["native-ui-v1"].footerSecondaryActions = true`.
+Supporting hosts independently negotiate
+`_meta["native-ui/features"].footerSecondaryActions = true`. Services must omit
+`secondaryAction` without this feature, including in action responses, because
+older strict schemas reject unknown fields. Keep alternate actions in the app menu
+as a keyboard/older-host fallback. This flag indicates protocol support, not that a
+terminal mouse mapping is installed.
 
 A service that rejects a stale action **before any persistent effect** may throw
 MCP error `-33003` with data

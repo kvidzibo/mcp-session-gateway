@@ -14,7 +14,7 @@ function target(value) {
   }
   return { file, token: match[2] };
 }
-function click(value) {
+function click(value, secondary = false) {
   let parsed;
   try { parsed = target(value); } catch { return Promise.reject(new Error('Action unavailable')); }
   return new Promise((resolve, reject) => {
@@ -23,14 +23,16 @@ function click(value) {
     const finish = (accepted) => { if (done) return; done = true; clearTimeout(timer); client.destroy(); accepted ? resolve(true) : reject(new Error('Action unavailable')); };
     // The host owns accepted actions; helper exit cannot cancel an in-flight write.
     const timer = setTimeout(() => finish(false), 300_000);
-    client.on('connect', () => client.write(`${parsed.token}\n`));
+    client.on('connect', () => client.write(`${parsed.token}${secondary ? ' secondary' : ''}\n`));
     client.on('data', (chunk) => { response += chunk.toString('utf8'); if (response.length > 32 || response.includes('\n')) finish(response === 'accepted\n'); });
     client.on('error', () => finish(false));
     client.on('end', () => finish(false));
   });
 }
 if (require.main === module) {
-  if (process.argv.length !== 3) { console.error('Usage: footer-click.cjs <action URL>'); process.exitCode = 2; }
-  else click(process.argv[2]).catch(() => { console.error('Gateway action unavailable; finish any dialog and reopen the service app.'); process.exitCode = 1; });
+  const args = process.argv.slice(2), secondary = args[0] === '--secondary';
+  if (secondary) args.shift();
+  if (args.length !== 1) { console.error('Usage: footer-click.cjs [--secondary] <action URL>'); process.exitCode = 2; }
+  else click(args[0], secondary).catch(() => { console.error('Gateway action unavailable; finish any dialog and reopen the service app.'); process.exitCode = 1; });
 }
 module.exports = { click };
