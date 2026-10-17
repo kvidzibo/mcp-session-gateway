@@ -2,51 +2,44 @@
 
 [Back to README](../README.md) · [Gateway reference](reference.md)
 
-These recipes use the [Pi adapter setup](../README.md#connect-pi). Merge service
-entries into your existing `mcpServers` map; do not replace other services.
-Children receive only configured environment variables plus SDK defaults—see
-[environment configuration](reference.md#configuration).
+Use the [Pi adapter](../README.md#connect-pi). Merge entries into your existing `mcpServers` map.
+Children receive SDK defaults and configured `env`, not the full parent environment. Private menus
+do not create model turns; explicit tool results still reach the model. UI routing is not a secrecy
+boundary.
 
 ## Browser service
 
-[pi-browser 0.6.0+](https://github.com/kvidzibo/pi-browser/blob/main/docs/mcp.md)
-provides isolated Chromium as a stdio MCP service.
+[pi-browser 0.6.0+](https://github.com/kvidzibo/pi-browser/blob/main/docs/mcp.md) provides isolated
+Chromium over stdio.
 
 ### Connect
 
-- **Managed installation:** use
-  [`gateway.browser.example.json`](../gateway.browser.example.json) after that
-  browser version is available on its `main` branch. See the
-  [package workflow](packages.md#workflow) for preparation, activation, and restart.
-- **Existing checkout:** run `npm ci && npm run build:mcp` in a tested browser
-  checkout, then configure `node /absolute/path/to/pi-browser/mcp/cli.mjs`.
+- **Managed:** use [`gateway.browser.example.json`](../gateway.browser.example.json) once the
+  required version is on `main`; follow the [package workflow](packages.md#workflow).
+- **Checkout:** run `npm ci && npm run build:mcp`, then configure `node
+  /absolute/path/to/pi-browser/mcp/cli.mjs`.
 
-First installation remains manual. Later startup updates require the explicit
-[auto-update opt-in](packages.md#automatic-startup-updates); manual preparation,
-activation, and gateway restart otherwise remain separate confirmed actions.
+First installation is manual; later startup updates require
+[opt-in](packages.md#automatic-startup-updates). Otherwise preparation, activation and restart
+remain separate confirmed actions.
 
 ### Use
 
-Discover `browser__browser` with `gateway_tools` and call it with `gateway_call`.
-Open **`/gateway` → Services → browser** for profiles, manual login, cookie-site
-selection, display modes, and logout. Cookie approval uses the gateway's
-[form-elicitation route](reference.md#approvals). Approvals and native UI actions
-are not model tool results; missing UI never grants cookie access.
+Discover `browser__browser` with `gateway_tools`; call it through `gateway_call`. **`/gateway` →
+Services → browser** opens profiles, manual login, cookie-site selection, display modes and logout.
+Cookie access uses [form approval](reference.md#approvals); missing UI never grants access.
 
-- Allow enough `timeoutMs` for consent plus startup; the example uses **180 seconds**.
-- Forward display, keyring, and agent-directory environment variables only when
-  needed; follow the browser service guide linked above.
-- Use each saved profile in **only one process**.
-- Remove the old native browser extension only after approving that migration,
-  then reload. Loading both creates independent sessions that can contend for
-  profiles; do not remove the old setup beforehand.
+- Allow consent/startup time in `timeoutMs`; the example uses **180 seconds**.
+- Forward display, keyring and agent-directory variables only as needed; see the browser guide.
+- Use each saved profile in **one process only**. Keep the old extension until migration is
+  approved, then remove it and reload; running both can contend for profiles.
 
-No browser-specific gateway code or private service socket is required.
+No browser-specific gateway code or private service socket is needed.
 
 ## Live delegate panel
 
-[pi-delegate 0.20.0+](https://github.com/kvidzibo/pi-delegate#readme) provides a live
-job resource. Add its service to your configuration:
+[pi-delegate 0.20.0+](https://github.com/kvidzibo/pi-delegate#readme) supplies the live job
+resource:
 
 ```json
 {
@@ -59,51 +52,37 @@ job resource. Add its service to your configuration:
 }
 ```
 
-To enable role settings, add the
-[settings opt-in](../README.md#child-server-settings) to this same service entry.
-Do not put a token value in configuration; the gateway generates it.
+Add [settings opt-in](../README.md#child-server-settings) to this same entry for role settings. The
+gateway generates the token; never configure its value.
 
 ### Read the panel
 
-Queued/running jobs appear automatically **above the editor**, even while the
-parent is idle. Cards show role, model/reasoning, task preview, elapsed/queue time,
-job ID, and current/recent tool activity. Small terminals show overflow counts.
+TUI cards appear **above the editor**, even while idle: role, model/reasoning, task, elapsed/queue
+time, job ID and tool activity. Small terminals show overflow counts. Completed cards remain **eight
+seconds** and mean **unverified**, not successful; disconnects show stale state and freeze clocks.
+Settings/approvals remain usable.
 
-- Completed jobs remain for **eight seconds**. Finished means **unverified**, not
-  successful.
-- Disconnects show a stale warning and freeze the last-known clock; they do not
-  imply completion.
-- For full JSON, open **`/gateway` → Services → service → Ctrl+O → Resources** when
-  the service has an app; otherwise choose Resources from its feature menu.
-- Settings and approval dialogs remain usable while the widget is visible.
+For full JSON, open the service's **Ctrl+O → Resources**, or its feature menu if no app. One gateway
+connection handles tools/UI; reads follow discovery and coalesced change notifications, clocks tick
+locally. No polling, observer server, original extension, chat messages or model turns;
+widgets/subscriptions require TUI mode.
 
-The adapter uses one gateway connection for tools and UI. It does not load the
-original delegate extension, start an observer server, poll jobs, send chat
-messages, or trigger model turns. Clock ticks are local; MCP reads happen on
-discovery and change notifications, with bursts combined.
-
-No widget or subscriptions start outside TUI mode. Models still see explicit tool
-results; resources are not a secrecy boundary. **Reload closes the connection and
-its workers; it does not detach jobs.** See the
-[resource format and limits](reference.md#resources) for client integration.
+**Reload closes workers, not detaches jobs.** See [resource limits](reference.md#resources).
 
 ## Pinote
 
-Services can provide native terminal apps through the
-[native UI v1 protocol](native-ui.md). The adapter is generic: Pinote screens and
-behavior live in Pinote's MCP server, not the gateway. Pinote MCP
-suggestions/actions require gateway **0.12.0+**.
+Pinote owns its screens through [native UI v1](native-ui.md); suggestions/actions require gateway
+**0.12.0+**.
 
 ### Connect
 
-In a Pinote checkout, install its `pi/` dependencies and Python CLI, then build the
-MCP server (Node.js 22.19+):
+Install the checkout's `pi/` dependencies and Python CLI, then build with **Node.js 22.19+**:
 
 ```bash
 npm --prefix /absolute/path/to/pinote/pi run build:mcp
 ```
 
-Register the service:
+Register:
 
 ```json
 {
@@ -117,19 +96,14 @@ Register the service:
 }
 ```
 
-Pass `PI_CODING_AGENT_DIR` and XDG overrides explicitly in service `env` if used.
-Do not also load the old Pinote-specific extension unless you deliberately want
-separate selections and duplicate UI. Keep the existing setup until its
-replacement is tested; installation does not migrate it automatically.
+Forward `PI_CODING_AGENT_DIR`/XDG overrides in `env` if used. Keep the existing setup until tested;
+installation does not migrate it. Loading the old extension too creates separate selections and
+duplicate UI.
 
 ### Open the app
 
-Use **`/pi-services` → pinote** or **`/gateway` → Services → pinote**. Services with
-an app open it directly; **Open app** is also in the service feature menu. Clicks
-and keyboard actions go directly to the service without a model turn.
-
-UI state follows the Pi conversation/branch, not the gateway UUID. Services can
-retain state across `/new`, return state from model tools, and expose clickable
-footer actions. Preview actions add display-only transcript entries; completing
-a task never resets the conversation. Terminal clicks require the
-[protocol handler](native-ui.md); the app menu is the keyboard fallback.
+Open **`/pi-services` → pinote** or **`/gateway` → Services → pinote**; **Open app** also exists in
+its feature menu. State follows the conversation/branch, not gateway UUID; services can retain it
+across `/new` or return it from model tools. Previews are display-only; task completion never resets
+the conversation. Footer actions need the [click handler](native-ui.md#terminal-clicks); the app
+menu is the fallback.
