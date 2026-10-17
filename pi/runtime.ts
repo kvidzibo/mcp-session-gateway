@@ -472,14 +472,14 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                     editable = settings.services.some((s) => s.name === service);
                   } catch (error) { settingsError = clean(`Settings discovery failed: ${String(error)}`); }
                   const app = connected && native.has(service);
-                  const selected = await menu.choose(['Gateway', 'Services', service], `Next launch: ${enabled ? 'enabled' : 'disabled'} · saved changes do not stop/start running services`, [
-                    { id: 'toggle-enabled', label: enabled ? 'Disable service' : 'Enable service', disabled: !current,
-                      description: current ? 'Save for future launches in all sessions sharing this config. Running services stay unchanged; use Connection to confirm a restart here.' : 'Service is no longer configured.' },
-                    { id: 'restart', label: 'Connection / restart…', description: 'Apply saved choices using a separately confirmed restart of ALL gateway services in this session. Active/queued jobs will be cancelled.' },
-                    { id: 'app', label: 'Open app', description: app ? 'Open the service-provided interactive menu.' : 'This service has no available native app.', disabled: !app },
-                    { id: 'settings', label: 'Settings', description: editable ? 'Edit a draft; review and confirm before saving.' : settingsError || 'Settings are not enabled or advertised by this service.', disabled: !editable },
+                  const selected = await menu.choose(['Gateway', 'Services', service], settingsError || `Next launch: ${enabled ? 'enabled' : 'disabled'} · saved changes do not stop/start running services`, [
+                    { id: 'app', label: 'Open app', description: 'Open the service-provided interactive menu.', disabled: !app },
+                    { id: 'settings', label: 'Settings', description: 'Edit a draft; review and confirm before saving.', disabled: !editable },
                     { id: 'resources', label: 'Resources', description: 'Browse read-only service data privately, without sending it to the model.', disabled: !connected },
-                  ]);
+                    { id: 'restart', label: 'Connection / restart…', description: 'Apply saved choices using a separately confirmed restart of ALL gateway services in this session. Active/queued jobs will be cancelled.' },
+                    { id: 'toggle-enabled', label: enabled ? 'Disable service' : 'Enable service', disabled: !current,
+                      description: 'Save for future launches in all sessions sharing this config. Running services stay unchanged; use Connection to confirm a restart here.' },
+                  ].filter((item) => !item.disabled));
                   if (!selected) break;
                   if (selected === 'toggle-enabled') {
                     const next = await toggleServiceEnabled(configPath, service, enabled, signal);

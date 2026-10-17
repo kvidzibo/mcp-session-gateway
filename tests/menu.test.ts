@@ -35,6 +35,13 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
         try {
           const render = () => panel.render(98) as string[];
           screens.push(render()[1]);
+          if (render()[1] === 'Gateway › Services › demo') {
+            const actions = render().filter((line) => /^(→ |  )\S/.test(line)).map((line) => line.slice(2));
+            assert.deepEqual(actions, [
+              ...(screens[0] === 'Gateway › Services' ? ['Resources'] : []),
+              'Connection / restart…', 'Disable service', 'Back',
+            ], 'Unavailable actions are hidden; recovery precedes enable/disable');
+          }
           const target = navigation.shift();
           assert.ok(target, 'No unexpected dialog');
           for (let i = 0; i < 20 && !render().includes(`→ ${target}`); i++) panel.handleInput(down);
@@ -57,9 +64,10 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
     }
     await handlers.get('session_shutdown')!({}, ctx);
     screens.length = 0;
-    navigation.push('Close');
+    navigation.push('Services', 'demo', 'Back', 'Back', 'Close');
     await commands.get('pi-services').handler('', ctx);
-    assert.deepEqual(screens, ['Gateway'], 'Disconnected shortcut keeps package/recovery navigation available');
+    assert.deepEqual(screens, ['Gateway', 'Gateway › Services', 'Gateway › Services › demo', 'Gateway › Services', 'Gateway'],
+      'Disconnected shortcut keeps service and recovery navigation available');
     await commands.get('pi-services').handler('', { ...ctx, mode: 'rpc' });
     assert.deepEqual(notices, ['Gateway menus require TUI mode']);
   } finally {
@@ -407,6 +415,10 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
         const render = () => panel.render(98) as string[];
         try {
           const lines = render();
+          if (lines[1] === 'Gateway › Services › alpha') {
+            assert.deepEqual(lines.filter((line) => /^(→ |  )\S/.test(line)).map((line) => line.slice(2)),
+              ['Open app', 'Resources', 'Connection / restart…', 'Disable service', 'Back']);
+          }
           if (lines[0] === 'Healthy app') { appsOpened++; panel.handleInput('\x0f'); }
           else if (lines[1] === 'Restart gateway services?') {
             restartAttempts++;
