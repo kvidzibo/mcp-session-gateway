@@ -24,8 +24,10 @@ export function startupSummary(data: StartupSummary, theme: Theme) {
         const name = truncateToWidth(service.name, nameWidth, '…', true);
         const detail = service.state === 'connected'
           ? `${service.tools} ${service.tools === 1 ? 'tool' : 'tools'}`
-          : service.state === 'stopped' ? 'package not activated' : 'connection closed';
-        const row = `${theme.fg(color, `${icon} ${name}  ${service.state}`)} ${theme.fg('muted', `· ${detail}`)}`;
+          : 'connection closed';
+        const state = service.state === 'stopped' ? 'disabled' : service.state;
+        const row = theme.fg(color, `${icon} ${name}  ${state}`)
+          + (service.state === 'stopped' ? '' : ` ${theme.fg('muted', `· ${detail}`)}`);
         const names = service.state === 'connected' ? service.toolNames ?? [] : [];
         if (!names.length) return [row];
         const labels = names.map((name) => clean(name).replace(/\s+/g, ' ')).join(' · ');

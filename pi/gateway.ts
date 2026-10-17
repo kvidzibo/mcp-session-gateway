@@ -60,6 +60,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   }
   function interruptCalls(): void { if (callCounts?.interrupt()) saveCounts(); }
   let footerBridge: FooterActions | undefined;
+  const disabledServices = new Set<string>();
+  let startupStatus: StartupSummary = { services: [], unavailable: true };
   let footerCount: number | undefined;
   let footerState: 'starting' | 'up' | 'off' = 'starting';
   let startupLoader: Loader | undefined;
@@ -84,6 +86,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const ctx = footerContext;
     if (!ctx || shuttingDown) return;
     footerBridge?.clear();
+    const footerServices = configuredServices.filter((name) => !disabledServices.has(name));
     const suffix = state === 'off' ? ' · off' : state === 'starting' ? ' · starting' : disconnectedServices.size ? ` · !${disconnectedServices.size}` : '';
     const text = ` MCP ${footerCount ?? '?'} ${footerCount === 1 ? 'service' : 'services'}${suffix}`;
     const styled = ctx.ui.theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text);
@@ -97,7 +100,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     const linked = (text: string) => url ? `\x1b]8;;${url}\x07${text}\x1b]8;;\x07` : text;
     if (display === 'full') {
       const serviceLinks = new Map<string, string>();
-      if (connected && state === 'up') for (const service of configuredServices) {
+      if (connected && state === 'up') for (const service of footerServices) {
         if (disconnectedServices.has(service)) continue;
         const link = footerBridge?.link(service, async () => {
           renderFooter();
@@ -111,7 +114,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
         render: (width: number) => callCountLines(width, theme,
           `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`,
-          configuredServices, callCounts?.counts ?? new Map(), disconnectedServices, serviceLinks),
+          footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks),
         invalidate() {},
       }), { placement: 'belowEditor' });
     } else {
@@ -157,14 +160,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
     const scope = resolve(String(pi.getFlag('gateway-config')));
     if (ctx.sessionManager?.getBranch().some((entry) => entry.type === 'custom' && entry.customType === 'gateway-startup' && (entry.data as { scope?: string })?.scope === scope)) return;
-    const current = client, signal = lifetime.signal;
-    let data: StartupSummary = { services: [], unavailable: true };
-    if (connected && current?.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
-      try { data = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal, timeout }); }
-      catch { /* A missing snapshot must never turn configured services into running ones. */ }
-    }
-    if (shuttingDown || current !== client || footerContext !== ctx) return;
-    if (signal.aborted || !connected) data = { services: [], unavailable: true };
+    const data = connected && !lifetime.signal.aborted ? startupStatus : { services: [], unavailable: true };
     pi.appendEntry('gateway-startup', { scope, ...data });
   }
 
@@ -245,6 +241,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     await startFooter(ctx);
     if (connected) { await native.start(ctx, resolve(configPath), reason); return; }
     disconnectedServices.clear();
+    disabledServices.clear();
+    startupStatus = { services: [], unavailable: true };
     renderFooter('starting');
     closing = undefined;
     lifetime = new AbortController();
@@ -254,7 +252,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     display = await readDisplay(configPath);
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
-    footerCount = configuredServices.length;
+    for (const service of config.services) if (service.enabled === false) disabledServices.add(service.name);
+    footerCount = configuredServices.length - disabledServices.size;
     renderFooter();
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
@@ -312,6 +311,16 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       connected = true;
       startupProgress(ctx, 'discovering tools');
       await tools(lifetime.signal); // Wait for child startup before declaring success.
+      if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
+        try {
+          startupStatus = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal: lifetime.signal, timeout });
+          for (const service of startupStatus.services) {
+            if (service.state === 'stopped') disabledServices.add(service.name);
+            if (service.state === 'disconnected') disconnectedServices.add(service.name);
+          }
+          footerCount = configuredServices.filter((name) => !disabledServices.has(name)).length;
+        } catch { /* Status is display-only; keep working connections on read failure. */ }
+      }
       startupProgress(ctx, 'loading service apps');
       await native.start(ctx, resolve(configPath), reason);
       if (ctx.mode === 'tui' && ctx.hasUI) {
