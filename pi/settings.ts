@@ -254,8 +254,13 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
       const visible = collection ? leaves.filter((f) => f.path[0] === collection.key && f.path[1] === selectedEntry) : leaves;
       const collectionValue = collection ? draft[collection.key] : undefined;
       const entries = object(collectionValue) ? Object.keys(collectionValue) : [];
+      const summary = (field: Field) => {
+        const value = at(draft, field.path);
+        return field.schema['x-multiline'] === true && typeof value === 'string' && value.length
+          ? `${value.split('\n').length} lines (${value.length} characters)` : clean(display(value));
+      };
       const labels = collection && selectedEntry === undefined ? entries.map((key) => clean(key)) : visible.map((f, i) =>
-        `${i + 1}. ${collection ? clean(String(f.schema.title ?? f.path.at(-1))) : pathLabel(f.path)}: ${clean(display(at(draft, f.path)))}${editable(f) ? '' : ' [read-only]'}`);
+        `${i + 1}. ${collection ? clean(String(f.schema.title ?? f.path.at(-1))) : pathLabel(f.path)}: ${summary(f)}${editable(f) ? '' : ' [read-only]'}`);
       const canAdd = collection && editable({ path: [collection.key], schema: { type: 'string' }, readonly:
         [document.schema, collection.schema, collection.entry].some(restricted) });
       const add = `Add ${String(collection?.entry.title ?? 'entry').toLowerCase()}`;

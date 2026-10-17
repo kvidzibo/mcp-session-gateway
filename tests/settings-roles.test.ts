@@ -79,6 +79,7 @@ test('role drafts support nested fields, toggles, multiline prompts and safe cre
         assert.match(render(), /Extensions: false/);
         assert.match(render(), /Prompt: ""/);
       }
+      if (step[0] === 'Roles › recon' && step[1][0] === '\u001b') assert.match(render(), /Prompt: 2 lines \(30 characters\)/);
       for (const key of step[1]) {
         if (key === 'REVIEW') {
           assert.equal(saves, 0);
