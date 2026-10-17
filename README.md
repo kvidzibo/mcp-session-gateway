@@ -174,11 +174,12 @@ below the editor, leaving Pi's footer and service action links intact:
  delegate ✓12 ✗0  │  pinote ✓17 ✗2  │  browser ✓0 ✗0
 ```
 
-Click a service's name or counters in Full display to open its settings directly;
-closing settings returns to the editor. Services without enabled settings report
-that settings are unavailable. Disconnected and `previous` services have no settings
-link. The keyboard fallback is **`/pi-services` → highlight service → Tab**; existing
-service-provided footer actions are unchanged.
+Click a service's name or counters in Full display to open its app, or its
+feature menu if it has no app. Settings remain a separate action and are disabled
+in the feature menu when unavailable. Closing the service screen returns to the
+editor. Disconnected and `previous` services have no service link. The keyboard
+fallback is **`/pi-services` → highlight service → Enter**; existing service-provided
+footer actions are unchanged.
 
 Nonzero successes are green (`✓`), failures red (`✗`), and in-flight calls amber
 (`…`); zeros and names are muted. Counts cover child tool dispatches in this Pi
