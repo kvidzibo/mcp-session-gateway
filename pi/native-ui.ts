@@ -4,7 +4,8 @@ import { McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.j
 import { FooterActions } from './footer-actions.js';
 import { NativeFooter } from './native-footer.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { Key, truncateToWidth } from '@earendil-works/pi-tui';
+import { GatewayMenu } from './menu.js';
 import { confirmSettings, inputSettings } from './settings.js';
 import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, FooterStylesFeaturesSchema, FooterDoubleFeaturesSchema, FooterNativeFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
@@ -312,60 +313,31 @@ export class NativeUI {
     const uri = this.resources.get(service);
     if (!uri) return navigation ? 'features' : undefined;
     await this.refresh(uri);
-    let selectedControlId: string | undefined;
-    while (epoch === this.epoch) {
+    const menu = new GatewayMenu(ctx, dialogOptions.signal);
+    while (epoch === this.epoch && !dialogOptions.signal.aborted) {
       const view = this.views.get(uri);
       if (!view) return navigation ? 'features' : undefined;
-      const picked = await ctx.ui.custom<NativeControl | 'refresh' | 'settings' | 'features' | undefined>((tui, theme, _keys, done) => {
-        let list: SelectList | undefined;
-        let visibleRows = 0;
-        const makeList = (rows: number) => {
-          const selected = view.controls.findIndex((control) => control.id === (list?.getSelectedItem()?.value ?? selectedControlId));
-          list = new SelectList(view.controls.map((control) => ({
-          value: control.id,
-          label: `${control.icon ? `${oneLine(control.icon)} ` : ''}${oneLine(control.label)}${control.kind !== 'action' ? `: ${oneLine(String(control.value ?? ''))}` : ''}`,
-          description: oneLine(control.description ?? ''),
-        })), rows, {
-          selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg('accent', s),
-          description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => theme.fg('warning', s),
-        }, { minPrimaryColumnWidth: 20, maxPrimaryColumnWidth: 80,
-          truncatePrimary: ({ text, maxWidth }) => truncateToWidth(text, maxWidth),
-        });
-        list.onSelect = (item) => { selectedControlId = item.value; done(view.controls.find((c) => c.id === item.value)); };
-          list.onCancel = () => done(undefined);
-          list.setSelectedIndex(Math.max(0, selected));
-          visibleRows = rows;
-        };
-        const changed = () => { selectedControlId = list?.getSelectedItem()?.value ?? selectedControlId; done('refresh'); };
-        this.changed = changed;
-        return {
-          render(width: number) {
-            const w = Math.max(1, width);
-            const body = clean(view.body ?? '').split('\n').flatMap((line) => wrapTextWithAnsi(line, w)).slice(0, Math.max(0, Math.min(6, tui.terminal.rows - 18)));
-            if (tui.terminal.rows < 8) return [truncateToWidth('Enlarge terminal · Esc close', w)];
-            const rows = Math.max(1, Math.min(12, tui.terminal.rows - body.length - 8 - (navigation ? 1 : 0)));
-            if (!list || rows !== visibleRows) makeList(rows);
-            const exit = navigation ? 'back' : 'close';
-            const hint = w < 40 ? `↑↓ Enter · Esc ${exit}` : w < 70 ? `↑↓ Enter · Ctrl+R refresh · Esc ${exit}` : `↑/↓ select · Enter open/edit · Ctrl+R refresh · Esc ${exit}`;
-            return [theme.fg('accent', oneLine(view.title)), ...body, '', ...list!.render(w), '',
-              ...(navigation ? [theme.fg('muted', 'Tab settings · Ctrl+O features')] : []), theme.fg('muted', hint)].map((line) => truncateToWidth(line, w));
-          },
-          handleInput(data: string) {
-            if (matchesKey(data, Key.escape)) done(undefined);
-            else if (navigation && tui.terminal.rows >= 8 && matchesKey(data, Key.tab)) done('settings');
-            else if (navigation && tui.terminal.rows >= 8 && matchesKey(data, Key.ctrl('o'))) done('features');
-            else if (matchesKey(data, Key.ctrl('r'))) done('refresh');
-            else if (tui.terminal.rows >= 8) list?.handleInput(data);
-            tui.requestRender();
-          },
-          invalidate() { list?.invalidate(); },
-          dispose: () => { if (this.changed === changed) this.changed = () => {}; },
-        };
-      }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
-      if (epoch !== this.epoch || !picked) return;
-      if (picked === 'refresh') { await this.refresh(uri); continue; }
-      if (picked === 'features') return 'features';
-      if (picked === 'settings') { await navigation!.settings(); await this.refresh(uri); continue; }
+      const refresh = new AbortController();
+      const changed = () => refresh.abort();
+      this.changed = changed;
+      let choice: string | undefined;
+      try {
+        choice = await menu.choose(navigation ? ['Gateway', 'Services', service, view.title] : [view.title], view.body ?? '',
+          view.controls.map((control) => ({
+            id: `control:${control.id}`,
+            label: `${control.icon ? `${oneLine(control.icon)} ` : ''}${oneLine(control.label)}${control.kind !== 'action' ? `: ${oneLine(String(control.value ?? ''))}` : ''}`,
+            description: control.description ?? '',
+          })), undefined, { signal: refresh.signal, shortcuts: [
+            ...(navigation ? [{ key: Key.tab, label: 'Tab settings', id: 'settings' }, { key: Key.ctrl('o'), label: 'Ctrl+O features', id: 'features' }] : []),
+            { key: Key.ctrl('r'), label: 'Ctrl+R refresh', id: 'refresh' },
+          ] });
+      } finally { if (this.changed === changed) this.changed = () => {}; }
+      if (epoch !== this.epoch || dialogOptions.signal.aborted) return;
+      if (refresh.signal.aborted || choice === 'refresh') { await this.refresh(uri); continue; }
+      if (!choice) return;
+      if (choice === 'features') return 'features';
+      if (choice === 'settings') { await navigation!.settings(); await this.refresh(uri); continue; }
+      const picked = view.controls.find((control) => `control:${control.id}` === choice)!;
       let value = picked.value;
       const title = oneLine(picked.label);
       if (picked.kind === 'text' || picked.kind === 'number') {

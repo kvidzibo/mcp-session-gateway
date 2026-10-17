@@ -237,9 +237,9 @@ test('service controls open apps; Tab opens private settings and returns to the 
   const steps = [
     ['Gateway › Services', '\t'], ['Service settings', escape],
     ['Gateway › Services', '\r'], ['Gateway › Services › demo', 'open-app'],
-    ['Service app', '\t'], ['Service settings', escape],
-    ['Service app', '\x0f'], ['Gateway › Services › demo', escape],
-    ['Gateway › Services', '\r'], ['Gateway › Services › demo', '\r'], ['Service app', escape],
+    ['Gateway › Services › demo › Service app', '\t'], ['Service settings', escape],
+    ['Gateway › Services › demo › Service app', '\x0f'], ['Gateway › Services › demo', escape],
+    ['Gateway › Services', '\r'], ['Gateway › Services › demo', '\r'], ['Gateway › Services › demo › Service app', escape],
     ['Gateway › Services', escape], ['Gateway', escape],
   ];
   const fixture = `
@@ -283,7 +283,7 @@ test('service controls open apps; Tab opens private settings and returns to the 
             const rendered: string[] = panel.render(columns - 2);
             assert.ok(rendered.length <= terminal.rows - 2);
             assert.ok(rendered.every((line) => visibleWidth(line) <= columns - 2));
-            if (step[0] === 'Gateway › Services' || step[0] === 'Service app') assert.match(rendered.join('\n'), /Tab settings/);
+            if (step[0] === 'Gateway › Services' || step[0].endsWith(' › Service app')) assert.match(rendered.join('\n'), /Tab settings/);
             if (step[0] === 'Gateway › Services › demo') assert.match(rendered.join('\n'), /Roles/);
           }
           if (step[1] === 'open-app') {
@@ -291,7 +291,7 @@ test('service controls open apps; Tab opens private settings and returns to the 
             assert.ok(panel.render(98).includes('→ Open app'));
             panel.handleInput('\r');
           } else panel.handleInput(step[1]);
-          assert.ok(finished, 'Shortcut must complete the current overlay before opening another');
+          assert.ok(finished, 'Shortcut must complete the current dialog before opening another');
           return answer;
         } finally { panel.dispose(); }
       },
@@ -420,7 +420,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
             assert.deepEqual(lines.filter((line) => /^(→ |  )\S/.test(line)).map((line) => line.slice(2)),
               ['Open app', 'Resources', 'Connection / restart…', 'Disable service', 'Back']);
           }
-          if (lines[0] === 'Healthy app') { appsOpened++; panel.handleInput('\x0f'); }
+          if (lines[1] === 'Gateway › Services › alpha › Healthy app') { appsOpened++; panel.handleInput('\x0f'); }
           else if (lines[1] === 'Restart gateway services?') {
             restartAttempts++;
             if (restartAttempts === 2) {

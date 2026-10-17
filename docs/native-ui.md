@@ -4,9 +4,10 @@ Private MCP extension, not HTML MCP Apps: services supply validated JSON; Pi ren
 importing service code. Screens/previews stay outside model context; ordinary tool results do not.
 
 Open **`/pi-services` → service** or **`/gateway` → Services → service** for service controls,
-including enable/disable and **Open app** when available. Arrows/Enter navigate/select;
-Ctrl+R refreshes apps; Tab opens settings and returns; Ctrl+O in an app opens features/Resources;
-Escape returns from an app or service controls to Services.
+including enable/disable and **Open app** when available. Apps use Pi's standard bordered inline
+menus and configured selection keys, with the focused control's help below the list. Long body text
+has a compact summary. Ctrl+R refreshes apps; Tab opens settings and returns; Ctrl+O in an app opens
+features/Resources; Escape returns from an app or service controls to Services.
 
 Text/number inputs use JSON: quote strings; escape newlines. Tabs/boundary whitespace persist.
 Confirmations show JSON-escaped values: display every line before Enter; resizing resets review;
