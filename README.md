@@ -85,6 +85,23 @@ pi --extension "$PWD/pi/gateway.ts" --gateway-config "$PWD/gateway.json"
 Use absolute paths when launching elsewhere. The adapter starts one gateway with
 the session and closes it and its children at shutdown.
 
+Before each launch, the adapter checks content fingerprints of the gateway/example
+sources, package manifest/lockfile, TypeScript configs, and compiled outputs.
+Missing or changed output runs `npm run build` in this checkout before connecting;
+the first launch after upgrading to this behavior also builds once to record a
+fingerprint. Fresh builds are reused. This requires the development dependencies
+from `npm ci` and POSIX process-group support; it never installs dependencies or
+updates sources. Standalone/built-in MCP launches still require a manual build.
+
+Concurrent adapter launches wait for the same checkout's build lock, with a
+five-minute build/wait limit. Shutdown cancels compilation. Build failure leaves
+the gateway disconnected rather than running stale output; inspect the reported
+compiler error, run `npm ci` if dependencies changed, and retry `/reload` after
+finishing other gateway jobs. A crashed Pi can leave `dist/.gateway-build.lock`:
+remove it only after verifying its recorded PID and any compiler children are no
+longer running. Already-running gateways are never rebuilt or restarted by this
+check.
+
 ### Option B: Pi's built-in MCP client
 
 For a plain MCP connection without adapter menus/panels, add this entry to

@@ -15,6 +15,7 @@ import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
+import { ensureGatewayBuild } from './build.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -38,6 +39,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let managerController: AbortController | undefined;
   let managerWork: Promise<void> | undefined;
   let startupWork: ReturnType<typeof updateManagedPackages> | undefined;
+  let startupBuild: Promise<void> | undefined;
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
   let configurationLoaded = false;
@@ -123,7 +125,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     lifetime.abort();
     operatorToken = undefined;
     const stoppingNative = native.stop();
-    const pendingManager = Promise.allSettled([managerWork, startupWork]);
+    const pendingManager = Promise.allSettled([managerWork, startupWork, startupBuild]);
     closing = (async () => {
       const results = await Promise.allSettled([
         pendingManager,
@@ -206,6 +208,12 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         });
       } finally { if (startupWork === work) startupWork = undefined; }
     }
+    const build = ensureGatewayBuild(fileURLToPath(new URL('../', import.meta.url)), lifetime.signal);
+    startupBuild = build;
+    try { await build; }
+    catch (error) { renderFooter('off'); throw error; }
+    finally { if (startupBuild === build) startupBuild = undefined; }
+    if (shuttingDown || lifetime.signal.aborted) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
     current.onclose = () => { if (client === current) { connected = false; renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };

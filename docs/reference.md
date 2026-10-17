@@ -71,8 +71,12 @@ app remain callable. No resource tools are registered, and panel contents are
 not added to the conversation. Agents with other OS tools can still access the
 same system—this is not a secrecy boundary.
 
-The adapter creates no process at extension load time. It starts the gateway on
-`session_start` and closes it safely even if shutdown is requested more than once.
+The adapter creates no process at extension load time. Before launch it checks
+content fingerprints and rebuilds missing/stale compiled output with `npm run build`;
+see [adapter build requirements and recovery](../README.md#option-a-pi-adapter).
+A build failure prevents launch, never falls back to stale output, and shutdown
+cancels the build. It starts the gateway on `session_start` and closes it safely
+even if shutdown is requested more than once.
 The upstream handshake precedes child startup so form elicitation is advertised
 only when supported by the harness.
 
