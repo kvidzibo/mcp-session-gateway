@@ -19,7 +19,7 @@ import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ensureGatewayBuild } from './build.js';
-import { checkGatewayUpdate } from './self-update.js';
+import { checkGatewayUpdate, gatewayNeedsRestart } from './self-update.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -45,7 +45,6 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let startupWork: ReturnType<typeof updateManagedPackages> | undefined;
   let startupBuild: Promise<void> | undefined;
   let selfUpdateWork: Promise<void> | undefined;
-  let gatewayNeedsRestart = false;
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
   let configurationLoaded = false;
@@ -260,23 +259,22 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     renderFooter();
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
-    if (gatewayNeedsRestart) {
+    const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
+    if (gatewayNeedsRestart(gatewayRoot)) {
       renderFooter('off');
       ctx.ui.notify('Gateway files changed during this Pi process. Restart Pi to load the updated gateway adapter.', 'warning');
       return;
     }
     {
-      const work = checkGatewayUpdate(fileURLToPath(new URL('../', import.meta.url)), update && config.autoUpdate, lifetime.signal,
-        (stage) => {
-          if (stage === 'updating') gatewayNeedsRestart = true;
-          startupProgress(ctx, stage === 'updating' ? 'Updating gateway' : 'Checking gateway updates');
-        }, (text, level) => ctx.ui.notify(clean(text), level));
+      const work = checkGatewayUpdate(gatewayRoot, update && config.autoUpdate, lifetime.signal,
+        (stage) => startupProgress(ctx, stage === 'updating' ? 'Updating gateway' : 'Checking gateway updates'),
+        (text, level) => ctx.ui.notify(clean(text), level));
       selfUpdateWork = work;
       try { await work; }
       catch (error) { renderFooter('off'); throw error; }
       finally { if (selfUpdateWork === work) selfUpdateWork = undefined; }
       if (shuttingDown || lifetime.signal.aborted) return;
-      if (gatewayNeedsRestart) {
+      if (gatewayNeedsRestart(gatewayRoot)) {
         renderFooter('off');
         ctx.ui.notify('Gateway update prepared. Restart Pi before connecting so the adapter and dependencies load together.', 'warning');
         return;
