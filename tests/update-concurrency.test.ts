@@ -5,7 +5,7 @@ import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { loadConfig } from '../src/config.js';
-import { PackageManager, updateManagedPackages, type PackageState } from '../src/package-manager.js';
+import { PackageManager, updateManagedPackages } from '../src/package-manager.js';
 import type { PackageConfig } from '../src/packages.js';
 
 const deferred = () => {
@@ -39,25 +39,19 @@ test('startup update concurrency follows CPU/config limits, preserves order, and
       assert.equal((await loadConfig(file)).autoUpdateConcurrency, value);
     }
 
-    const prepared = new Set<string>(), started: string[] = [], completed: string[] = [], warnings: string[] = [];
+    const started: string[] = [], completed: string[] = [], warnings: string[] = [];
     let active = 0, peak = 0;
     let prepare: (pkg: PackageConfig, signal: AbortSignal) => Promise<void> = async () => {};
-    t.mock.method(PackageManager.prototype, 'state', async (pkg: PackageConfig): Promise<PackageState> => ({
-      version: 1, source: '', revision: 'test',
-      ...(pkg.name === 'inactive' ? {} : { active: { id: 'test', version: '1.0.0' } }),
-      ...(prepared.has(pkg.name) ? { prepared: { id: 'test', version: '2.0.0' } } : {}),
-    }));
-    t.mock.method(PackageManager.prototype, 'plan', async () => ({ version: '2.0.0', from: '1.0.0', revision: 'test', definition: '' }));
-    t.mock.method(PackageManager.prototype, 'prepare', async (pkg: PackageConfig, _plan: unknown, signal: AbortSignal) => {
+    t.mock.method(PackageManager.prototype, 'update', async (pkg: PackageConfig, signal: AbortSignal) => {
+      if (pkg.name === 'inactive') return;
       started.push(pkg.name); active++; peak = Math.max(peak, active);
-      try { await prepare(pkg, signal); prepared.add(pkg.name); completed.push(pkg.name); }
+      try { await prepare(pkg, signal); completed.push(pkg.name); return { name: pkg.name, from: '1.0.0', version: '2.0.0' }; }
       finally { active--; }
     });
-    t.mock.method(PackageManager.prototype, 'activate', async () => {});
     const run = (limit: number, signal = new AbortController().signal, current = config) => updateManagedPackages(
       { ...current, autoUpdateConcurrency: limit }, signal, (name) => warnings.push(name),
     );
-    const reset = () => { started.length = completed.length = warnings.length = 0; prepared.clear(); peak = 0; };
+    const reset = () => { started.length = completed.length = warnings.length = 0; peak = 0; };
     const expected = ['a', 'b', 'c', 'd'].map((name) => ({ name, from: '1.0.0', version: '2.0.0' }));
     assert.deepEqual(await run(2, undefined, { ...config, autoUpdate: false }), []);
     assert.deepEqual(started, []);

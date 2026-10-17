@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { watch } from 'node:fs';
-import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,14 +38,12 @@ test('a fresh Pi updates dependencies before importing the adapter and starts se
     git(dir, 'clone', remote, local);
     git(local, 'remote', 'set-url', 'origin', 'git@github.com:kvidzibo/mcp-session-gateway.git');
     await writeFile(join(remote, 'revision.txt'), 'updated');
+    await writeFile(join(remote, 'fixture-version'), 'new');
     await writeFile(preferences, (await readFile(preferences, 'utf8')).replace("startupRevision = 'old'", "startupRevision = 'new'"));
     git(remote, 'add', '.'); git(remote, 'commit', '-m', 'update');
     const target = git(remote, 'rev-parse', 'HEAD');
-    // Keep npm isolated without duplicating the full dependency tree. Only the fixture dependency is replaced.
-    await mkdir(join(local, 'node_modules'));
-    for (const name of await readdir(join(root, 'node_modules'))) {
-      await symlink(join(root, 'node_modules', name), join(local, 'node_modules', name));
-    }
+    // Runtime copies cannot retain external links into the mutable source dependencies.
+    await cp(join(root, 'node_modules'), join(local, 'node_modules'), { recursive: true, verbatimSymlinks: true });
     const dependency = join(local, 'node_modules/fixture-dependency');
     await mkdir(dependency);
     await writeFile(join(dependency, 'package.json'), '{"name":"fixture-dependency","main":"index.js"}');
@@ -57,7 +55,7 @@ const result=require('child_process').spawnSync(${JSON.stringify(realGit)},['-c'
 `);
     await writeFile(join(bin, 'npm'), `#!${process.execPath}
 const fs=require('fs'),args=process.argv.slice(2);
-if(args[0]==='ci') { fs.appendFileSync(${JSON.stringify(join(dir, 'installs'))},'x'); fs.writeFileSync(${JSON.stringify(join(dependency, 'index.js'))},'module.exports = "new";'); }
+if(args[0]==='ci') { fs.appendFileSync(${JSON.stringify(join(dir, 'installs'))},'x'); fs.writeFileSync(${JSON.stringify(join(dependency, 'index.js'))},'module.exports = '+JSON.stringify(fs.readFileSync('fixture-version','utf8'))+';'); }
 else { const result=require('child_process').spawnSync(${JSON.stringify(realNpm)},args,{stdio:'inherit'}); process.exit(result.status??1); }
 `);
     await chmod(join(bin, 'git'), 0o700); await chmod(join(bin, 'npm'), 0o700);
@@ -80,6 +78,25 @@ else { const result=require('child_process').spawnSync(${JSON.stringify(realNpm)
     assert.ok(notes.some((text) => /Gateway updated/.test(text)));
     assert.ok(notes.every((text) => !/Restart Pi|services were not started/.test(text)), notes.join('\n'));
     for (const handler of [...handlers.get('session_shutdown')!]) await handler({ reason: 'exit' }, ctx);
+    handlers.clear();
+
+    // No gateway remains alive; reclaim this test's first full dependency copy.
+    await rm(join(local, '.gateway-runtimes'), { recursive: true, force: true });
+
+    // A later release replaces both sources and dependencies. Reload, not a new Pi, adopts it.
+    await writeFile(runtime, (await readFile(runtime, 'utf8')).replace("version !== 'new'", "version !== 'next'"));
+    await writeFile(join(remote, 'fixture-version'), 'next');
+    git(remote, 'add', '.'); git(remote, 'commit', '-m', 'reload update');
+    register({
+      registerFlag() {}, getFlag: () => config, registerEntryRenderer() {}, registerCommand() {}, appendEntry() {},
+      registerTool: (tool: any) => tools.set(tool.name, tool), events: { on() {} },
+      on: (event: string, handler: Function) => { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); },
+    });
+    for (const handler of [...handlers.get('session_start')!]) await handler({ reason: 'reload' }, ctx);
+    assert.ok(JSON.parse((await tools.get('gateway_tools').execute('', {})).content[0].text).some((tool: any) => tool.name === 'demo__increment'));
+    assert.equal(await readFile(join(dir, 'installs'), 'utf8'), 'xx');
+    assert.ok(notes.every((text) => !/Restart Pi|services were not started/.test(text)), notes.join('\n'));
+    for (const handler of [...handlers.get('session_shutdown')!]) await handler({ reason: 'reload' }, ctx);
     handlers.clear();
 
     // The bootstrap must cancel the runtime before awaiting its initial service build.

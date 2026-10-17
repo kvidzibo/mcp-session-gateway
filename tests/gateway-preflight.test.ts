@@ -2,20 +2,14 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import registerGateway from '../pi/runtime.js';
 
 // Service/UI tests must never fetch or install into the checkout hosting this test.
-const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
+const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => { throw new Error('Gateway build incomplete'); });
 
-test('restart-required Gateway skips service configuration, startup and summary across reloads', async () => {
+test('incomplete Gateway builds skip service configuration and startup across reloads', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-preflight-'));
-  const root = fileURLToPath(new URL('../', import.meta.url));
-  const key = Symbol.for('local-stdio-mcp-gateway.restart-required');
-  const state = process as NodeJS.Process & { [key]?: Set<string> };
-  const previous = state[key];
-  state[key] = new Set([...previous ?? [], root.replace(/\/$/, '')]);
   const notices: string[] = [], entries: string[] = [], progress: unknown[] = [];
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
     sessionManager: { getSessionId: () => 'preflight', getBranch: () => [] },
@@ -31,7 +25,7 @@ test('restart-required Gateway skips service configuration, startup and summary 
     // retain it, including when enabled services have unresolved credentials.
     for (const reload of [false, true]) {
       const config = join(dir, 'gateway.json');
-      if (reload) await writeFile(config, JSON.stringify({ mcpServers: {
+      await writeFile(config, JSON.stringify({ mcpServers: {
         demo: { command: 'must-not-run', env: { TOKEN: '${GATEWAY_PREFLIGHT_MISSING_TOKEN}' } },
       } }));
       const handlers = new Map<string, Function>(), tools = new Map<string, any>();
@@ -43,16 +37,14 @@ test('restart-required Gateway skips service configuration, startup and summary 
         on: (event: string, handler: Function) => handlers.set(event, handler),
       } as any);
       try {
-        await handlers.get('session_start')!({ reason: reload ? 'reload' : 'startup' }, ctx);
+        await assert.rejects(handlers.get('session_start')!({ reason: reload ? 'reload' : 'startup' }, ctx), /Gateway build incomplete/);
         await assert.rejects(tools.get('gateway_tools').execute('', {}), /Gateway disconnected/);
       } finally { await handlers.get('session_shutdown')!({}, ctx); }
     }
-    assert.equal(notices.length, 2);
-    for (const notice of notices) assert.match(notice, /Restart Pi.*services were not started/);
+    assert.deepEqual(notices, []);
     assert.deepEqual(progress, [], 'No service startup progress is displayed');
-    assert.deepEqual(entries, [], 'Do not persist a misleading service-unavailable startup summary');
+    assert.deepEqual(entries, ['gateway-startup'], 'Only the initial failed startup gets an unavailable summary; reload does not duplicate it');
   } finally {
-    if (previous) state[key] = previous; else delete state[key];
     await rm(dir, { recursive: true, force: true });
   }
 });

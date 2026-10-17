@@ -143,7 +143,7 @@ test('launch builds missing/stale output once, detects content changes, and neve
       pending = ensureGatewayBuild(root, signal, { launch: async () => assert.fail('An outdated adapter launched'), identity });
       await writeFile(source, 'four');
     });
-    await assert.rejects(pending!, /Restart Pi/, 'A successful queued update requires a fresh adapter process');
+    await assert.rejects(pending!, /reload/, 'Direct launches cannot mix an outdated adapter with changed installation files');
     assert.equal(await count(), 8);
     await withCheckoutLock(root, signal, async () => {
       pending = build();

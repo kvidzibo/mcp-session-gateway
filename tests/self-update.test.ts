@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { checkGatewayUpdate, gatewayNeedsRestart } from '../pi/self-update.js';
+import { checkGatewayUpdate } from '../pi/self-update.js';
 
 test('Pi gateway self-update checks read-only, safely updates, and guards failed builds', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-self-update-'));
@@ -78,12 +78,7 @@ if(args==='run check'&&fs.readFileSync('dist/cli.js','utf8')!==fs.readFileSync('
     await run();
     assert.match(notes.at(-1)!.text, /check failed/); assert.equal(notes.at(-1)!.level, 'warning');
     await rm(join(dir, 'offline'));
-    assert.equal(gatewayNeedsRestart(local), false);
     await run(true);
-    assert.equal(gatewayNeedsRestart(local), true);
-    const reloaded = await import(new URL('../pi/self-update.js?reload', import.meta.url).href);
-    assert.equal(reloaded.gatewayNeedsRestart(join(local, '.')), true, 'A recreated extension module must retain the process restart guard');
-    assert.equal(reloaded.gatewayNeedsRestart(remote), false, 'Restart guards are installation-specific');
     assert.equal(git(local, 'rev-parse', 'HEAD'), second);
     assert.equal(await readFile(join(local, 'dist/cli.js'), 'utf8'), 'two');
     const steps = 'ci --include=dev\nrun build\nrun check\n';

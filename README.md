@@ -176,9 +176,9 @@ separate confirmations.
 
 The adapter checks the **gateway itself** before each launch, even with **Auto update: Off**.
 **Auto update: On** also authorizes gateway and eligible service downloads/builds/validation at
-startup/reload, without per-update prompts. A fresh Pi updates the gateway before loading its
-adapter, then starts services in the same launch. Updates after the adapter is already loaded still
-require a **fresh Pi process**; `/reload` cannot replace cached dependencies. Running sessions are not restarted. The setting saves immediately. Read the
+startup/reload, without per-update prompts. Pi updates the gateway before loading an isolated
+adapter/dependency copy, then starts services in the same launch. `/reload` can load a new copy
+without mixing cached dependencies; other sessions keep their existing copies. The setting saves immediately. Read the
 [package guide](docs/packages.md) before enabling it, including Git 2.45+/POSIX requirements and
 in-place local-update effects.
 

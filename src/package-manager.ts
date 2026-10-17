@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFile, lstat, mkdir, open, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { devNull } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import semver from 'semver';
 import { z } from 'zod';
 import type { GatewayConfig, ServiceConfig } from './config.js';
@@ -119,7 +120,7 @@ export class PackageManager {
     const info = await lstat(path);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Package store directories must not be symlinks');
   }
-  private async lock<T>(pkg: PackageConfig, revision: string, signal: AbortSignal,
+  private async lock<T>(pkg: PackageConfig, revision: string | undefined, signal: AbortSignal,
     run: (state: PackageState, record: (entry: Record<string, unknown>) => Promise<void>) => Promise<T>): Promise<T> {
     signal.throwIfAborted();
     await this.directorySafe(this.root);
@@ -137,13 +138,25 @@ export class PackageManager {
     await this.directorySafe(dir);
     const lockPath = join(dir, '.lock');
     let lock;
-    try { lock = await open(lockPath, 'wx', 0o600); }
-    catch { throw new Error('Package is locked by another operation. Stale locks require manual recovery; never delete a live lock.'); }
+    const waiting = AbortSignal.any([signal, AbortSignal.timeout(300_000)]);
+    while (!lock) {
+      signal.throwIfAborted();
+      try { lock = await open(lockPath, 'wx', 0o600); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (revision !== undefined) throw new Error(`Package is locked by another operation: ${lockPath}. Never delete a live lock.`);
+        try { await delay(100, undefined, { signal: waiting }); }
+        catch {
+          signal.throwIfAborted();
+          throw new Error(`Package lock wait timed out: ${lockPath}. Inspect the owner and command groups; never delete a live lock.`);
+        }
+      }
+    }
     try {
       const record = async (entry: Record<string, unknown>) => { await lock.writeFile(`${JSON.stringify(entry)}\n`); await lock.sync(); };
       await record({ kind: 'owner', pid: process.pid, started: new Date().toISOString() });
       const state = await this.state(pkg, signal);
-      if (state.revision !== revision) throw new Error('Package changed since preview; reopen and confirm again');
+      if (revision !== undefined && state.revision !== revision) throw new Error('Package changed since preview; reopen and confirm again');
       signal.throwIfAborted();
       return await run(state, record);
     } finally { await lock.close(); await rm(lockPath); }
@@ -176,92 +189,109 @@ export class PackageManager {
       if (status.installed !== release.version) throw new Error('Installed package identity/version changed');
     }
   }
+  /** Automatic updates wait, then re-plan and publish under one lock. Manual previews remain fail-fast. */
+  async update(pkg: PackageConfig, signal: AbortSignal, progress: (stage: 'checking' | 'updating') => void): Promise<{ name: string; from: string; version: string } | undefined> {
+    progress('checking');
+    if (!(await this.state(pkg, signal)).active) return;
+    return this.lock(pkg, undefined, signal, async (state, record) => {
+      if (!state.active) return;
+      const plan = await this.plan(pkg, signal);
+      if (!plan.from || plan.version === plan.from) return;
+      progress('updating');
+      await this.prepareLocked(pkg, plan, signal, () => {}, state, record);
+      await this.activateLocked(pkg, await this.state(pkg, signal), false, signal);
+      return { name: pkg.name, from: plan.from, version: plan.version };
+    });
+  }
   async prepare(pkg: PackageConfig, plan: PackagePlan, signal: AbortSignal, output: (text: string) => void): Promise<void> {
+    await this.lock(pkg, plan.revision, signal, (state, record) => this.prepareLocked(pkg, plan, signal, output, state, record));
+  }
+  private async prepareLocked(pkg: PackageConfig, plan: PackagePlan, signal: AbortSignal, output: (text: string) => void,
+    state: PackageState, record: (entry: Record<string, unknown>) => Promise<void>): Promise<void> {
     if (!pkg.managed || fingerprint(pkg) !== plan.definition) throw new Error('Package definition changed since preview');
     if (pkg.source.type === 'local') throw new Error('Local sources are externally managed');
     const source = pkg.source, managed = pkg.managed;
     if (source.type === 'npm' ? !semver.valid(plan.version) : !/^[a-f0-9]{40,64}$/.test(plan.version)) throw new Error('Invalid pinned version');
-    await this.lock(pkg, plan.revision, signal, async (state, record) => {
-      if (state.active) await this.verify(pkg, state.active, signal);
-      const release = { id: randomUUID(), version: plan.version };
-      await this.directorySafe(join(this.directory(pkg), 'releases'));
-      await this.directorySafe(join(this.directory(pkg), 'logs'));
-      const staging = join(this.directory(pkg), 'releases', release.id);
-      await mkdir(staging, { mode: 0o700 });
-      const log = this.logPath(pkg, release.id);
-      await writeFile(log, '', { flag: 'wx', mode: 0o600 });
-      let logBytes = 0, writing = Promise.resolve(), logFailure: unknown;
-      const report = (text: string) => {
-        const remaining = Math.max(0, 8_000_000 - logBytes);
-        const chunk = Buffer.from(text).subarray(0, remaining);
-        logBytes += chunk.length;
-        if (chunk.length) writing = writing.then(() => appendFile(log, chunk)).catch((error: unknown) => { logFailure = error; });
-        try { output(text.slice(-8000)); } catch {}
+    if (state.active) await this.verify(pkg, state.active, signal);
+    const release = { id: randomUUID(), version: plan.version };
+    await this.directorySafe(join(this.directory(pkg), 'releases'));
+    await this.directorySafe(join(this.directory(pkg), 'logs'));
+    const staging = join(this.directory(pkg), 'releases', release.id);
+    await mkdir(staging, { mode: 0o700 });
+    const log = this.logPath(pkg, release.id);
+    await writeFile(log, '', { flag: 'wx', mode: 0o600 });
+    let logBytes = 0, writing = Promise.resolve(), logFailure: unknown;
+    const report = (text: string) => {
+      const remaining = Math.max(0, 8_000_000 - logBytes);
+      const chunk = Buffer.from(text).subarray(0, remaining);
+      logBytes += chunk.length;
+      if (chunk.length) writing = writing.then(() => appendFile(log, chunk)).catch((error: unknown) => { logFailure = error; });
+      try { output(text.slice(-8000)); } catch {}
+    };
+    report(`Pinned target: ${plan.version}\nLog: ${log}\n`);
+    let committed = false;
+    try {
+      // Retain a pointer to failed/cancelled logs without changing activation/prepared releases.
+      await this.save(pkg, { ...state, log: release.id }, signal);
+      const home = join(staging, 'home');
+      await mkdir(home);
+      await writeFile(join(home, 'user.npmrc'), '');
+      await writeFile(join(home, 'global.npmrc'), '');
+      const env: NodeJS.ProcessEnv = {
+        PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: home, USERPROFILE: home,
+        NETRC: devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull, GIT_ASKPASS: '', SSH_ASKPASS: '', GIT_TERMINAL_PROMPT: '0',
+        NPM_CONFIG_USERCONFIG: join(home, 'user.npmrc'), NPM_CONFIG_GLOBALCONFIG: join(home, 'global.npmrc'),
+        NPM_CONFIG_CACHE: join(home, 'cache'), NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org', CI: '1',
       };
-      report(`Pinned target: ${plan.version}\nLog: ${log}\n`);
-      let committed = false;
-      try {
-        // Retain a pointer to failed/cancelled logs without changing activation/prepared releases.
-        await this.save(pkg, { ...state, log: release.id }, signal);
-        const home = join(staging, 'home');
-        await mkdir(home);
-        await writeFile(join(home, 'user.npmrc'), '');
-        await writeFile(join(home, 'global.npmrc'), '');
-        const env: NodeJS.ProcessEnv = {
-          PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8', HOME: home, USERPROFILE: home,
-          NETRC: devNull, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull, GIT_ASKPASS: '', SSH_ASKPASS: '', GIT_TERMINAL_PROMPT: '0',
-          NPM_CONFIG_USERCONFIG: join(home, 'user.npmrc'), NPM_CONFIG_GLOBALCONFIG: join(home, 'global.npmrc'),
-          NPM_CONFIG_CACHE: join(home, 'cache'), NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org', CI: '1',
-        };
-        const run = (command: string, args: string[], cwd: string, environment = env) => runPackageCommand(
-          command, args, cwd, environment, signal, managed.timeoutMs, report,
-          (pid) => record({ kind: 'command', pid, pgid: pid, command, cwd, started: new Date().toISOString() }),
-        );
-        const root = this.releasePath(pkg, release);
-        if (source.type === 'git') {
-          await run('git', [...safeGitArgs, 'clone', '--no-checkout', '--single-branch', '--branch', source.branch, '--', source.url, root], staging, gitEnvironment());
-          // The branch may have advanced since approval. Never silently choose its new HEAD.
-          if (await git(['rev-parse', 'HEAD'], root, signal) !== plan.version) throw new Error('Remote branch moved since preview; check and confirm again');
-          if (state.active) await git(['merge-base', '--is-ancestor', state.active.version, plan.version], root, signal);
-          await run('git', [...safeGitArgs, 'checkout', '--detach', plan.version], root, gitEnvironment());
-        } else {
-          const prefix = join(staging, 'install');
-          await mkdir(prefix);
-          await run('npm', ['install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org', '--', `${source.name}@${plan.version}`], staging);
-        }
-        for (const [phase, steps] of [['Build', managed.build], ['Validate', managed.validate]] as const) {
-          for (const step of steps) {
-            const cwd = await realpath(resolve(root, step.cwd));
-            const inside = relative(await realpath(root), cwd);
-            if (inside.startsWith('..') || isAbsolute(inside)) throw new Error('Step cwd escapes package root');
-            report(`\n${phase}: ${JSON.stringify([step.command, ...step.args])}\n`);
-            await run(step.command, step.args, cwd);
-          }
-        }
-        await this.verify(pkg, release, signal);
-        if (state.active) await this.verify(pkg, state.active, signal);
-        await writing;
-        if (logFailure) throw new Error('Cannot persist package operation log');
-        await this.save(pkg, { ...state, prepared: release, log: release.id }, signal);
-        committed = true;
-        report('\nPrepared and validated. Activation and restart are separate actions.\n');
-      } catch (error) {
-        report(`\nFailed or cancelled. Re-read state before retrying. Log: ${log}\n`);
-        throw error;
-      } finally {
-        await writing;
-        if (!committed) await rm(staging, { recursive: true, force: true });
+      const run = (command: string, args: string[], cwd: string, environment = env) => runPackageCommand(
+        command, args, cwd, environment, signal, managed.timeoutMs, report,
+        (pid) => record({ kind: 'command', pid, pgid: pid, command, cwd, started: new Date().toISOString() }),
+      );
+      const root = this.releasePath(pkg, release);
+      if (source.type === 'git') {
+        await run('git', [...safeGitArgs, 'clone', '--no-checkout', '--single-branch', '--branch', source.branch, '--', source.url, root], staging, gitEnvironment());
+        // The branch may have advanced since approval. Never silently choose its new HEAD.
+        if (await git(['rev-parse', 'HEAD'], root, signal) !== plan.version) throw new Error('Remote branch moved since preview; check and confirm again');
+        if (state.active) await git(['merge-base', '--is-ancestor', state.active.version, plan.version], root, signal);
+        await run('git', [...safeGitArgs, 'checkout', '--detach', plan.version], root, gitEnvironment());
+      } else {
+        const prefix = join(staging, 'install');
+        await mkdir(prefix);
+        await run('npm', ['install', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', '--registry=https://registry.npmjs.org', '--', `${source.name}@${plan.version}`], staging);
       }
-    });
+      for (const [phase, steps] of [['Build', managed.build], ['Validate', managed.validate]] as const) {
+        for (const step of steps) {
+          const cwd = await realpath(resolve(root, step.cwd));
+          const inside = relative(await realpath(root), cwd);
+          if (inside.startsWith('..') || isAbsolute(inside)) throw new Error('Step cwd escapes package root');
+          report(`\n${phase}: ${JSON.stringify([step.command, ...step.args])}\n`);
+          await run(step.command, step.args, cwd);
+        }
+      }
+      await this.verify(pkg, release, signal);
+      if (state.active) await this.verify(pkg, state.active, signal);
+      await writing;
+      if (logFailure) throw new Error('Cannot persist package operation log');
+      await this.save(pkg, { ...state, prepared: release, log: release.id }, signal);
+      committed = true;
+      report('\nPrepared and validated. Activation and restart are separate actions.\n');
+    } catch (error) {
+      report(`\nFailed or cancelled. Re-read state before retrying. Log: ${log}\n`);
+      throw error;
+    } finally {
+      await writing;
+      if (!committed) await rm(staging, { recursive: true, force: true });
+    }
   }
   async activate(pkg: PackageConfig, revision: string, rollback: boolean, signal: AbortSignal): Promise<void> {
-    await this.lock(pkg, revision, signal, async (state) => {
-      const next = rollback ? state.previous : state.prepared;
-      if (!next) throw new Error(rollback ? 'No previous version to roll back to' : 'No prepared version to activate');
-      await this.verify(pkg, next, signal);
-      // A candidate was checked against the old active base; never keep it across rollback.
-      await this.save(pkg, { ...state, active: next, previous: state.active, prepared: undefined }, signal);
-    });
+    await this.lock(pkg, revision, signal, (state) => this.activateLocked(pkg, state, rollback, signal));
+  }
+  private async activateLocked(pkg: PackageConfig, state: PackageState, rollback: boolean, signal: AbortSignal): Promise<void> {
+    const next = rollback ? state.previous : state.prepared;
+    if (!next) throw new Error(rollback ? 'No previous version to roll back to' : 'No prepared version to activate');
+    await this.verify(pkg, next, signal);
+    // A candidate was checked against the old active base; never keep it across rollback.
+    await this.save(pkg, { ...state, active: next, previous: state.active, prepared: undefined }, signal);
   }
 }
 
@@ -285,19 +315,8 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
         if (updates[index]) options.completed?.(updates[index]);
         return;
       }
-      if (!(await manager.state(pkg, operation)).active) return;
-      progress(pkg.name, 'checking');
-      const plan = await manager.plan(pkg, operation);
-      if (!plan.from || plan.version === plan.from) return;
-      progress(pkg.name, 'updating');
-      await manager.prepare(pkg, plan, operation, () => {});
-      const state = await manager.state(pkg, operation);
-      if (state.active?.version !== plan.from || state.prepared?.version !== plan.version) {
-        throw new Error('Package changed during update; inspect releases before retrying');
-      }
-      await manager.activate(pkg, state.revision, false, operation);
-      updates[index] = { name: pkg.name, from: plan.from, version: plan.version };
-      options.completed?.(updates[index]);
+      updates[index] = await manager.update(pkg, operation, (stage) => progress(pkg.name, stage));
+      if (updates[index]) options.completed?.(updates[index]);
     } catch (error) {
       operation.throwIfAborted();
       failed(pkg.name, error);
