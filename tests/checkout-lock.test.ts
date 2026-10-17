@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { watch } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +10,8 @@ import { snapshotInstallation } from '../pi/installation.js';
 test('the dependency-light bootstrap waits for an install in a linked checkout before importing dependencies', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-import-lock-'));
   const signal = new AbortController().signal;
+  const oldCache = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = `${root}-cache`;
   let starting: Promise<void> | undefined;
   try {
     await mkdir(join(root, 'pi')); await mkdir(join(root, 'src'));
@@ -65,6 +67,10 @@ export default function(pi, check, _identity, lifecycle) {
     const previousCopy = await snapshotInstallation(root, signal);
     await writeFile(join(root, 'tsconfig.build.json'), '{"compilerOptions":{"target":"ES2022"}}');
     assert.notEqual(await snapshotInstallation(root, signal), previousCopy, 'Compiler configuration changes invalidate runtime copies');
+    await chmod(join(root, 'node_modules/fixture-dependency/index.js'), 0o600);
+    const brokenMode = await snapshotInstallation(root, signal);
+    await chmod(join(root, 'node_modules/fixture-dependency/index.js'), 0o700);
+    assert.notEqual(await snapshotInstallation(root, signal), brokenMode, 'Permission-only dependency repairs invalidate runtime copies');
     const cancelled = new AbortController();
     await withCheckoutLock(root, signal, async () => {
       const pending = withCheckoutLock(root, cancelled.signal, async () => assert.fail('Cancelled waiter acquired the lock'));
@@ -80,7 +86,7 @@ export default function(pi, check, _identity, lifecycle) {
     assert.notEqual(await snapshotInstallation(root, signal), linkedCopy, 'Internal dependency links must fingerprint their copied output targets');
     await writeFile(join(root, 'node_modules/fixture-dependency/index.js'), 'module.exports = "cancel-copy";');
     const copyAbort = new AbortController();
-    const store = join(root, '.gateway-runtimes');
+    const store = join(linkedCopy, '..');
     const copying = watch(store, { recursive: true }, (_event, name) => {
       if (String(name).includes('/node_modules/')) { copying.close(); copyAbort.abort(new Error('cancel dependency copy')); }
     });
@@ -94,6 +100,8 @@ export default function(pi, check, _identity, lifecycle) {
     });
   } finally {
     await starting?.catch(() => {});
+    await rm(process.env.XDG_CACHE_HOME!, { recursive: true, force: true });
+    if (oldCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = oldCache;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -23,7 +23,8 @@ test('managed releases prepare, validate, activate and roll back independently o
   const root = fileURLToPath(new URL('../', import.meta.url));
   await ensureGatewayBuild(root, new AbortController().signal);
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
-  const originalPath = process.env.PATH;
+  const originalPath = process.env.PATH, oldCache = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = join(dir, 'runtime-cache');
   const connections: { client: Client; transport: StdioClientTransport }[] = [];
   const signal = new AbortController().signal;
   let shutdownExtension: (() => Promise<void>) | undefined;
@@ -426,6 +427,7 @@ const root=path.join(prefix,'node_modules',name);fs.mkdirSync(root,{recursive:tr
     await shutdownExtension?.();
     await Promise.allSettled(connections.map(async ({ client, transport }) => { try { await client.close(); } finally { await transport.close(); } }));
     if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    if (oldCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = oldCache;
     await rm(dir, { recursive: true, force: true });
   }
 });

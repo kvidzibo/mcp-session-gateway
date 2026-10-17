@@ -14,7 +14,8 @@ test('a fresh Pi updates dependencies before importing the adapter and starts se
   const serviceRemote = join(dir, 'service-remote'), service = join(dir, 'service');
   const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
   const realNpm = execFileSync('which', ['npm'], { encoding: 'utf8' }).trim();
-  const previousPath = process.env.PATH;
+  const previousPath = process.env.PATH, oldCache = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = join(dir, 'cache');
   const git = (cwd: string, ...args: string[]) => execFileSync(realGit,
     ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args],
     { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -81,7 +82,7 @@ else { const result=require('child_process').spawnSync(${JSON.stringify(realNpm)
     handlers.clear();
 
     // No gateway remains alive; reclaim this test's first full dependency copy.
-    await rm(join(local, '.gateway-runtimes'), { recursive: true, force: true });
+    await rm(join(dir, 'cache'), { recursive: true, force: true });
 
     // A later release replaces both sources and dependencies. Reload, not a new Pi, adopts it.
     await writeFile(runtime, (await readFile(runtime, 'utf8')).replace("version !== 'new'", "version !== 'next'"));
@@ -135,6 +136,7 @@ else { const result=require('child_process').spawnSync(${JSON.stringify(realNpm)
   } finally {
     for (const handler of [...handlers.get('session_shutdown') ?? []]) await handler({ reason: 'exit' }, ctx);
     process.env.PATH = previousPath;
+    if (oldCache === undefined) delete process.env.XDG_CACHE_HOME; else process.env.XDG_CACHE_HOME = oldCache;
     await rm(dir, { recursive: true, force: true });
   }
 });

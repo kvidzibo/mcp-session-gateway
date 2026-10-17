@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, readdir, readlink, realpath, rm } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, readlink, realpath, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -35,14 +35,20 @@ export async function checkoutIdentity(root: string, signal?: AbortSignal): Prom
   const file = async (path: string, link = false) => {
     signal?.throwIfAborted();
     hash.update(JSON.stringify([path, link]));
-    try { hash.update(link ? await readlink(path) : await readFile(path)); }
+    try {
+      hash.update(String((await lstat(path)).mode & 0o777));
+      hash.update(link ? await readlink(path) : await readFile(path));
+    }
     catch (error) { if (!missing(error)) throw error; hash.update('missing'); }
     hash.update('\0');
   };
   const tree = async (path: string): Promise<void> => {
     signal?.throwIfAborted();
     let entries;
-    try { entries = await readdir(path, { withFileTypes: true }); }
+    try {
+      hash.update(JSON.stringify([path, (await lstat(path)).mode & 0o777]));
+      entries = await readdir(path, { withFileTypes: true });
+    }
     catch (error) { if (missing(error)) return; throw error; }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (join(path, entry.name) === join(root, 'dist/.gateway-build.lock')) continue;

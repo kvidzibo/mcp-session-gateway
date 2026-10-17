@@ -1,4 +1,6 @@
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { cp, lstat, mkdir, mkdtemp, readFile, realpath, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { checkoutIdentity } from '../src/checkout-lock.js';
@@ -6,9 +8,14 @@ import { checkoutIdentity } from '../src/checkout-lock.js';
 /** Called under the checkout lock. Running adapters never import replaceable checkout files. */
 export async function snapshotInstallation(root: string, signal: AbortSignal): Promise<string> {
   const identity = await checkoutIdentity(root, signal);
-  const store = join(root, '.gateway-runtimes');
+  const canonical = await realpath(root);
+  const cache = process.env.XDG_CACHE_HOME || join(homedir(), '.cache');
+  const store = join(cache, 'mcp-gateway/runtimes', createHash('sha256').update(canonical).digest('hex'));
   await mkdir(store, { recursive: true, mode: 0o700 });
-  if (!(await lstat(store)).isDirectory()) throw new Error('Gateway runtime store must not be a symlink');
+  const inside = relative(canonical, await realpath(store));
+  if (!(await lstat(store)).isDirectory() || (!isAbsolute(inside) && inside !== '..' && !inside.startsWith('../'))) {
+    throw new Error('Gateway runtime cache must be outside its checkout and must not be a symlink');
+  }
   const destination = join(store, identity);
   try {
     if (!(await lstat(destination)).isDirectory() || await readFile(join(destination, '.ready'), 'utf8') !== identity) {
@@ -33,7 +40,6 @@ export async function snapshotInstallation(root: string, signal: AbortSignal): P
         filter: (source) => { signal.throwIfAborted(); return source !== join(root, 'dist/.gateway-build.lock'); } });
     }
     // Preserve internal .bin links, but never retain links into the mutable installation.
-    const canonical = await realpath(root);
     const links = async (directory: string): Promise<void> => {
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         signal.throwIfAborted();
