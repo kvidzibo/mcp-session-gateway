@@ -120,6 +120,10 @@ test('operator settings stay private, route by service, and require confirmed sc
           assert.equal(options?.overlay, lines[1] === 'Save child-server settings?' ? true : undefined,
             'Only confirmations are isolated; navigation and settings edit inline');
           if (isNavigation) {
+            if (lines[1] === 'Gateway › Services › alpha') {
+              assert.deepEqual(lines.filter((line) => /^(→ |  )\S/.test(line)).map((line) => line.slice(2)),
+                ['Settings', 'Resources', 'Connection / restart…', 'Disable service', 'Back']);
+            }
             const target = navigation.shift();
             if (!target) panel.handleInput('\u001b');
             else {
@@ -199,7 +203,7 @@ test('operator settings stay private, route by service, and require confirmed sc
         await click(link('disabled'));
         assert.equal(screens.length, before + 1);
         assert.ok(screens.at(-1)!.includes('Gateway › Services › disabled'));
-        assert.match(screens.at(-1)!, /Settings \(unavailable\)/);
+        assert.doesNotMatch(screens.at(-1)!, /Settings|Open app|unavailable/);
         assert.equal(notices.length, noticesBefore, 'No settings error just for opening a service');
         await click(link('beta'));
         assert.equal(screens.length, before + 2, 'Closing releases dialog ownership');
