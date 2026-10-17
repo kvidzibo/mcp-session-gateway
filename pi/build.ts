@@ -41,7 +41,7 @@ export async function ensureGatewayBuild(root: string, signal: AbortSignal,
     }
     await buildGateway(root, bounded, recordGroup);
     bounded.throwIfAborted();
-    try { await options.launch?.(); }
+    try { await options.launch?.(); bounded.throwIfAborted(); }
     catch (error) { await options.dispose?.(); throw error; }
   });
 }

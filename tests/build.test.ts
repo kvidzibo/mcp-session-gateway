@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ensureGatewayBuild } from '../pi/build.js';
 import { awaitTransportExit } from '../pi/transport.js';
+import { LiveJobs } from '../pi/live-jobs.js';
 import { checkoutIdentity, withCheckoutLock } from '../src/checkout-lock.js';
 
 test('launch builds missing/stale output once, detects content changes, and never accepts a failed build', async () => {
@@ -106,6 +107,36 @@ test('launch builds missing/stale output once, detects content changes, and neve
       try { await Promise.all([failing, afterFailure]); }
       finally { await transport.close(); }
     }
+
+    // LiveJobs intentionally absorbs discovery cancellation; startup must still dispose under lock.
+    const shutdown = new AbortController();
+    const slow = new StdioClientTransport({ command: process.execPath, args: ['-e',
+      "process.stdin.resume(); process.stdin.on('end',()=>setTimeout(()=>process.exit(0),350));"], stderr: 'pipe' });
+    awaitTransportExit(slow);
+    let childExited = false;
+    const closed = slow.onclose;
+    slow.onclose = () => { childExited = true; closed?.(); };
+    let discovering!: () => void;
+    const discovery = new Promise<void>((resolve) => { discovering = resolve; });
+    const jobs = new LiveJobs({
+      setNotificationHandler() {}, removeNotificationHandler() {},
+      listResources: (_params: unknown, options: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        discovering();
+      }),
+    } as any, {} as any, 1000);
+    const cancelledStartup = assert.rejects(ensureGatewayBuild(root, shutdown.signal, {
+      launch: async () => { await slow.start(); await jobs.start(); },
+      dispose: () => slow.close(),
+    }), (error) => error === shutdown.signal.reason);
+    await discovery;
+    jobs.stop(); shutdown.abort();
+    const stopping = slow.close();
+    const afterShutdown = withCheckoutLock(root, signal, async () => {
+      assert.equal(childExited, true, 'Swallowed LiveJobs cancellation cannot release the lock before child exit');
+    });
+    try { await Promise.all([cancelledStartup, stopping, afterShutdown]); }
+    finally { jobs.stop(); await slow.close(); }
 
     const identity = await checkoutIdentity(root);
     await withCheckoutLock(root, signal, async () => {
