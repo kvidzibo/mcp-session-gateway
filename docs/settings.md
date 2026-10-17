@@ -2,6 +2,38 @@
 
 A custom MCP extension shared with [pi-delegate](https://github.com/kvidzibo/pi-delegate/blob/main/mcp/README.md#operator-settings-extension), not a standard MCP feature. Settings remain outside tools/resources and agent context. Service names, fields and storage are service-owned.
 
+## Operator guide
+
+With the [Pi adapter](../README.md#connect-pi), open **`/pi-services`**, highlight a
+service, and press **Tab**, or press **Tab** in its app. The feature menu also
+offers Settings. Only opted-in, connected services with contract version 1 are
+eligible; services without settings still work normally.
+
+1. Edit the local draft. Type in settings/choice lists to filter by
+   case-insensitive words, including model names/providers. Backspace edits the
+   search; Escape goes back.
+2. Choose **Save changes** and review every preview line before Enter can save.
+   Resizing resets review. Declining leaves the draft editable; Escape/Back
+   discards it.
+3. Confirm the save. pi-delegate applies changes to **future jobs**; running/queued
+   jobs retain their settings. Other services report their own apply policy.
+
+Settings are discovered from the child's schema, not hardcoded service names or
+Pi's model catalogue. JSON Schema constraints are checked before saving; the
+service owns validation, atomic persistence, and revisions. Scrollable overlays
+keep controls visible with editor widgets/custom footers. Settings require TUI
+mode and cannot overlap one-shot approval prompts.
+
+After conflicting or uncertain writes, reopen to read current state—saves are
+never replayed automatically. If the connection was retired by cancellation or
+timeout, restart it first. Manual external changes may require collecting or
+cancelling work before restarting. **`/reload` restarts the gateway and children;
+it does not save settings.**
+
+The following sections describe service opt-in, supported fields, and the
+reusable protocol. See the [delegate recipe](integrations.md#live-delegate-panel)
+for a complete service entry.
+
 ## Service opt-in
 
 A gateway config entry uses `"settings": { "tokenEnv": "SERVICE_SETTINGS_TOKEN" }`.
@@ -88,8 +120,10 @@ An optional `models` array follows pi-delegate's existing hint contract:
 When supplied, string fields named `model` use available catalogue entries; sibling
 `thinking` fields use that model's supported levels. Changing a model stages both
 values, with a reasoning choice when that sibling is editable. These hints are
-optional; other services need no model catalogue or delegate roles. Availability is
-service configuration, not proof that credentials/endpoints work.
+optional; other services need no model catalogue or delegate roles. Current
+unavailable choices remain visible but cannot be selected; no automatic fallback
+is chosen. Availability is service configuration, not proof that
+credentials/endpoints work.
 
 ### Update
 
