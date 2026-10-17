@@ -74,7 +74,7 @@ test('startup snapshot reports observed connections including zero-tool and stop
     assert.equal(footer(), ' MCP 2 services', 'Disabled and unactivated services are excluded from the footer count');
     assert.equal(widgets.size, 0, 'Startup loader is removed after success');
     assert.ok(progressFrames.size > 1, 'Loader renders changing animation frames/stages');
-    assert.ok([...progressFrames].some((text) => text.includes('Starting MCP services')));
+    assert.ok([...progressFrames].some((text) => text.includes('Starting Gateway')));
     assert.ok([...progressFrames].some((text) => text.includes('discovering tools')));
     const entry = entries[0];
     assert.equal(entry.customType, 'gateway-startup');

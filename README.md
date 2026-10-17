@@ -172,7 +172,8 @@ separate confirmations.
 The adapter checks the **gateway itself** before each launch, even with **Auto update: Off**.
 **Auto update: On** also authorizes gateway and eligible service downloads/builds/validation at
 startup/reload, without per-update prompts. Gateway updates require a **fresh Pi process** before
-connecting; running sessions are not restarted. The setting saves immediately. Read the
+connecting; no service configuration, updates or startup run while a Gateway restart is required.
+Running sessions are not restarted. The setting saves immediately. Read the
 [package guide](docs/packages.md) before enabling it, including Git 2.45+/POSIX requirements and
 in-place local-update effects.
 

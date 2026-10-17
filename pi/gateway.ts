@@ -30,6 +30,8 @@ import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
+const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
+
 export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   let client: Client | undefined;
@@ -73,10 +75,10 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       startupLoader?.stop(); startupLoader = undefined;
       ctx.ui.setWidget('gateway-startup-progress', undefined);
     } else if (startupLoader) {
-      startupLoader.setMessage(`Starting MCP services · ${stage}`);
+      startupLoader.setMessage(`Starting Gateway · ${stage}`);
     } else {
       ctx.ui.setWidget('gateway-startup-progress', (tui, theme) => {
-        const loader = new Loader(tui, (text) => theme.fg('accent', text), (text) => theme.fg('muted', text), `Starting MCP services · ${stage}`);
+        const loader = new Loader(tui, (text) => theme.fg('accent', text), (text) => theme.fg('muted', text), `Starting Gateway · ${stage}`);
         startupLoader = loader;
         return Object.assign(loader, { dispose: () => loader.stop() });
       });
@@ -159,7 +161,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let liveJobs: LiveJobs | undefined;
 
   async function showStartup(ctx: ExtensionContext, reason?: string): Promise<void> {
-    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
+    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || gatewayNeedsRestart(gatewayRoot) || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
     const scope = resolve(String(pi.getFlag('gateway-config')));
     if (ctx.sessionManager?.getBranch().some((entry) => entry.type === 'custom' && entry.customType === 'gateway-startup' && (entry.data as { scope?: string })?.scope === scope)) return;
     const data = connected && !lifetime.signal.aborted ? startupStatus : { services: [], unavailable: true };
@@ -249,24 +251,14 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     closing = undefined;
     lifetime = new AbortController();
     configurationLoaded = false;
-    startupProgress(ctx, 'reading configuration');
-    const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });
-    display = await readDisplay(configPath);
-    timeout = config.timeoutMs;
-    configuredServices = config.services.map((service) => service.name);
-    for (const service of config.services) if (service.enabled === false) disabledServices.add(service.name);
-    footerCount = configuredServices.length - disabledServices.size;
-    renderFooter();
-    configurationLoaded = true;
-    if (shuttingDown || lifetime.signal.aborted) return;
-    const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
     if (gatewayNeedsRestart(gatewayRoot)) {
       renderFooter('off');
-      ctx.ui.notify('Gateway files changed during this Pi process. Restart Pi to load the updated gateway adapter.', 'warning');
+      ctx.ui.notify('Gateway restart required. Restart Pi to load the updated adapter; services were not started.', 'warning');
       return;
     }
     {
-      const work = checkGatewayUpdate(gatewayRoot, update && config.autoUpdate, lifetime.signal,
+      const autoUpdate = await readAutoUpdate(configPath).catch((error) => { renderFooter('off'); throw error; });
+      const work = checkGatewayUpdate(gatewayRoot, update && autoUpdate, lifetime.signal,
         (stage) => startupProgress(ctx, stage === 'updating' ? 'Updating gateway' : 'Checking gateway updates'),
         (text, level) => ctx.ui.notify(clean(text), level));
       selfUpdateWork = work;
@@ -276,10 +268,20 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       if (shuttingDown || lifetime.signal.aborted) return;
       if (gatewayNeedsRestart(gatewayRoot)) {
         renderFooter('off');
-        ctx.ui.notify('Gateway update prepared. Restart Pi before connecting so the adapter and dependencies load together.', 'warning');
+        ctx.ui.notify('Gateway updated. Restart Pi to load the adapter and dependencies together; services were not started.', 'warning');
         return;
       }
     }
+    startupProgress(ctx, 'reading service configuration');
+    const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });
+    display = await readDisplay(configPath);
+    timeout = config.timeoutMs;
+    configuredServices = config.services.map((service) => service.name);
+    for (const service of config.services) if (service.enabled === false) disabledServices.add(service.name);
+    footerCount = configuredServices.length - disabledServices.size;
+    renderFooter();
+    configurationLoaded = true;
+    if (shuttingDown || lifetime.signal.aborted) return;
     if (update && config.autoUpdate) {
       startupProgress(ctx, 'checking for service updates');
       const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
@@ -298,7 +300,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       } finally { if (startupWork === work) startupWork = undefined; }
     }
     startupProgress(ctx, 'checking gateway build');
-    const build = ensureGatewayBuild(fileURLToPath(new URL('../', import.meta.url)), lifetime.signal);
+    const build = ensureGatewayBuild(gatewayRoot, lifetime.signal);
     startupBuild = build;
     try { await build; }
     catch (error) { renderFooter('off'); throw error; }
@@ -523,7 +525,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
                   // Validate enabled-service environment variables before stopping healthy children.
                   await loadConfig(configPath);
                   await close(true);
-                  if (!shuttingDown) { await start(ctx, true); ctx.ui.notify('Gateway services restarted', 'info'); }
+                  if (!shuttingDown) { await start(ctx, true); if (connected) ctx.ui.notify('Gateway services restarted', 'info'); }
                 }
               }
             }
