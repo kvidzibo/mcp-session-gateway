@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import { GatewayMenu } from '../pi/menu.js';
 import gatewayExtension from '../pi/gateway.js';
 import { PackageManager } from '../src/package-manager.js';
@@ -296,6 +296,44 @@ test('service controls open apps; Tab opens private settings and returns to the 
     await handlers.get('session_shutdown')!({}, ctx);
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('gateway navigation is compact and inline, with native selection bindings and unavailable explanations', async () => {
+  const keys = getKeybindings(), original = keys.getUserBindings();
+  const terminal = { rows: 30, columns: 100 };
+  let visit = 0;
+  try {
+    keys.setUserBindings({ ...original, 'tui.select.up': 'ctrl+p', 'tui.select.down': 'ctrl+n',
+      'tui.select.confirm': 'ctrl+y', 'tui.select.cancel': 'ctrl+x' });
+    const menu = new GatewayMenu({ ui: { custom: async (factory: Function, options: unknown) => {
+      assert.equal(options, undefined, 'Use Pi’s normal inline area, not an overlay');
+      let answer: unknown, finished = false;
+      const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; finished = true; });
+      try {
+        const render = () => panel.render(98) as string[];
+        assert.ok(render().length <= 12, 'Short menus do not reserve empty description rows');
+        assert.match(render().join('\n'), /ctrl\+p\/ctrl\+n.*ctrl\+y.*ctrl\+x/);
+        if (visit++ === 0) {
+          panel.handleInput('\x10');
+          assert.ok(render().includes('Connect first.'));
+          panel.handleInput('\x19');
+          assert.equal(finished, false, 'Unavailable actions cannot run');
+          panel.handleInput('\x0e');
+          panel.handleInput('\x19');
+        } else {
+          terminal.rows = 8; terminal.columns = 16;
+          panel.render(14);
+          panel.handleInput('\x18');
+        }
+        assert.ok(finished);
+        return answer;
+      } finally { panel.dispose(); }
+    } } } as any, new AbortController().signal);
+    const items = [{ id: 'app', label: 'Open app', description: 'Connect first.', disabled: true },
+      { id: 'services', label: 'Services', description: 'Choose a service.' }];
+    assert.equal(await menu.choose(['Gateway'], 'Disconnected', items), 'services');
+    assert.equal(await menu.choose(['Gateway'], 'Disconnected', items), undefined);
+  } finally { keys.setUserBindings(original); }
 });
 
 test('one gateway menu preserves navigation, bounds rendering, and recovers after failed and successful restarts', async () => {

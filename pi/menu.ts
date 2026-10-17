@@ -1,5 +1,5 @@
-import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
+import { DynamicBorder, keyText, type ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { Container, getKeybindings, Key, matchesKey, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { clean } from '../src/native-ui.js';
 import { showText } from './text-panel.js';
 
@@ -32,10 +32,9 @@ export class GatewayMenu {
           if (!usable) return [truncateToWidth('Enlarge terminal · Esc back', width)];
           selected = list ? choices.findIndex((item) => item.id === list!.getSelectedItem()?.value) : selected;
           const detail = choices[Math.max(0, selected)];
-          const description = wrapTextWithAnsi(oneLine(detail.description), width).slice(0, 3);
-          while (description.length < 3) description.push('');
-          const summaryLines = clean(summary).split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 12 - (tab ? 1 : 0)));
-          const rows = Math.max(1, Math.min(12, height - description.length - summaryLines.length - 8 - (tab ? 1 : 0)));
+          const description = wrapTextWithAnsi(oneLine(detail.description), width).slice(0, 2);
+          const summaryLines = wrapTextWithAnsi(oneLine(summary), width).slice(0, 1);
+          const rows = Math.max(1, Math.min(10, height - description.length - summaryLines.length - 8 - (tab ? 1 : 0)));
           list = new SelectList(choices.map((item) => ({ value: item.id, label: `${oneLine(item.label)}${item.disabled ? ' (unavailable)' : ''}` })), rows, {
             selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg(detail.disabled ? 'dim' : 'accent', s),
             description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: (s) => s,
@@ -45,15 +44,28 @@ export class GatewayMenu {
             if (!signal.aborted && !choices.find((choice) => choice.id === item.value)?.disabled) done(item.value);
           };
           list.onCancel = cancel;
-          const border = theme.fg('accent', '─'.repeat(width));
-          return [border, theme.fg('accent', (width < 60 ? path.slice(-2) : path).map(oneLine).join(' › ')), ...summaryLines.map((line) => theme.fg('muted', line)), '',
-            ...list.render(width), '', ...description.map((line) => theme.fg('muted', line)), '',
-            ...(tab ? [theme.fg('muted', `Tab ${oneLine(tab.label)}`)] : []),
-            theme.fg('muted', width < 50 ? `↑↓ choose · Enter · Esc ${exit.toLowerCase()}` : `↑/↓ choose · Enter open · Esc ${exit.toLowerCase()}`), border]
-            .map((line) => truncateToWidth(line, width));
+          const container = new Container();
+          const border = new DynamicBorder((text) => theme.fg('border', text));
+          const text = (value: string, color: 'accent' | 'muted' = 'muted') => new Text(theme.fg(color, value.split('\n').map((line) => truncateToWidth(line, width)).join('\n')), 0, 0);
+          container.addChild(border);
+          container.addChild(text((width < 60 ? path.slice(-2) : path).map(oneLine).join(' › '), 'accent'));
+          container.addChild(text(summaryLines.join('\n')));
+          container.addChild(new Spacer(1));
+          container.addChild(list);
+          container.addChild(new Spacer(1));
+          container.addChild(text(description.join('\n')));
+          container.addChild(new Spacer(1));
+          if (tab) container.addChild(text(`Tab ${oneLine(tab.label)}`));
+          const up = keyText('tui.select.up'), down = keyText('tui.select.down');
+          const confirm = keyText('tui.select.confirm'), cancelKeys = keyText('tui.select.cancel');
+          container.addChild(text(width < 60
+            ? `${up}/${down} · ${confirm} · ${cancelKeys.split('/')[0]}${width < 36 ? '' : ` ${exit.toLowerCase()}`}`
+            : `${up}/${down} navigate · ${confirm} select · ${cancelKeys} ${exit.toLowerCase()}`));
+          container.addChild(border);
+          return container.render(width).map((line) => line.trimEnd());
         },
         handleInput: (data: string) => {
-          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || getKeybindings().matches(data, 'tui.select.cancel')) cancel();
           else if (usable && geometry.endsWith(`:${tui.terminal.rows}:${tui.terminal.columns}`)) {
             const id = list?.getSelectedItem()?.value;
             if (tab && matchesKey(data, Key.tab)) {
@@ -67,7 +79,7 @@ export class GatewayMenu {
         invalidate() { list?.invalidate(); },
         dispose: () => this.signal.removeEventListener('abort', cancel),
       };
-    }, { overlay: true, overlayOptions: { width: '100%', anchor: 'center', margin: 0 } });
+    });
     while (!this.signal.aborted) {
       const picked = await choose();
       if (picked && typeof picked === 'object') {

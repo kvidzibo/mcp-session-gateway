@@ -129,8 +129,9 @@ model.
 | Escape | Back; close at root; return from an app to Services |
 
 Use arrows/Enter to navigate; viewers support Arrow/Page keys and **r** refresh (inventory refresh
-is local). Menus remember selection, explain unavailable features and have no inactivity deadline;
-shutdown cancels dialogs.
+is local). Navigation uses Pi's native list/layout components inline, not a centered overlay.
+Menus remember selection, explain unavailable features and follow Pi's selection keybindings, with
+no inactivity deadline; shutdown cancels dialogs. Settings editors and service apps are unchanged.
 
 The footer's ` MCP 3 services` excludes disabled/unactivated services at the last startup,
 **not a health check**. Click it to open Services/recovery; Kitty needs the

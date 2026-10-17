@@ -110,13 +110,13 @@ test('operator settings stay private, route by service, and require confirmed sc
         return ++confirmations > 1; // First decline must not write.
       },
       notify: (text: string) => { notices.push(text); },
-      custom: async (factory: Function, options: {overlay:boolean}) => {
-        assert.equal(options.overlay, true);
+      custom: async (factory: Function, options?: {overlay:boolean}) => {
         let result: unknown;
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => { result = value; });
         try {
           const lines: string[] = panel.render(98);
           if (lines[1]?.startsWith('Gateway')) {
+            assert.equal(options?.overlay, undefined, 'Gateway navigation uses the normal inline Pi area');
             const target = navigation.shift();
             if (!target) panel.handleInput('\u001b');
             else {
@@ -125,6 +125,7 @@ test('operator settings stay private, route by service, and require confirmed sc
               panel.handleInput('\r');
             }
           } else if (lines.some((line) => line.includes('JSON value'))) {
+            assert.equal(options?.overlay, true, 'Settings editors remain isolated overlays');
             const text = await ctx.ui.input();
             panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(text); panel.handleInput('\r');
           } else if (lines[1] === 'Save child-server settings?') {
@@ -266,11 +267,11 @@ test('operator settings stay private, route by service, and require confirmed sc
       const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
         schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]},note:{type:'string'}}},values:{size:'small',active:false,note:'old'}});
       // Reuse the overlay driver with this editor's scripted choice callbacks.
-      choiceContext.ui.custom = async (factory: Function, options: {overlay:boolean}) => {
+      choiceContext.ui.custom = async (factory: Function, options?: {overlay:boolean}) => {
         let result: unknown, completed = false;
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;completed=true;});
         try {
-          assert.equal(options.overlay,true);
+          assert.equal(options?.overlay,true);
           const lines: string[] = panel.render(98);
           t.mock.timers.tick(30_001);
           assert.equal(completed, false, 'Taking time to review settings must not discard the draft');
