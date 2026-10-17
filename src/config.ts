@@ -5,6 +5,7 @@ import { parsePackages, type PackageConfig } from './packages.js';
 
 export interface ServiceConfig {
   name: string;
+  enabled?: boolean;
   command: string;
   args: string[];
   env: Record<string, string>;
@@ -35,7 +36,7 @@ function expand(value: string): string {
   });
 }
 
-export async function loadConfig(path: string): Promise<GatewayConfig> {
+export async function loadConfig(path: string, options: { expandEnvironment?: boolean } = {}): Promise<GatewayConfig> {
   const absolute = resolve(path);
   const data: unknown = JSON.parse(await readFile(absolute, 'utf8'));
   if (!object(data)) throw new Error('Config must be an object');
@@ -75,6 +76,7 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     if (value.package !== undefined && (typeof value.package !== 'string' || !packages.some((pkg) => pkg.name === value.package))) {
       throw new Error(`Server ${name}: package must reference a configured package`);
     }
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw new Error(`Server ${name}: enabled must be a boolean`);
     const args = value.args ?? [];
     const env = value.env ?? {};
     if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
@@ -99,11 +101,12 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
     }
     return {
       name,
+      ...(value.enabled !== undefined ? { enabled: value.enabled } : {}),
       ...(value.package ? { package: value.package as string } : {}),
       ...(settings ? { settings: settings as { tokenEnv: string } } : {}),
       command: value.command,
       args: args as string[],
-      env: Object.fromEntries(Object.entries(env).map(([key, entry]) => [key, expand(entry as string)])),
+      env: Object.fromEntries(Object.entries(env).map(([key, entry]) => [key, value.enabled === false || options.expandEnvironment === false ? entry as string : expand(entry as string)])),
       cwd: value.cwd?.includes('{{packageRoot}}') ? value.cwd : resolve(dirname(absolute), value.cwd ?? '.'),
     };
   });

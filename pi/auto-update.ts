@@ -33,7 +33,29 @@ export async function toggleAutoUpdate(path: string, expected: boolean, signal: 
 }
 
 async function savePreference(path: string, key: 'autoUpdate' | 'display', expected: boolean | Display, next: boolean | Display, signal: AbortSignal): Promise<void> {
-  const label = key === 'autoUpdate' ? 'Auto update' : 'Display';
+  await saveConfig(path, signal, (config) => {
+    const current = config[key] ?? (key === 'display' ? 'minimal' : false);
+    if (current !== expected) throw new Error(`${key === 'autoUpdate' ? 'Auto update' : 'Display'} changed in another session; select again to toggle the current value`);
+    config[key] = next;
+  });
+}
+
+export async function toggleServiceEnabled(path: string, name: string, expected: boolean, signal: AbortSignal): Promise<boolean> {
+  await saveConfig(path, signal, (config) => {
+    if ('mcpServers' in config && 'servers' in config) throw new Error('Use mcpServers or servers, not both');
+    const servers = config.mcpServers ?? config.servers;
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) throw new Error('Missing server configuration');
+    const service = (servers as Record<string, unknown>)[name];
+    if (!service || typeof service !== 'object' || Array.isArray(service)) throw new Error('Service no longer configured');
+    const entry = service as Record<string, unknown>;
+    if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+    if ((entry.enabled !== false) !== expected) throw new Error('Service changed in another session; reopen the menu and retry');
+    entry.enabled = !expected;
+  });
+  return !expected;
+}
+
+async function saveConfig(path: string, signal: AbortSignal, change: (config: Record<string, unknown>) => void): Promise<void> {
   const target = await realpath(path);
   const lockPath = `${target}.auto-update.lock`;
   const lock = await open(lockPath, 'wx', 0o600).catch((error) => {
@@ -45,9 +67,7 @@ async function savePreference(path: string, key: 'autoUpdate' | 'display', expec
     signal.throwIfAborted();
     const original = await readFile(target, 'utf8');
     const config = parse(original);
-    const current = config[key] ?? (key === 'display' ? 'minimal' : false);
-    if (current !== expected) throw new Error(`${label} changed in another session; select again to toggle the current value`);
-    config[key] = next;
+    change(config);
     const mode = (await stat(target)).mode & 0o777;
     const file = await open(temporary, 'wx', 0o600);
     try {

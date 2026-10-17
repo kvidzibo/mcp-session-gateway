@@ -123,7 +123,7 @@ model.
 |---|---|
 | `/gateway` | Operator menu; package/recovery actions also work disconnected |
 | `/pi-services` | Services, or recovery when disconnected |
-| Service → Enter | App if available, otherwise its feature menu |
+| Service → Enter | Controls: enable/disable, app, settings and resources |
 | Tab | Service settings; closing returns to the calling list/app |
 | Ctrl+O in an app | Features, including Resources |
 | Escape | Back; close at root; return from an app to Services |
@@ -144,6 +144,14 @@ snapshot](docs/reference.md#startup-snapshot).
 before Enter; resizing resets review. Missing UI, timeout, disconnect or cancellation never
 approves. Incoming confirmations are cancelled while menus are open. Services must honor decisions;
 [prompts are cooperative](docs/reference.md#approvals).
+
+### Enable or disable a service
+
+Choose **Services → service → Disable service / Enable service**. The choice saves immediately
+for future launches in all sessions sharing the config; running services stay unchanged. Disabled
+services remain listed and launch no process or tools. Choose **Connection / restart… → Restart
+gateway services…** to apply here after reviewing the confirmation. Restart cancels active/queued
+jobs for **all** services in this session. Services controls also work while disconnected.
 
 ### Child-server settings
 

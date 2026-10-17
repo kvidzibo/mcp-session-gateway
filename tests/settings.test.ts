@@ -158,7 +158,7 @@ test('operator settings stay private, route by service, and require confirmed sc
           try {
             const lines: string[] = panel.render(98);
             assert.match(lines[1], /^Gateway › Services › (alpha|beta|disabled)$/);
-            assert.ok(lines.some((line) => line.includes('Available service features')));
+            assert.ok(lines.some((line) => line.includes('Next launch: enabled')));
             assert.ok(!lines.some((line) => line.includes('Reusable service settings')));
             screens.push(lines.join('\n'));
             if (opened) await new Promise<void>((resolve) => { release = resolve; opened!(); });

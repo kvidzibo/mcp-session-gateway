@@ -89,7 +89,8 @@ confirmation**. **Code runs with your OS permissions, not in a sandbox: authoriz
 sources/commands**, including manually confirmed operations. `false` disables startup writes; manual
 release actions remain separately confirmed.
 
-Only service-linked, activated managed packages and explicit `localUpdate` checkouts qualify. First
+Only packages linked to enabled services qualify: activated managed packages and explicit
+`localUpdate` checkouts. First
 installs, unlinked packages and other folders do not. Standalone launches and Connection-menu
 restarts do not run this policy. All updates finish before connection.
 

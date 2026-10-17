@@ -67,7 +67,7 @@ export class Gateway {
 
   constructor(private readonly config: GatewayConfig, private readonly operatorToken?: string) {
     if (operatorToken && !validToken(operatorToken)) throw new Error('Invalid gateway operator token');
-    this.server.registerCapabilities({ experimental: { 'gateway-services-v1': { names: config.services.map((service) => service.name) }, 'gateway-status-v1': {} } });
+    this.server.registerCapabilities({ experimental: { 'gateway-services-v1': { names: config.services.filter((service) => service.enabled !== false).map((service) => service.name) }, 'gateway-status-v1': {} } });
     this.server.setRequestHandler(GatewayStatusRequestSchema, async (_request, extra) => this.withRequest(extra, async () => {
       await this.ready;
       if (!this.startupComplete || this.closing) throw new McpError(ErrorCode.InvalidRequest, 'Gateway startup did not complete or is closing');
@@ -456,7 +456,7 @@ export class Gateway {
     // Learn upstream elicitation capability before children initialize.
     await initialized;
     if (this.closing) return;
-    const results = await Promise.allSettled(this.config.services.map((config) => this.startService(config)));
+    const results = await Promise.allSettled(this.config.services.filter((service) => service.enabled !== false).map((config) => this.startService(config)));
     const failure = results.find((result) => result.status === 'rejected');
     if (failure?.status === 'rejected') {
       this.resolveReady();

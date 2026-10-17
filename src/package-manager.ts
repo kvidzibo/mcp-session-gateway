@@ -273,7 +273,7 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
   const manual = options.mode === 'manual';
   if (!manual && !config.autoUpdate) return [];
   const packages = config.packages.filter((pkg) => (pkg.managed || pkg.localUpdate) &&
-    (manual || config.services.some((service) => service.package === pkg.name)));
+    (manual || config.services.some((service) => service.enabled !== false && service.package === pkg.name)));
   const updates: ({ name: string; from: string; version: string } | undefined)[] = new Array(packages.length);
   const manager = new PackageManager(config.packageStore);
   const stopped = new AbortController();
