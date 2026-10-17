@@ -48,11 +48,11 @@ async function outputsExist(pkg: PackageConfig, root: string): Promise<boolean> 
 }
 
 /** Also used on standalone/manual launches: failed or in-flight builds never launch stale output. */
-export async function localPackageRoot(pkg: PackageConfig, signal: AbortSignal): Promise<string> {
+export async function localPackageRoot(pkg: PackageConfig, signal: AbortSignal, options: { allowUnbuilt?: boolean } = {}): Promise<string> {
   const paths = await checkout(pkg, signal);
   if (await exists(paths.lock)) throw new Error(`Local package ${pkg.name} is locked; inspect ${paths.lock} before recovery`);
   const state = await receipt(paths.receipt, signal);
-  if ((state && (!state.ready || state.head !== await git(['rev-parse', 'HEAD'], paths.root, signal) || state.definition !== definition(pkg))) || !await outputsExist(pkg, paths.root)) {
+  if ((state && (!state.ready || state.head !== await git(['rev-parse', 'HEAD'], paths.root, signal) || state.definition !== definition(pkg))) || (!await outputsExist(pkg, paths.root) && !(options.allowUnbuilt && !state))) {
     throw new Error(`Local package ${pkg.name} needs a successful startup build/validation; enable autoUpdate and reload. Log: ${paths.log}`);
   }
   return paths.root;

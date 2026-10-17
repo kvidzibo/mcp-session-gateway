@@ -22,7 +22,7 @@ menu](#operator-menu) · [Troubleshooting](#troubleshooting) · [Documentation](
 ## Setup
 
 Requires **Node.js 22+** and the child servers' runtimes. The adapter is tested with **Pi 1.1.0**,
-which requires **Node.js 22.19+**.
+which requires **Node.js 22.19+**. In a Git checkout, the adapter also requires **Git 2.45+**.
 
 ```bash
 npm ci
@@ -168,8 +168,10 @@ never configure the token.
 offers restart. Inventory/checks install nothing. First managed installation and restart require
 separate confirmations.
 
-**Auto update: Off/On** saves immediately and affects the next startup/reload, not running services.
-Enabling it authorizes trusted downloads/builds/validation without per-update prompts. Read the
+The adapter checks the **gateway itself** before each launch, even with **Auto update: Off**.
+**Auto update: On** also authorizes gateway and eligible service downloads/builds/validation at
+startup/reload, without per-update prompts. Gateway updates require a **fresh Pi process** before
+connecting; running sessions are not restarted. The setting saves immediately. Read the
 [package guide](docs/packages.md) before enabling it, including Git 2.45+/POSIX requirements and
 in-place local-update effects.
 

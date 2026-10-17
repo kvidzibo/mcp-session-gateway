@@ -19,6 +19,7 @@ import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ensureGatewayBuild } from './build.js';
+import { checkGatewayUpdate, gatewayNeedsRestart } from './self-update.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -43,6 +44,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let managerWork: Promise<void> | undefined;
   let startupWork: ReturnType<typeof updateManagedPackages> | undefined;
   let startupBuild: Promise<void> | undefined;
+  let selfUpdateWork: Promise<void> | undefined;
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
   let configurationLoaded = false;
@@ -177,7 +179,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     lifetime.abort();
     operatorToken = undefined;
     const stoppingNative = native.stop();
-    const pendingManager = Promise.allSettled([managerWork, startupWork, startupBuild]);
+    const pendingManager = Promise.allSettled([managerWork, startupWork, startupBuild, selfUpdateWork]);
     closing = (async () => {
       const results = await Promise.allSettled([
         pendingManager,
@@ -257,6 +259,27 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     renderFooter();
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
+    const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
+    if (gatewayNeedsRestart(gatewayRoot)) {
+      renderFooter('off');
+      ctx.ui.notify('Gateway files changed during this Pi process. Restart Pi to load the updated gateway adapter.', 'warning');
+      return;
+    }
+    {
+      const work = checkGatewayUpdate(gatewayRoot, update && config.autoUpdate, lifetime.signal,
+        (stage) => startupProgress(ctx, stage === 'updating' ? 'Updating gateway' : 'Checking gateway updates'),
+        (text, level) => ctx.ui.notify(clean(text), level));
+      selfUpdateWork = work;
+      try { await work; }
+      catch (error) { renderFooter('off'); throw error; }
+      finally { if (selfUpdateWork === work) selfUpdateWork = undefined; }
+      if (shuttingDown || lifetime.signal.aborted) return;
+      if (gatewayNeedsRestart(gatewayRoot)) {
+        renderFooter('off');
+        ctx.ui.notify('Gateway update prepared. Restart Pi before connecting so the adapter and dependencies load together.', 'warning');
+        return;
+      }
+    }
     if (update && config.autoUpdate) {
       startupProgress(ctx, 'checking for service updates');
       const work = updateManagedPackages(config, lifetime.signal, (name, error) =>
@@ -383,7 +406,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
             { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
-              description: autoUpdateError || 'Enter toggles and saves. On permits startup/reload updates and trusted builds with OS permissions: activated releases + configured localUpdate Git checkouts. No prompts.' },
+              description: autoUpdateError || 'Enter toggles and saves. On permits gateway + service updates and trusted builds at startup/reload, without prompts. Gateway updates need a Pi restart. Code runs with OS permissions.' },
             { id: 'display', label: `Display: ${menuDisplay === undefined ? 'Unavailable' : menuDisplay === 'full' ? 'Full' : 'Minimal'}`, disabled: menuDisplay === undefined,
               description: displayError || 'Enter toggles and saves immediately. Full shows per-service success (green), failure (red), and running (amber) tool calls.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
