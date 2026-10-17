@@ -12,6 +12,9 @@ import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
 import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
+import { FooterActions } from './footer-actions.js';
+import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
+import { startupSummary, type StartupSummary } from './startup-summary.js';
 import { ChangedSchema, InvalidatedSchema, clean } from '../src/native-ui.js';
 import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
@@ -38,6 +41,41 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let launchedServices: string[] | undefined;
   let configuredServices: string[] = [];
   let configurationLoaded = false;
+  let footerContext: ExtensionContext | undefined;
+  let footerBridge: FooterActions | undefined;
+  let footerCount: number | undefined;
+  let footerState: 'starting' | 'up' | 'off' = 'starting';
+  const disconnectedServices = new Set<string>();
+  function renderFooter(state = footerState): void {
+    footerState = state;
+    const ctx = footerContext;
+    if (!ctx || shuttingDown) return;
+    footerBridge?.clear();
+    const suffix = state === 'off' ? ' · off' : state === 'starting' ? ' · starting' : disconnectedServices.size ? ` · !${disconnectedServices.size}` : '';
+    const text = ` MCP ${footerCount ?? '?'} ${footerCount === 1 ? 'service' : 'services'}${suffix}`;
+    const styled = ctx.ui.theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text);
+    const url = footerBridge?.link('gateway', async () => {
+      // Links are single-use. Refresh even after a busy-dialog rejection.
+      renderFooter();
+      if (footerContext !== ctx || shuttingDown) return false;
+      try { await gatewayCommand('services').handler('', ctx); return true; }
+      finally { renderFooter(); }
+    });
+    ctx.ui.setStatus('gateway', url ? `\x1b]8;;${url}\x07${styled}\x1b]8;;\x07` : styled);
+  }
+  async function startFooter(ctx: ExtensionContext): Promise<void> {
+    if (ctx.mode !== 'tui' || !ctx.hasUI) return;
+    footerContext = ctx;
+    if (!footerBridge) {
+      const bridge = new FooterActions(); footerBridge = bridge;
+      try { await bridge.start(); }
+      catch {
+        await bridge.stop(); footerBridge = undefined;
+        ctx.ui.notify('Gateway footer clicks unavailable; use /pi-services', 'warning');
+      }
+    }
+    renderFooter();
+  }
   let approvalQueue = Promise.resolve();
   let operatorToken: string | undefined;
   const native = new NativeUI(pi, connection, () => ({ signal: lifetime.signal, timeout }), async (run) => {
@@ -53,12 +91,32 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (typeof entry.data?.text !== 'string') return;
     return new Text(theme.fg('success', clean(entry.data.text)), 0, 0);
   });
+  pi.registerEntryRenderer<StartupSummary>('gateway-startup', (entry, _options, theme) => {
+    const parsed = GatewayStatusSchema.safeParse(entry.data);
+    if (parsed.success) return startupSummary({ ...parsed.data, ...(entry.data?.unavailable ? { unavailable: true } : {}) }, theme);
+  });
   let liveJobs: LiveJobs | undefined;
+
+  async function showStartup(ctx: ExtensionContext, reason?: string): Promise<void> {
+    if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
+    const scope = resolve(String(pi.getFlag('gateway-config')));
+    if (ctx.sessionManager?.getBranch().some((entry) => entry.type === 'custom' && entry.customType === 'gateway-startup' && (entry.data as { scope?: string })?.scope === scope)) return;
+    const current = client, signal = lifetime.signal;
+    let data: StartupSummary = { services: [], unavailable: true };
+    if (connected && current?.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
+      try { data = await current.request({ method: GATEWAY_STATUS }, GatewayStatusSchema, { signal, timeout }); }
+      catch { /* A missing snapshot must never turn configured services into running ones. */ }
+    }
+    if (shuttingDown || current !== client || footerContext !== ctx) return;
+    if (signal.aborted || !connected) data = { services: [], unavailable: true };
+    pi.appendEntry('gateway-startup', { scope, ...data });
+  }
 
   async function close(preserveMenu = false): Promise<void> {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
+    renderFooter('off');
     configurationLoaded = false;
     liveJobs?.stop();
     liveJobs = undefined;
@@ -122,13 +180,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (shuttingDown) return;
     const configPath = pi.getFlag('gateway-config');
     if (typeof configPath !== 'string' || !configPath) return;
+    await startFooter(ctx);
     if (connected) { await native.start(ctx, resolve(configPath), reason); return; }
+    disconnectedServices.clear();
+    renderFooter('starting');
     closing = undefined;
     lifetime = new AbortController();
     configurationLoaded = false;
-    const config = await loadConfig(configPath);
+    const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
+    footerCount = configuredServices.length;
+    renderFooter();
     configurationLoaded = true;
     if (shuttingDown || lifetime.signal.aborted) return;
     if (update && config.autoUpdate) {
@@ -136,7 +199,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(clean(`MCP auto-update failed for ${name}: ${String(error)}. Using current activation; inspect Packages for details.`), 'warning'));
       startupWork = work;
       try {
-        const updates = await work;
+        const updates = await work.catch((error) => { renderFooter('off'); throw error; });
         if (shuttingDown || lifetime.signal.aborted) return;
         if (updates.length) pi.appendEntry('gateway-package-updates', {
           text: `MCP servers were updated:\n${updates.map(({ name, from, version }) => `- ${name}: ${from} → ${version}`).join('\n')}`,
@@ -145,9 +208,13 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     }
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { if (client === current) { connected = false; liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
+    current.onclose = () => { if (client === current) { connected = false; renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
-    current.setNotificationHandler(InvalidatedSchema, ({ params }) => { native.invalidate(params.service); });
+    current.setNotificationHandler(InvalidatedSchema, ({ params }) => {
+      if (client !== current) return;
+      disconnectedServices.add(params.service); renderFooter();
+      native.invalidate(params.service);
+    });
     operatorToken = ctx.mode === 'tui' && ctx.hasUI ? randomBytes(32).toString('base64url') : undefined;
     const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env[OPERATOR_ENV];
@@ -167,14 +234,23 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         liveJobs = new LiveJobs(current, ctx, timeout);
         await liveJobs.start();
       }
+      if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
     } catch (error) { await close(preserveMenu); throw error; }
   }
-  pi.on('session_start', async (event, ctx) => { shuttingDown = false; await start(ctx, false, event.reason, true); });
+  pi.on('session_start', async (event, ctx) => {
+    shuttingDown = false;
+    try { await start(ctx, false, event.reason, true); }
+    finally { await showStartup(ctx, event.reason); }
+  });
   pi.on('session_shutdown', async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
-    shuttingDown = true; await close();
+    shuttingDown = true;
+    const bridge = footerBridge; footerBridge = undefined;
+    footerContext?.ui.setStatus('gateway', undefined); footerContext = undefined;
+    try { await close(); } finally { await bridge?.stop(); }
   });
   pi.on('session_tree', async (_event, ctx) => {
+    if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
   const gatewayCommand = (initialAction?: 'services') => ({

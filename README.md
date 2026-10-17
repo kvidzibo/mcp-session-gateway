@@ -140,9 +140,24 @@ With the adapter, use `gateway_tools` to discover model-callable tools and
 `gateway_call` to call them. Tools use names such as `example__read_file`.
 
 **`/gateway`** opens the private operator menu; **`/pi-services`** opens Services
-directly, or the recovery menu when disconnected. Menus/panels do not start model
-turns or add their contents to model context. Explicit tool results still reach
-the model.
+directly, or the recovery menu when disconnected. The bottom bar shows
+` MCP 3 services`: the configured count from the last start/restart, **not a live
+or healthy-service count**. Observed child disconnects add `· !N`; a closed gateway
+shows `· off`. Before configuration is available the count is `?`. No status
+polling is added.
+
+New sessions also print a compact, display-only **startup snapshot** listing each
+service's observed connection state and exposed tool count. Unactivated managed
+services show `stopped · package not activated`. The snapshot excludes gateway-owned
+tools and is not a health check or live dashboard. It is saved outside model
+context; reload/resume/fork do not append duplicate cards. Status-read failures show
+an unavailable summary without stopping a working gateway.
+
+Click the whole MCP segment to open Services (or recovery when disconnected),
+without starting a model turn. Kitty needs the existing
+[footer-link handler](docs/native-ui.md#terminal-clicks); `/pi-services` is the
+keyboard fallback. Menus/panels do not add their contents to model context.
+Explicit tool results still reach the model.
 
 ```text
 Gateway

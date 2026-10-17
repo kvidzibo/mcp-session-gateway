@@ -76,6 +76,23 @@ The adapter creates no process at extension load time. It starts the gateway on
 The upstream handshake precedes child startup so form elicitation is advertised
 only when supported by the harness.
 
+### Startup snapshot
+
+Gateways advertise `experimental["gateway-status-v1"] = {}` for the private,
+read-only `gateway/status` request. It waits for successful startup and rejects
+while closing. The result is `{services: [{name, state, tools}]}`: `state` is
+`connected`, `stopped` (managed package not activated), or `disconnected`; `tools`
+counts exposed service tools, excluding gateway-owned and app-only tools. This
+reads in-memory observations, not child health checks, and creates no model tool.
+
+The TUI adapter reads once for a new session and saves a config-scoped,
+display-only startup entry. Cards explicitly say **Startup snapshot**; existing
+cards remain historical after restart. Reload/resume/fork do not append cards,
+and an existing matching entry prevents duplicates when reopening a session.
+The footer remains the connection indicator; `/pi-services` opens current service
+navigation. A missing/failed status read shows **Startup status unavailable**
+without closing an otherwise working connection.
+
 ## Resources
 
 `resources/subscribe` and `resources/unsubscribe` route to the owning service.

@@ -23,7 +23,7 @@ test('/pi-services opens Services directly, preserves Back navigation, and falls
   } as any);
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
     sessionManager: { getBranch: () => [], getSessionId: () => 'services-test' },
-    ui: { notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
+    ui: { theme, notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
       custom: async (factory: Function) => {
         let answer: unknown;
         const panel = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; });
@@ -100,7 +100,7 @@ test('service selection opens its app directly; Tab opens private settings and r
   } as any);
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true,
     sessionManager: { getBranch: () => [], getSessionId: () => 'app-tab-test' },
-    ui: { notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
+    ui: { theme, notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
       custom: async (factory: Function) => {
         let answer: unknown, finished = false;
         const terminal = { rows: 30, columns: 100 };
@@ -199,7 +199,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true,
     sessionManager: { getBranch: () => [], getSessionId: () => 'menu-test' },
     ui: {
-      notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
+      theme, notify: (text: string) => notices.push(text), setStatus() {}, setWidget() {},
       custom: async (factory: Function) => {
         let answer: unknown;
         const panel = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; });
