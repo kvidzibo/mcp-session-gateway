@@ -148,7 +148,9 @@ conflict, `-33003` persistence/catalogue unavailable, `-32602` invalid input. Th
 never automatically retries a write; reread after conflict or uncertain completion.
 Confirmation uses an isolated scrolling overlay. Enter can save only after every
 preview line has been rendered visibly. Resizing resets that review; unrendered
-resize events cannot authorize writing. Escape, cancellation or timeout never saves.
+resize events cannot authorize writing. Escape, cancellation or timeout during
+confirmation never dispatches a save. After dispatch, cancellation or timeout may
+leave a committed write; reread state before attempting another save.
 
 ## Trusted host route
 

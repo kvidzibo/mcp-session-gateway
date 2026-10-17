@@ -106,7 +106,7 @@ Gateways advertise `experimental["gateway-status-v1"] = {}` for the private,
 read-only `gateway/status` request. Each service includes its observed state,
 model-visible tool count and `toolNames` (original, unprefixed names). Older saved
 snapshots without names still render their counts. It waits for successful startup and rejects
-while closing. The result is `{services: [{name, state, tools}]}`: `state` is
+while closing. The result is `{services: [{name, state, tools, toolNames}]}`: `state` is
 `connected`, `stopped` (managed package not activated), or `disconnected`; `tools`
 counts exposed service tools, excluding gateway-owned and app-only tools. This
 reads in-memory observations, not child health checks, and creates no model tool.

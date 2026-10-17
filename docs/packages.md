@@ -91,9 +91,11 @@ Other external packages remain read-only. The same concurrency, clean-tree,
 locking, validation and cancellation safeguards as startup updates apply.
 Progress is cancellable with Escape; after cleanup, the results retain completed
 version changes even when cancelled. Package failures, including local checkout
-failures, are reported without stopping unrelated manual updates. Startup still
-fails closed on unsafe local checkouts. A local rebuild may succeed without a
-version change.
+failures, are reported without stopping unrelated manual updates. At startup,
+a refused local update can warn and continue with the existing checkout if its
+launch guards pass. Locks, pending builds, stale receipts or missing declared
+outputs block startup; dirtiness or a feature branch alone does not. A local
+rebuild may succeed without a version change.
 
 Services are **not restarted**. Managed activation changes future launches in
 every session sharing the store; local updates immediately modify shared files
