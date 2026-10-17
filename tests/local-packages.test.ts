@@ -125,6 +125,21 @@ const child=require('child_process').spawnSync(${JSON.stringify(realGit)},args,{
     await bindManagedService(config, config.services[0]);
     await assert.rejects(access(lock), { code: 'ENOENT' });
 
+    // Linked main/master worktrees share a lock even though their roots differ.
+    git(remote, 'branch', 'master');
+    git(local, 'fetch', remote, 'refs/heads/master:refs/remotes/origin/master');
+    const other = join(dir, 'other');
+    git(local, 'worktree', 'add', '-b', 'master', other, 'origin/master');
+    const parallel = structuredClone(config);
+    parallel.autoUpdateConcurrency = 2;
+    parallel.packages.push({ ...structuredClone(pkg), name: 'other', source: { type: 'local', path: other } });
+    parallel.services.push({ ...config.services[0], name: 'other', package: 'other' });
+    warnings.length = 0;
+    assert.deepEqual(await run(parallel), [], 'Related worktrees serialize instead of failing their own common-directory lock');
+    assert.deepEqual(warnings, []);
+    assert.equal(await readFile(join(other, 'count.txt'), 'utf8'), '1');
+    await assert.rejects(access(lock), { code: 'ENOENT' });
+
     const waiting = structuredClone(config);
     waiting.packages[0].localUpdate!.build = [{ command: process.execPath, args: ['-e', "const fs=require('fs');process.on('SIGTERM',()=>{});fs.writeFileSync('count.txt',String(+fs.readFileSync('count.txt','utf8')+1));setInterval(()=>{},1000)"], cwd: '.' }];
     const controller = new AbortController();

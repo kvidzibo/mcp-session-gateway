@@ -301,13 +301,33 @@ export async function updateManagedPackages(config: GatewayConfig, signal: Abort
       if (pkg.localUpdate) await localPackageRoot(pkg, operation);
     }
   };
+  const localOperations = new Map<string, Promise<void>>();
+  const dispatch = async (pkg: PackageConfig, index: number) => {
+    if (!pkg.localUpdate || pkg.source.type !== 'local') return update(pkg, index);
+    let common: string;
+    try {
+      common = await realpath(resolve(pkg.source.path, await git(['rev-parse', '--git-common-dir'], pkg.source.path, operation)));
+    } catch {
+      // Preserve the normal warning/launch-safety checks for invalid local roots.
+      return update(pkg, index);
+    }
+    const previous = localOperations.get(common);
+    const work = (async () => {
+      if (previous) await previous;
+      operation.throwIfAborted();
+      await update(pkg, index);
+    })();
+    localOperations.set(common, work);
+    try { await work; }
+    finally { if (localOperations.get(common) === work) localOperations.delete(common); }
+  };
   let next = 0;
   const worker = async () => {
     try {
       while (next < packages.length) {
         operation.throwIfAborted();
         const index = next++;
-        await update(packages[index], index);
+        await dispatch(packages[index], index);
       }
     } catch (error) { stopped.abort(error); }
   };

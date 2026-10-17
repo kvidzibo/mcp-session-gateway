@@ -102,7 +102,10 @@ for sequential updates, or any integer from **1 to 128** to override the limit,
 including values above four. The limit counts whole package operations; each
 package's build and validation steps still run in order. Builds/tests may use
 multiple cores themselves, so higher limits can increase RAM and disk contention.
-No services connect until all updates finish; the update summary retains config order.
+Local checkouts sharing a canonical Git common directory run one at a time to
+avoid conflicting with their own worktree lock; locks held by other operations
+are still refused. No services connect until all updates finish; the update
+summary retains config order.
 
 All existing pinned-version, clean-tree, ancestry/downgrade, locking, validation,
 logging and cancellation checks still apply. Managed-release failures warn and
