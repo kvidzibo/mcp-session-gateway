@@ -10,6 +10,7 @@ export const ActionRevisionFeaturesSchema = z.object({ actionRevisions: z.litera
 export const FooterSecondaryFeaturesSchema = z.object({ footerSecondaryActions: z.literal(true) });
 export const FooterStylesFeaturesSchema = z.object({ footerStyles: z.literal(true) });
 export const FooterDoubleFeaturesSchema = z.object({ footerDoubleActions: z.literal(true) });
+export const FooterNativeFeaturesSchema = z.object({ footerNativeActions: z.literal(true) });
 export const StaleActionDataSchema = z.object({ 'native-ui/action': z.object({ status: z.literal('not-applied'), reason: z.literal('stale-view') }) });
 const text = z.string().max(20_000);
 const scalar = z.union([text, z.number().finite(), z.boolean(), z.null()]);
@@ -26,10 +27,13 @@ export const ViewSchema = z.object({
   version: z.literal(1), title: text, revision: z.string().min(1).max(256),
   state: StateSchema, body: text.optional(), retainOnNew: z.boolean().optional(),
   controls: z.array(control).max(256),
-  footer: z.array(z.object({ text, url: z.string().max(2048).optional(), action: z.string().min(1).max(256).optional(), secondaryAction: z.string().min(1).max(256).optional(), doubleAction: z.string().min(1).max(256).optional(), style: z.object({ italic: z.boolean().optional(), color: z.enum(['accent', 'muted', 'text']).optional() }).strict().optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
+  footer: z.array(z.object({ text, openApp: z.literal(true).optional(), url: z.string().max(2048).optional(), action: z.string().min(1).max(256).optional(), secondaryAction: z.string().min(1).max(256).optional(), doubleAction: z.string().min(1).max(256).optional(), style: z.object({ italic: z.boolean().optional(), color: z.enum(['accent', 'muted', 'text']).optional() }).strict().optional(), width: z.number().int().min(3).max(1000).optional() }).strict()).max(128).optional(),
 }).strict().superRefine((view, ctx) => {
   if (new Set(view.controls.map((c) => c.id)).size !== view.controls.length) ctx.addIssue({ code: 'custom', message: 'Duplicate control IDs' });
   for (const item of view.footer ?? []) {
+    if (item.openApp && (item.url !== undefined || item.action || item.secondaryAction || item.doubleAction)) {
+      ctx.addIssue({ code: 'custom', message: 'App launchers cannot also contain URLs or server actions' });
+    }
     if (item.secondaryAction && (!item.action || !view.controls.some((c) => c.id === item.secondaryAction && c.kind === 'action'))) {
       ctx.addIssue({ code: 'custom', message: 'Secondary footer actions require a primary action and an action control' });
     }

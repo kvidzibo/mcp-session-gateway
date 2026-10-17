@@ -18,6 +18,18 @@ Escape cancels. After dispatch, failures may have committed; inspect refreshed s
 survive disconnect, not shutdown. Footer text/HTTP(S) links use Pi's status area; actions use app
 controls/confirmations without model turns.
 
+**Fullscreen (0.29.0+):** service footers use native mouse regions below the editor.
+Click normally; double-click invokes the declared double action. Action titles are not
+terminal hyperlinks, so they add no hyperlink underline or hand pointer and do not take
+keyboard focus. Hover hints name actions when space permits. A fast double-click waits
+for its single-click preview; one accepting gesture cannot complete the newly selected
+task. The app launcher opens the service menu; Escape returns to the editor. Safe external
+URLs remain terminal links. No Kitty handler or saved terminal setting is needed for these
+native actions. Try a separate Pi process with `--tui-mode fullscreen`; regular mode is unchanged.
+
+**Regular mode and older adapters:** use the Kitty bridge below. Its hyperlinks retain
+Kitty's underline/pointer styling. The generic MCP/service counters also remain hyperlinks.
+
 - Primary: append [`pi/kitty/open-actions.conf`](../pi/kitty/open-actions.conf) to Kitty's existing
   open-actions file; replace the absolute helper path. Reload **Ctrl+Shift+F5**. Click normally;
   fullscreen requires **Ctrl+Shift+click**, bypassing Pi's URL opener.
@@ -84,6 +96,12 @@ segment using the host theme, after sanitization/truncation. Services cannot sup
 raw ANSI or arbitrary colors. Omit styles and double actions from all views, including
 action results, until the corresponding feature is negotiated.
 
+Negotiated `openApp: true` makes a footer segment open its service app. It cannot also
+contain a URL or server action and sends no mutation by itself. Omit it until
+`footerNativeActions` is negotiated. Native actions still validate displayed revisions,
+serialize with service operations, and reject stale views; disconnected/shutdown footers
+cannot act. Triple clicks and a replayed second click do not turn acceptance into completion.
+
 Busy menus/confirmations reject clicks: finish and refresh. Accepted operations drain
 despite helper disconnect; no automatic replay.
 
@@ -98,6 +116,7 @@ refreshed state after uncertain completion.
 | Scoped revisions | Gateway advertises `capabilities.experimental["native-ui-v1"].actionRevisions = true`; only then supporting hosts send `_meta["native-ui/features"] = {"actionRevisions": true}` on reads/actions/tools. |
 | Footer styles | Gateway advertises `capabilities.experimental["native-ui-v1"].footerStyles = true`; host independently sends `_meta["native-ui/features"].footerStyles = true`. |
 | Double footer | Gateway advertises `capabilities.experimental["native-ui-v1"].footerDoubleActions = true`; host independently sends `_meta["native-ui/features"].footerDoubleActions = true`. This does not imply installed mouse mappings. |
+| Native footer | Gateway advertises `capabilities.experimental["native-ui-v1"].footerNativeActions = true`; only fullscreen hosts send `_meta["native-ui/features"].footerNativeActions = true`. Enables `openApp: true`; regular hosts never negotiate it. |
 | Alternate footer | Gateway advertises `capabilities.experimental["native-ui-v1"].footerSecondaryActions = true`; hosts independently negotiate `_meta["native-ui/features"].footerSecondaryActions = true`. This does not imply installed mouse mappings. |
 
 Negotiated controls may supply **1–256-character** `revision`: host sends it instead of view

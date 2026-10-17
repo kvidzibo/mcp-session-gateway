@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 import { FooterActions } from '../pi/footer-actions.js';
 import { NativeUI } from '../pi/native-ui.js';
+import { visibleWidth } from '@earendil-works/pi-tui';
 import { ViewSchema } from '../src/native-ui.js';
 const { click } = createRequire(import.meta.url)('../pi/footer-click.cjs');
 
@@ -252,4 +253,83 @@ test('styled double-click titles accept then complete only on fresh capabilities
     await bridge.stop();
     await assert.rejects(click(stopped, 'double'));
   } finally { await host.stop(); await bridge.stop(); }
+});
+
+test('fullscreen native footer keeps double-clicks state-bound and never captures editor focus', async () => {
+  const statuses = new Map<string, string>(), actions: string[] = [], notices: string[] = [];
+  const draft = 'Keep this draft 日本語';
+  let selected = false, completed = false, widget: any, mode = 'fullscreen', menus = 0;
+  let releasePreview: (() => void) | undefined;
+  const preview = new Promise<void>((resolve) => { releasePreview = resolve; });
+  const theme: any = { fg: (_: string, text: string) => `\x1b[36m${text}\x1b[39m`, italic: (text: string) => `\x1b[3m${text}\x1b[23m` };
+  const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => [], getSessionId: () => 'native' },
+    ui: { theme, setStatus: (key: string, value: string) => statuses.set(key, value),
+      getEditorText: () => draft, setEditorText: () => assert.fail('Native actions must not rewrite a draft'),
+      notify: (message: string) => notices.push(message),
+      setWidget: (_key: string, factory: any) => {
+        widget?.dispose?.();
+        widget = factory?.({ mode, requestRender() {} }, theme);
+      },
+      custom: async (factory: any) => new Promise((resolve) => {
+        const menu = factory({ terminal: { rows: 24 }, requestRender() {} }, theme, {}, resolve);
+        assert.match(menu.render(80).join('\n'), /Pinote/); menus++;
+        menu.handleInput('\x1b'); menu.dispose?.();
+      }),
+    } };
+  const view = () => ({ version: 1, title: 'Pinote · Tasks', revision: completed ? 'done' : selected ? 'active' : 'proposal', state: { selected },
+    controls: ['accept', 'preview', 'done'].map((id) => ({ id, label: id, kind: 'action', revision: id + (selected ? '-active' : '-proposal') })),
+    footer: [{ text: '▤ ', openApp: true }, { text: completed ? 'Pinote · No task' : 'Task 日本語', width: 20,
+      ...(!completed ? selected ? { action: 'preview', doubleAction: 'done' } : { doubleAction: 'accept', style: { italic: true, color: 'accent' } } : {}) }] });
+  const client: any = {
+    getServerCapabilities: () => ({ experimental: { 'native-ui-v1': { actionRevisions: true, footerStyles: true, footerDoubleActions: true, footerNativeActions: true } } }),
+    listResources: async () => ({ resources: [{ uri: 'gateway-resource://demo/root', mimeType: 'application/vnd.mcp-native-ui+json' }] }),
+    readResource: async () => ({ contents: [{ mimeType: 'application/vnd.mcp-native-ui+json', text: JSON.stringify(view()) }] }),
+    request: async (request: any) => {
+      const action = request.params.action;
+      actions.push(action);
+      if (action === 'accept') selected = true;
+      if (action === 'preview') await preview;
+      if (action === 'done') completed = true;
+      return { view: view(), ...(action === 'preview' ? { preview: 'Full task' } : {}) };
+    },
+  };
+  const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }));
+  const mouse = (x: number, count = 1, type = 'click') => widget.handleMouse({ type, button: 'left', x, y: 0, clickCount: count });
+  const settle = () => widget.queue;
+  try {
+    await host.start(ctx, '/native-config');
+    assert.equal((host.meta('demo')['native-ui/features'] as any).footerNativeActions, true);
+    const lines = widget.render(100).join('\n');
+    assert.ok(!lines.includes('\x1b]8;') && !lines.includes('\x1b]22;'), 'No action hyperlink or pointer-shape escape');
+    assert.equal(statuses.get('gateway-ui:demo'), undefined, 'The status string does not duplicate the native widget');
+    assert.equal(mouse(3, 1, 'press').focus, undefined, 'Press does not move keyboard focus');
+    mouse(3); await settle();
+    assert.deepEqual(actions, [], 'A single click cannot accept');
+    mouse(3, 2); await settle();
+    assert.deepEqual(actions, ['accept']);
+    widget.render(100);
+    mouse(3, 2); mouse(3, 3); await settle();
+    assert.deepEqual(actions, ['accept'], 'Replayed double/triple click cannot complete the newly accepted task');
+    mouse(3, 1, 'move');
+    assert.match(widget.render(100).join('\n'), /Double-click: done/, 'Hover hint names the action');
+    mouse(3); mouse(3, 2);
+    releasePreview!(); await settle();
+    assert.deepEqual(actions, ['accept', 'preview', 'done'], 'A fast double-click waits for its preview');
+    widget.render(100);
+    mouse(0); await settle();
+    assert.equal(menus, 1, 'Launcher opens the app, not a service write');
+    assert.equal(ctx.ui.getEditorText(), draft);
+    for (const width of [1, 8, 18, 100]) {
+      assert.ok(widget.render(width).every((row: string) => visibleWidth(row) <= width));
+    }
+    const base = view();
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', openApp: true, doubleAction: 'done' }] }));
+    assert.throws(() => ViewSchema.parse({ ...base, footer: [{ text: 'Bad', openApp: true, url: '' }] }));
+    await host.stop();
+    mode = 'regular';
+    await host.start(ctx, '/regular-config');
+    assert.equal((host.meta('demo')['native-ui/features'] as any).footerNativeActions, undefined, 'Regular mode never negotiates native-only fields');
+    assert.equal(widget, undefined, 'Regular mode leaves no empty native widget');
+    assert.deepEqual(notices, []);
+  } finally { releasePreview?.(); await host.stop(); }
 });

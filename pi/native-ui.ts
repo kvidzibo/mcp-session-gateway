@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpError, type CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { FooterActions } from './footer-actions.js';
+import { NativeFooter } from './native-footer.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { confirmSettings, inputSettings } from './settings.js';
-import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, FooterStylesFeaturesSchema, FooterDoubleFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
+import { ActionResultSchema, clean, literal, editorText, ContextSchema, StateSchema, footerText, UI_CONTEXT, UI_STATE, UI_FEATURES, UI_STALE_ACTION, StaleActionDataSchema, ActionRevisionFeaturesSchema, FooterSecondaryFeaturesSchema, FooterStylesFeaturesSchema, FooterDoubleFeaturesSchema, FooterNativeFeaturesSchema, UI_MIME, ViewSchema, type NativeControl, type NativeView } from '../src/native-ui.js';
 
 type Entry = { scope: string; service: string; state: Record<string, unknown>; contextId?: string; retainOnNew?: boolean };
 const transferKey = Symbol.for('gateway.native-ui.new-session');
@@ -32,6 +33,8 @@ export class NativeUI {
   private blocked = new Set<string>();
   private bridge?: FooterActions;
   private changed = () => {};
+  private fullscreen = false;
+  private repaint = () => {};
 
   constructor(private pi: ExtensionAPI, private client: () => Client, private options: () => { signal: AbortSignal; timeout: number }, private interact: (run: () => Promise<boolean>) => Promise<boolean> = (run) => run()) {}
 
@@ -114,9 +117,23 @@ export class NativeUI {
     }
     const epoch = this.epoch;
     if (ctx.mode === 'tui') {
-      const bridge = new FooterActions(); this.bridge = bridge;
-      try { await bridge.start(); }
-      catch { await bridge.stop(); if (this.bridge === bridge) this.bridge = undefined; ctx.ui.notify('Footer clicks unavailable; select the service in /pi-services', 'warning'); }
+      ctx.ui.setWidget?.('gateway-native-footers', (tui, theme) => {
+        this.fullscreen = tui.mode === 'fullscreen';
+        if (!this.fullscreen) return { render: () => [], invalidate() {} };
+        this.repaint = () => tui.requestRender();
+        return new NativeFooter(() => [...this.views].map(([uri, view]) => ({ uri, view })), theme,
+          async ({ uri, view }, item, action) => {
+            if (epoch !== this.epoch || !this.resources.has(serviceOf(uri))) return false;
+            if (item.openApp) return this.interact(async () => { await this.open(serviceOf(uri), ctx); return true; });
+            return action ? this.footerAction(uri, view, action, epoch) : false;
+          }, this.repaint);
+      }, { placement: 'belowEditor' });
+      if (!this.fullscreen) {
+        ctx.ui.setWidget?.('gateway-native-footers', undefined);
+        const bridge = new FooterActions(); this.bridge = bridge;
+        try { await bridge.start(); }
+        catch { await bridge.stop(); if (this.bridge === bridge) this.bridge = undefined; ctx.ui.notify('Footer clicks unavailable; select the service in /pi-services', 'warning'); }
+      }
     }
     if (epoch !== this.epoch) return;
     const result = await this.client().listResources(undefined, this.observationOptions());
@@ -134,6 +151,8 @@ export class NativeUI {
     this.epoch++;
     const bridge = this.bridge; this.bridge = undefined;
     for (const service of this.resources.keys()) this.ctx?.ui.setStatus(`gateway-ui:${service}`, undefined);
+    this.ctx?.ui.setWidget?.('gateway-native-footers', undefined);
+    this.fullscreen = false; this.repaint = () => {};
     this.resources.clear(); this.views.clear(); this.pending.clear(); this.dirty.clear(); this.operations.clear(); this.blocked.clear(); this.changed();
     return bridge?.stop() ?? Promise.resolve();
   }
@@ -143,7 +162,7 @@ export class NativeUI {
     if (uri) { this.resources.delete(service); this.views.delete(uri); this.dirty.delete(uri); }
     this.bridge?.clear(service);
     this.ctx?.ui.setStatus(`gateway-ui:${service}`, undefined);
-    this.changed();
+    this.repaint(); this.changed();
   }
 
   // An advertised app can be reopened after a transient view-read failure.
@@ -155,7 +174,8 @@ export class NativeUI {
     const secondary = FooterSecondaryFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
     const styles = FooterStylesFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
     const double = FooterDoubleFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
-    return { ...(scoped || secondary || styles || double ? { [UI_FEATURES]: { ...(scoped ? { actionRevisions: true } : {}), ...(secondary ? { footerSecondaryActions: true } : {}), ...(styles ? { footerStyles: true } : {}), ...(double ? { footerDoubleActions: true } : {}) } } : {}), [UI_CONTEXT]: ContextSchema.parse({
+    const native = this.fullscreen && FooterNativeFeaturesSchema.safeParse(this.client().getServerCapabilities?.()?.experimental?.['native-ui-v1']).success;
+    return { ...(scoped || secondary || styles || double || native ? { [UI_FEATURES]: { ...(scoped ? { actionRevisions: true } : {}), ...(secondary ? { footerSecondaryActions: true } : {}), ...(styles ? { footerStyles: true } : {}), ...(double ? { footerDoubleActions: true } : {}), ...(native ? { footerNativeActions: true } : {}) } } : {}), [UI_CONTEXT]: ContextSchema.parse({
       conversationId: this.ctx?.sessionManager?.getSessionId() ?? this.ephemeralId,
       contextId: this.contexts.get(service),
       state: this.states.get(service) ?? {},
@@ -177,8 +197,21 @@ export class NativeUI {
     const ctx = this.ctx, service = serviceOf(uri), epoch = this.epoch;
     this.bridge?.clear(service);
     if (ctx?.mode !== 'tui') return;
-    const invoke = (action: string) => () => this.interact(async () => {
-      if (epoch !== this.epoch || this.resources.get(service) !== uri) return false;
+    if (this.fullscreen) {
+      ctx.ui.setStatus(`gateway-ui:${service}`, undefined);
+      this.repaint();
+      return;
+    }
+    const invoke = (action: string) => () => this.footerAction(uri, view, action, epoch);
+    ctx.ui.setStatus(`gateway-ui:${service}`, footerText(view, truncateToWidth,
+      (action, secondary, double) => this.bridge?.link(service, action ? invoke(action) : undefined, secondary ? invoke(secondary) : undefined, double ? invoke(double) : undefined),
+      (text, style) => { const colored = style.color ? ctx.ui.theme.fg(style.color, text) : text; return style.italic ? ctx.ui.theme.italic(colored) : colored; }));
+  }
+
+  private footerAction(uri: string, view: NativeView, action: string, epoch: number): Promise<boolean> {
+    return this.interact(async () => {
+      const ctx = this.ctx;
+      if (!ctx || epoch !== this.epoch || this.resources.get(serviceOf(uri)) !== uri) return false;
       try {
         const control = view.controls.find((c) => c.id === action && c.kind === 'action');
         if (!control) return false;
@@ -186,9 +219,6 @@ export class NativeUI {
         return await this.dispatch(uri, view, control, undefined, ctx, epoch);
       } finally { if (epoch === this.epoch && this.views.get(uri)) this.renderFooter(uri, this.views.get(uri)!); }
     });
-    ctx.ui.setStatus(`gateway-ui:${service}`, footerText(view, truncateToWidth,
-      (action, secondary, double) => this.bridge?.link(service, action ? invoke(action) : undefined, secondary ? invoke(secondary) : undefined, double ? invoke(double) : undefined),
-      (text, style) => { const colored = style.color ? ctx.ui.theme.fg(style.color, text) : text; return style.italic ? ctx.ui.theme.italic(colored) : colored; }));
   }
 
   async refresh(uri: string): Promise<void> {
@@ -213,6 +243,7 @@ export class NativeUI {
             this.views.delete(uri);
             this.bridge?.clear(serviceOf(uri));
             this.ctx?.ui.setStatus(`gateway-ui:${serviceOf(uri)}`, undefined);
+            this.repaint();
             this.ctx?.ui.notify(clean(String(error)), 'error');
             this.changed();
           }
