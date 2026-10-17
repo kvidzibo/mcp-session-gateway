@@ -4,8 +4,8 @@ import { compileSchema } from '../src/validation.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
-import { Type } from 'typebox';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { gatewayCommands, gatewayTools } from './definitions.js';
+import type { ExtensionAPI, ExtensionContext, ExtensionHandler, SessionStartEvent, SessionShutdownEvent } from '@earendil-works/pi-coding-agent';
 import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
@@ -33,7 +33,13 @@ import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
-export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGatewayUpdate, identity?: string): void {
+export interface GatewayLifecycle {
+  start?: ExtensionHandler<SessionStartEvent>;
+  shutdown?: ExtensionHandler<SessionShutdownEvent>;
+}
+
+export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGatewayUpdate, identity?: string,
+  lifecycle?: GatewayLifecycle): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
   let client: Client | undefined;
   let transport: StdioClientTransport | undefined;
@@ -381,15 +387,17 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     }
     if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
   }
-  pi.on('session_start', async (event, ctx) => {
+  const onStart: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
     shuttingDown = false;
     countsSaveWarning = false;
     const scope = resolve(String(pi.getFlag('gateway-config') ?? ''));
     callCounts = new CallCounts(ctx.sessionManager.getSessionId(), scope, ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch());
     try { await start(ctx, false, event.reason, true); }
     finally { await showStartup(ctx, event.reason); }
-  });
-  pi.on('session_shutdown', async (event) => {
+  };
+  if (lifecycle) lifecycle.start = onStart;
+  else pi.on('session_start', onStart);
+  const onShutdown: ExtensionHandler<SessionShutdownEvent> = async (event) => {
     if (event.reason === 'new') native.transfer(event.targetSessionFile);
     shuttingDown = true;
     if (footerContext) startupProgress(footerContext);
@@ -397,13 +405,15 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     footerContext?.ui.setStatus('gateway', undefined);
     footerContext?.ui.setWidget('gateway-call-counts', undefined); footerContext = undefined;
     try { await close(); } finally { await bridge?.stop(); }
-  });
+  };
+  if (lifecycle) lifecycle.shutdown = onShutdown;
+  else pi.on('session_shutdown', onShutdown);
   pi.on('session_tree', async (_event, ctx) => {
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
   const gatewayCommand = (initialAction?: 'services' | { service: string }) => ({
-    description: initialAction ? 'Open this gateway’s Services menu. No model turn.' : 'Open gateway services, packages and connection menus. No model turn.',
+    description: gatewayCommands[initialAction ? 'pi-services' : 'gateway'],
     handler: async (_args: string, ctx: ExtensionContext) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
       if (uiBusy) { ctx.ui.notify('Finish the current gateway dialog first', 'warning'); return; }
@@ -563,15 +573,14 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   pi.registerCommand('pi-services', gatewayCommand('services'));
 
   pi.registerTool({
-    name: 'gateway_tools', label: 'Gateway tools', description: 'Discover local gateway tools and their input schemas.', parameters: Type.Object({}),
+    ...gatewayTools.discover,
     async execute(_id, _params, signal) {
       const list = (await tools(signal)).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
       return { content: [{ type: 'text', text: JSON.stringify(list) }], details: undefined };
     },
   });
   pi.registerTool({
-    name: 'gateway_call', label: 'Gateway call', description: 'Call a local gateway tool; use gateway_tools to discover names and schemas. Required confirmations go directly to the user.',
-    parameters: Type.Object({ name: Type.String(), arguments: Type.Record(Type.String(), Type.Unknown()) }),
+    ...gatewayTools.call,
     async execute(_id, params, signal) {
       const result = await invokeTool(params.name, params.arguments, signal);
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
