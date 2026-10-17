@@ -13,9 +13,10 @@ test('settings search filters immediately, preserves original choice identity an
   choices[1450] = '1451. Grok reasoning — xai/grok-reasoning';
   const controller = new AbortController();
   let nextKey = '\u001b[B', confirmKey = '\r';
-  const ctx = { ui: { custom: async (factory: Function) => {
+  const ctx = { ui: { custom: async (factory: Function, options?: unknown) => {
+    assert.equal(options, undefined, 'Settings stay inline rather than opening an overlay');
     let answer: unknown, completed = false;
-    const terminal = { rows: 24, columns: 80 };
+    const terminal = { rows: 80, columns: 80 };
     const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; completed = true; });
     const render = () => {
       const lines: string[] = panel.render(terminal.columns);
@@ -27,7 +28,7 @@ test('settings search filters immediately, preserves original choice identity an
     try {
       panel.focused = true;
       assert.equal(panel.focused, true);
-      render();
+      assert.ok(render().split('\n').length <= 19, 'Large catalogues remain compact on tall terminals');
       panel.handleInput('XAI GROK');
       assert.match(render(), /1401\. Grok fast/);
       assert.doesNotMatch(render(), /provider\/model-/);

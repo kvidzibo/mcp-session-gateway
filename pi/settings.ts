@@ -1,6 +1,6 @@
 import { compileSchema } from '../src/validation.js';
 import { clean, literal as display } from '../src/native-ui.js';
-import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { DynamicBorder, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { getKeybindings, Input, Key, matchesKey, SelectList, truncateToWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { SettingsDocument } from '../src/settings.js';
 import { safeKey } from '../src/settings.js';
@@ -46,8 +46,8 @@ function supported(schema: ObjectValue): boolean {
 type DialogOptions = { signal: AbortSignal; timeout?: number; title?: string; actionLabel?: string };
 const overlay = { overlay: true, overlayOptions: { width: '100%' as const, anchor: 'center' as const, margin: 0 } };
 
-// Isolated overlays own their full height: editor widgets/footers cannot hide
-// controls. Native SelectList keeps options on single rows and follows selection.
+// Browsing/editing stays in Pi's compact inline area; confirmations remain
+// isolated so editor widgets/footers cannot hide required review controls.
 export async function selectSettingsOption(ctx: ExtensionContext, title: string, choices: string[], options: DialogOptions): Promise<string | undefined> {
   if (options.signal.aborted || !choices.length) return undefined;
   return ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
@@ -79,9 +79,9 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, Math.min(3, height - 7));
-        const nextCapacity = Math.max(1, height - heading.length - 6);
+        const nextCapacity = Math.max(1, Math.min(10, height - heading.length - 6));
         if (!list || capacity !== nextCapacity) { capacity = nextCapacity; rebuild(true); }
-        const border = theme.fg('accent', '─'.repeat(width));
+        const [border] = new DynamicBorder((text) => theme.fg('border', text)).render(width);
         const results = filtered.length ? list!.render(width) : [theme.fg('muted', 'No matching choices')];
         return [border, ...heading.map((s) => theme.fg('accent', s)),
           ...input.render(width - 8).map((line) => `${theme.fg('muted', 'Search: ')}${line}`),
@@ -107,7 +107,7 @@ export async function selectSettingsOption(ctx: ExtensionContext, title: string,
       invalidate() { input.invalidate(); list?.invalidate(); },
       dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
     };
-  }, overlay);
+  });
 }
 
 export async function confirmSettings(ctx: ExtensionContext, text: string, options: DialogOptions): Promise<boolean> {
@@ -174,7 +174,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
         usable = height >= 8 && width >= 20;
         if (!usable) return [truncateToWidth('Enlarge terminal; Esc cancels', width)];
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);
-        const border = theme.fg('accent', '─'.repeat(width));
+        const [border] = new DynamicBorder((text) => theme.fg('border', text)).render(width);
         return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...input.render(width), '',
           truncateToWidth(theme.fg('muted', 'JSON value  Enter stage  Esc back'), width), border];
       },
@@ -186,7 +186,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
       invalidate() { input.invalidate(); },
       dispose() { clearTimeout(timer); options.signal.removeEventListener('abort', cancel); },
     };
-  }, overlay);
+  });
 }
 
 /** Compact pure, distinct constant alternatives without changing validation semantics.

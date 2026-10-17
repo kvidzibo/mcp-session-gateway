@@ -116,7 +116,8 @@ test('operator settings stay private, route by service, and require confirmed sc
         try {
           const lines: string[] = panel.render(98);
           const isNavigation = lines[1]?.startsWith('Gateway');
-          assert.equal(options?.overlay, isNavigation ? undefined : true, 'Only gateway navigation is inline; settings stay isolated');
+          assert.equal(options?.overlay, lines[1] === 'Save child-server settings?' ? true : undefined,
+            'Only confirmations are isolated; navigation and settings edit inline');
           if (isNavigation) {
             const target = navigation.shift();
             if (!target) panel.handleInput('\u001b');
@@ -201,8 +202,8 @@ test('operator settings stay private, route by service, and require confirmed sc
     // Exercise large lists and valid choice schemas without explicit types, plus
     // a resize after approval; none may create an unseen or premature write.
     const dialog = { signal: new AbortController().signal, timeout: 1000 };
-    const selected = await selectSettingsOption({ui:{custom: async (factory: Function, options: {overlay:boolean}) => {
-      assert.equal(options.overlay, true);
+    const selected = await selectSettingsOption({ui:{custom: async (factory: Function, options?: {overlay:boolean}) => {
+      assert.equal(options, undefined, 'Settings choices use the inline area');
       let answer: unknown;
       const terminal = {rows:18,columns:80};
       const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
@@ -232,8 +233,8 @@ test('operator settings stay private, route by service, and require confirmed sc
       } finally {panel.dispose();}
     }}} as unknown as ExtensionContext, Array.from({length:24}, (_,i) => `field-${i}: old → new`).join('\n'), dialog);
     assert.equal(approved, true);
-    const inputValue = await inputSettings({ui:{custom: async (factory: Function, options: {overlay:boolean}) => {
-      assert.equal(options.overlay,true);
+    const inputValue = await inputSettings({ui:{custom: async (factory: Function, options?: {overlay:boolean}) => {
+      assert.equal(options, undefined, 'Settings input uses the inline area');
       let answer: unknown;
       const terminal = {rows:10,columns:80};
       const panel = factory({terminal,requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {answer=value;});
@@ -266,13 +267,13 @@ test('operator settings stay private, route by service, and require confirmed sc
       } };
       const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
         schema:{properties:{size:{enum:['small','large']},active:{oneOf:[{const:false},{const:true}]},note:{type:'string'}}},values:{size:'small',active:false,note:'old'}});
-      // Reuse the overlay driver with this editor's scripted choice callbacks.
+      // Reuse the dialog driver with this editor's scripted choice callbacks.
       choiceContext.ui.custom = async (factory: Function, options?: {overlay:boolean}) => {
         let result: unknown, completed = false;
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;completed=true;});
         try {
-          assert.equal(options?.overlay,true);
           const lines: string[] = panel.render(98);
+          assert.equal(options?.overlay, lines[1] === 'Save child-server settings?' ? true : undefined);
           t.mock.timers.tick(30_001);
           assert.equal(completed, false, 'Taking time to review settings must not discard the draft');
           if(lines[1] === 'Save child-server settings?') {
