@@ -128,16 +128,30 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
 
 test('right-click dispatches only the alternate control and shares single-use consent with left-click', async () => {
   const statuses = new Map<string, string>(), actions: string[] = [];
+  let approve = false, confirmations = 0;
   const ctx: any = { mode: 'tui', sessionManager: { getBranch: () => [], getSessionId: () => 'secondary', getSessionFile: () => undefined },
-    ui: { setStatus: (key: string, value: string) => statuses.set(key, value), notify() {} } };
+    ui: { setStatus: (key: string, value: string) => statuses.set(key, value), notify() {},
+      custom: async (factory: Function) => {
+        let result: boolean | undefined;
+        const panel = factory({ terminal: { rows: 24, columns: 80 }, requestRender() {} }, { fg: (_: string, text: string) => text }, {}, (value: boolean) => { result = value; });
+        try {
+          assert.match(panel.render(80).join('\n'), /Dismiss this suggestion\?/);
+          confirmations++;
+          panel.handleInput(approve ? '\r' : '\x1b');
+          return result;
+        } finally { panel.dispose(); }
+      } } };
   const view = { version: 1, title: 'Suggestion', revision: 'r1', state: {},
-    controls: [{ id: 'accept', kind: 'action', label: 'Accept' }, { id: 'dismiss', kind: 'action', label: 'Dismiss' }],
+    controls: [{ id: 'accept', kind: 'action', label: 'Accept', revision: 'accept-r1' }, { id: 'dismiss', kind: 'action', label: 'Dismiss', revision: 'dismiss-r1', confirm: 'Dismiss this suggestion?' }],
     footer: [{ text: '+', action: 'accept', secondaryAction: 'dismiss' }] };
   const client: any = {
     getServerCapabilities: () => ({ experimental: { 'native-ui-v1': { footerSecondaryActions: true } } }),
     listResources: async () => ({ resources: [{ uri: 'gateway-resource://demo/root', mimeType: 'application/vnd.mcp-native-ui+json' }] }),
     readResource: async () => ({ contents: [{ mimeType: 'application/vnd.mcp-native-ui+json', text: JSON.stringify(view) }] }),
-    request: async (request: any) => { actions.push(request.params.action); return { view }; },
+    request: async (request: any) => {
+      assert.equal(request.params.revision, `${request.params.action}-r1`, 'Use the chosen control revision, not its sibling or view revision');
+      actions.push(request.params.action); return { view };
+    },
   };
   const host = new NativeUI({ appendEntry() {} } as any, () => client, () => ({ signal: new AbortController().signal, timeout: 1000 }), async (run) => run());
   const link = () => statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b]+/)![0];
@@ -145,12 +159,16 @@ test('right-click dispatches only the alternate control and shares single-use co
   try {
     await host.start(ctx, '/secondary-config');
     assert.deepEqual(host.meta('demo')['native-ui/features'], { footerSecondaryActions: true }, 'Features negotiate independently');
+    await assert.rejects(click(link(), true));
+    assert.deepEqual(actions, [], 'Cancelling the secondary confirmation cannot accept');
+    approve = true;
     const original = link();
     await click(original, true);
     assert.deepEqual(actions, ['dismiss'], 'Right-click must never accept');
     await assert.rejects(click(original));
     await click(link());
     assert.deepEqual(actions, ['dismiss', 'accept']);
+    assert.equal(confirmations, 2, 'Primary must not use the secondary confirmation');
     const race = link();
     const results = await Promise.allSettled([click(race), click(race, true)]);
     assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
