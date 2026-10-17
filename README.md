@@ -166,7 +166,10 @@ polling is added.
 During startup/reload, an animated indicator above the editor shows the current
 stage: configuration, optional package updates, build check, service connection,
 tool discovery, apps and live panels. It clears on success, failure or shutdown;
-noninteractive sessions do not animate.
+noninteractive sessions do not animate. Auto-update supports activated managed
+releases and explicitly configured [local Git packages](docs/packages.md#local-git-packages):
+clean main/master checkouts are fast-forwarded, then built and validated before
+connection. Other development folders are never adopted automatically.
 
 New sessions also print a compact, display-only **startup snapshot** listing each
 service's observed connection state, exposed tool count and tool names. Names wrap

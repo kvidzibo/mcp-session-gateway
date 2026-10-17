@@ -213,7 +213,9 @@ write failure reports to stderr and triggers cleanup.
 - All launched servers must initialize. Any failure aborts startup and waits for
   child cleanup. Managed services without an active release stay stopped until
   manual preparation, activation, and a separately confirmed restart; auto-update
-  does not perform first installation.
+  does not perform first installation. Explicit `localUpdate` packages instead
+  update in place before connection. Incomplete local builds/validation block
+  startup (including standalone/manual launches); see [local Git packages](packages.md#local-git-packages).
 - Tool/resource requests wait for child startup; upstream EOF is observed
   throughout. A child disconnect removes its tools. Reconnect the gateway to
   restart it.
