@@ -148,7 +148,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     assert.deepEqual(loaded.errors, []);
     assert.equal(loaded.extensions.length, 1);
     loaded.runtime.flagValues.set('gateway-config', config);
-    loaded.runtime.appendEntry = (customType: string) => assert.equal(customType, 'gateway-startup');
+    loaded.runtime.appendEntry = (customType: string) => assert.ok(['gateway-startup', 'gateway-call-counts'].includes(customType));
     const ext = loaded.extensions[0];
     assert.deepEqual([...ext.tools.keys()].sort(), ['gateway_call', 'gateway_tools']);
     let choice = 'Allow once';
@@ -158,6 +158,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     const navigation = ['Services', 'demo', 'Resources', 'Demo counter'];
     const ctx = {
       cwd: root, mode: 'tui', hasUI: true,
+      sessionManager: { getSessionId: () => 'demo-test', getBranch: () => [] },
       ui: {
         theme: { fg: (_color: string, text: string) => text }, setStatus() {}, setWidget() {},
         select: async (_title: string, _options: string[], opts: { signal: AbortSignal }) => {

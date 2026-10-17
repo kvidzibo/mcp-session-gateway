@@ -10,7 +10,9 @@ import { Loader, Text } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
-import { readAutoUpdate, toggleAutoUpdate } from './auto-update.js';
+import { readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, type Display } from './auto-update.js';
+import { CallEventSchema } from '../src/call-events.js';
+import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
 import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
@@ -45,6 +47,18 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   let configuredServices: string[] = [];
   let configurationLoaded = false;
   let footerContext: ExtensionContext | undefined;
+  let display: Display = 'minimal';
+  let callCounts: CallCounts | undefined;
+  let countsSaveWarning = false;
+  function saveCounts(): void {
+    if (!callCounts) return;
+    try { pi.appendEntry(CALL_COUNTS_ENTRY, callCounts.snapshot()); }
+    catch {
+      if (!countsSaveWarning) footerContext?.ui.notify('MCP call counts could not be saved; resume totals may be incomplete', 'warning');
+      countsSaveWarning = true;
+    }
+  }
+  function interruptCalls(): void { if (callCounts?.interrupt()) saveCounts(); }
   let footerBridge: FooterActions | undefined;
   let footerCount: number | undefined;
   let footerState: 'starting' | 'up' | 'off' = 'starting';
@@ -80,7 +94,19 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       try { await gatewayCommand('services').handler('', ctx); return true; }
       finally { renderFooter(); }
     });
-    ctx.ui.setStatus('gateway', url ? `\x1b]8;;${url}\x07${styled}\x1b]8;;\x07` : styled);
+    const linked = (text: string) => url ? `\x1b]8;;${url}\x07${text}\x1b]8;;\x07` : text;
+    if (display === 'full') {
+      ctx.ui.setStatus('gateway', undefined);
+      ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
+        render: (width: number) => callCountLines(width, theme,
+          `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`,
+          configuredServices, callCounts?.counts ?? new Map(), disconnectedServices),
+        invalidate() {},
+      }), { placement: 'belowEditor' });
+    } else {
+      ctx.ui.setWidget('gateway-call-counts', undefined);
+      ctx.ui.setStatus('gateway', linked(styled));
+    }
   }
   async function startFooter(ctx: ExtensionContext): Promise<void> {
     if (ctx.mode !== 'tui' || !ctx.hasUI) return;
@@ -135,6 +161,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (!preserveMenu) managerController?.abort();
     if (closing) return closing;
     connected = false;
+    interruptCalls();
     if (footerContext) startupProgress(footerContext);
     renderFooter('off');
     configurationLoaded = false;
@@ -213,6 +240,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     configurationLoaded = false;
     startupProgress(ctx, 'reading configuration');
     const config = await loadConfig(configPath).catch((error) => { renderFooter('off'); throw error; });
+    display = await readDisplay(configPath);
     timeout = config.timeoutMs;
     configuredServices = config.services.map((service) => service.name);
     footerCount = configuredServices.length;
@@ -245,7 +273,12 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     if (shuttingDown || lifetime.signal.aborted) return;
     const current = new Client({ name: 'pi-gateway-adapter', version: gatewayIdentity.version }, { capabilities: ctx.hasUI ? { elicitation: { form: {} } } : {} });
     client = current;
-    current.onclose = () => { if (client === current) { connected = false; renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
+    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); lifetime.abort(); void native.stop(); } };
+    const countsOwner = callCounts, callLifetime = lifetime;
+    current.setNotificationHandler(CallEventSchema, ({ params }) => {
+      if (client !== current || callLifetime.signal.aborted || callCounts !== countsOwner || shuttingDown || !configuredServices.includes(params.service)) return;
+      if (callCounts?.event(params)) { saveCounts(); renderFooter(); }
+    });
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     current.setNotificationHandler(InvalidatedSchema, ({ params }) => {
       if (client !== current) return;
@@ -280,6 +313,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
   }
   pi.on('session_start', async (event, ctx) => {
     shuttingDown = false;
+    countsSaveWarning = false;
+    const scope = resolve(String(pi.getFlag('gateway-config') ?? ''));
+    callCounts = new CallCounts(ctx.sessionManager.getSessionId(), scope, ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch());
     try { await start(ctx, false, event.reason, true); }
     finally { await showStartup(ctx, event.reason); }
   });
@@ -288,7 +324,8 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
     shuttingDown = true;
     if (footerContext) startupProgress(footerContext);
     const bridge = footerBridge; footerBridge = undefined;
-    footerContext?.ui.setStatus('gateway', undefined); footerContext = undefined;
+    footerContext?.ui.setStatus('gateway', undefined);
+    footerContext?.ui.setWidget('gateway-call-counts', undefined); footerContext = undefined;
     try { await close(); } finally { await bridge?.stop(); }
   });
   pi.on('session_tree', async (_event, ctx) => {
@@ -315,6 +352,9 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
       try {
         while (!signal.aborted) {
           let autoUpdate: boolean | undefined, autoUpdateError = '';
+          let menuDisplay: Display | undefined, displayError = '';
+          try { menuDisplay = await readDisplay(configPath); }
+          catch (error) { displayError = clean(String(error)); }
           try { autoUpdate = await readAutoUpdate(configPath); }
           catch (error) { autoUpdateError = clean(String(error)); }
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
@@ -323,12 +363,17 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
             { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
               description: autoUpdateError || 'Enter toggles and saves. On permits startup/reload updates and trusted builds with OS permissions: activated releases + configured localUpdate Git checkouts. No prompts.' },
+            { id: 'display', label: `Display: ${menuDisplay === undefined ? 'Unavailable' : menuDisplay === 'full' ? 'Full' : 'Minimal'}`, disabled: menuDisplay === undefined,
+              description: displayError || 'Enter toggles and saves immediately. Full shows per-service success (green), failure (red), and running (amber) tool calls.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;
           if (!action) break;
           try {
-            if (action === 'auto-update' && autoUpdate !== undefined) {
+            if (action === 'display' && menuDisplay !== undefined) {
+              display = await toggleDisplay(configPath, menuDisplay, signal);
+              renderFooter();
+            } else if (action === 'auto-update' && autoUpdate !== undefined) {
               const enabled = await toggleAutoUpdate(configPath, autoUpdate, signal);
               ctx.ui.notify(`Auto update ${enabled ? 'on' : 'off'} · saved for next startup/reload`, 'info');
             } else if (action === 'services') {

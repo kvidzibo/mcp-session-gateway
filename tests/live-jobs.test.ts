@@ -139,15 +139,15 @@ test('subscriptions route by service and live Pi widget follows jobs without tra
     const loaded = await loadExtensions([path.join(root, 'pi/gateway.ts')], root);
     assert.deepEqual(loaded.errors, []);
     loaded.runtime.flagValues.set('gateway-config', config);
-    loaded.runtime.appendEntry = (customType: string) => assert.equal(customType, 'gateway-startup');
+    loaded.runtime.appendEntry = (customType: string) => assert.ok(['gateway-startup', 'gateway-call-counts'].includes(customType));
     const ext = loaded.extensions[0];
     let widget: { render: (width: number) => string[] } | undefined;
     let mounts = 0;
     let rows = 24;
-    const ctx = { cwd: dir, hasUI: true, mode: 'tui', ui: {
+    const ctx = { cwd: dir, hasUI: true, mode: 'tui', sessionManager: { getSessionId: () => 'jobs-test', getBranch: () => [] }, ui: {
       theme, setStatus() {},
       setWidget: (key: string, factory: Function | undefined) => {
-        if (key === 'gateway-startup-progress') return; // Observe only the live-jobs widget.
+        if (key !== 'gateway-live-jobs') return; // Observe only the live-jobs widget.
         if (factory) { mounts++; widget = factory({ terminal: { get rows() { return rows; } }, requestRender() {} }, theme); }
         else widget = undefined;
       },

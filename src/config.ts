@@ -54,6 +54,7 @@ export async function loadConfig(path: string): Promise<GatewayConfig> {
   if (typeof logFile !== 'string' || logFile.trim() === '') {
     throw new Error('logFile must be a non-empty path string');
   }
+  if (data.display !== undefined && data.display !== 'minimal' && data.display !== 'full') throw new Error('display must be minimal or full');
   const autoUpdate = data.autoUpdate === undefined ? false : data.autoUpdate;
   if (typeof autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
   const autoUpdateConcurrency = data.autoUpdateConcurrency === undefined
