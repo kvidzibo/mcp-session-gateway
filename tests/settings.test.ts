@@ -115,8 +115,9 @@ test('operator settings stay private, route by service, and require confirmed sc
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => { result = value; });
         try {
           const lines: string[] = panel.render(98);
-          if (lines[1]?.startsWith('Gateway')) {
-            assert.equal(options?.overlay, undefined, 'Gateway navigation uses the normal inline Pi area');
+          const isNavigation = lines[1]?.startsWith('Gateway');
+          assert.equal(options?.overlay, isNavigation ? undefined : true, 'Only gateway navigation is inline; settings stay isolated');
+          if (isNavigation) {
             const target = navigation.shift();
             if (!target) panel.handleInput('\u001b');
             else {
@@ -125,7 +126,6 @@ test('operator settings stay private, route by service, and require confirmed sc
               panel.handleInput('\r');
             }
           } else if (lines.some((line) => line.includes('JSON value'))) {
-            assert.equal(options?.overlay, true, 'Settings editors remain isolated overlays');
             const text = await ctx.ui.input();
             panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(text); panel.handleInput('\r');
           } else if (lines[1] === 'Save child-server settings?') {
