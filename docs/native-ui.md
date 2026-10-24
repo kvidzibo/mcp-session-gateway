@@ -8,8 +8,8 @@ including enable/disable and **Open app** when available. Apps use Pi's standard
 menus and configured selection keys, with the focused control's help below the list. Long body text
 has a compact summary. Type in **Search** to filter displayed controls by label or help text;
 matching ignores case and requires every word. Search and selection survive live updates and Ctrl+R.
-This searches only controls supplied in the current view: in Pinote, use **Filter tasks** to search
-all tasks beyond its 200-result limit. Ctrl+R refreshes apps; Tab opens settings and returns; Ctrl+O
+Search covers only controls supplied in the current view, not the service’s full dataset.
+Ctrl+R refreshes apps; Tab opens settings and returns; Ctrl+O
 in an app opens features/Resources; Escape returns from an app or service controls to Services.
 
 Text/number inputs use JSON: quote strings; escape newlines. Tabs/boundary whitespace persist.
@@ -167,7 +167,6 @@ Host persists opaque state in display-only Pi entries, scoped by config path/ser
   initial launch can finish on that destination's reload/restart. Cancelled switches, unrelated
   launches and shared cwd inherit nothing.
 - Pi normally saves after first submission; unsaved/no-session state lacks durability guarantees.
-  Old Pinote-extension selection is not imported.
 
 Services independently invalidate consumed consent, e.g. durable receipts, against old-branch
 replay. IDs/state are correlation, not authentication; never key durable selection by gateway

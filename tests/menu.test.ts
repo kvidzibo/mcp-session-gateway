@@ -363,8 +363,8 @@ test('agent context columns keep native navigation, lock disabled settings, and 
       description: 'Locked · saved preference: Full schemas. Enable the service to change it.',
       context: { id: 'additional:locked', value: 'Off', description: 'Locked · no context injected.' } },
     { id: 'service:web', label: 'web', currentValue: 'Full schemas', compactValue: 'Full', toolTokens: 1234, description: 'Full schemas. Tools stay callable.' },
-    { id: 'service:pinote', label: 'pinote', currentValue: 'Tool summaries', compactValue: 'Summary', description: 'Tool names and descriptions.',
-      context: { id: 'additional:pinote', value: 'On', description: 'Selected task and handoff notes; otherwise selection status and saved tags. Independent of Tools; applies next run.' } },
+    { id: 'service:sample', label: 'sample', currentValue: 'Tool summaries', compactValue: 'Summary', description: 'Tool names and descriptions.',
+      context: { id: 'additional:sample', value: 'On', description: 'Service-supplied reference data. Independent of Tools; applies next run.' } },
     { id: 'preview', label: 'Preview injected context', description: 'Privately preview the exact content.' },
   ];
   try {
@@ -390,7 +390,7 @@ test('agent context columns keep native navigation, lock disabled settings, and 
         const header = render().find((line) => line.includes('≈Tokens'))!;
         const tokenColumn = header.indexOf('≈Tokens');
         assert.match(render().join('\n'), /locked\s+Disabled\s+0\s+Off/);
-        assert.match(render().join('\n'), /pinote\s+Tool summaries\s+—\s+On/);
+        assert.match(render().join('\n'), /sample\s+Tool summaries\s+—\s+On/);
         if (visit < 2) assert.equal(render().find((line) => /^(→ |  )web\s/.test(line))!.indexOf('1.2k'), tokenColumn + 3, 'Right-align compact token counts');
         const current = visit++;
         if (current === 0) {
@@ -401,11 +401,11 @@ test('agent context columns keep native navigation, lock disabled settings, and 
           panel.handleInput('\x0e'); render(); panel.handleInput('\x19');
           assert.equal(finished, false, 'Unsupported Context cannot be changed');
           panel.handleInput('\x0e'); fit();
-          assert.match(render().join('\n'), /pinote · Context/);
+          assert.match(render().join('\n'), /sample · Context/);
           assert.match(render().join('\n'), /Independent of\s+Tools; applies next run/);
           panel.handleInput(' ');
         } else if (current === 1) {
-          assert.match(render().join('\n'), /pinote · Context/, 'Keep row and column after saving');
+          assert.match(render().join('\n'), /sample · Context/, 'Keep row and column after saving');
           terminal.columns = 80;
           panel.handleInput('\x19');
           assert.equal(finished, false, 'Ignore stale geometry until rendered');
@@ -426,7 +426,7 @@ test('agent context columns keep native navigation, lock disabled settings, and 
         return answer;
       } finally { panel.dispose(); }
     } } } as any, new AbortController().signal);
-    assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'additional:pinote');
+    assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'additional:sample');
     assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'service:web');
     keys.setUserBindings({ ...original, 'tui.select.up': 'ctrl+alt+shift+up', 'tui.select.down': 'ctrl+alt+shift+down',
       'tui.select.confirm': 'ctrl+alt+shift+enter', 'tui.select.cancel': 'ctrl+alt+shift+escape',
@@ -490,7 +490,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
   } as any);
   assert.deepEqual([...commands.keys()], ['gateway', 'pi-services']);
   let queryReply: any;
-  events.get('gateway:query-service-tool')!({ service: 'pinote', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
+  events.get('gateway:query-service-tool')!({ service: 'sample', tool: 'get_current', respond: (value: unknown) => { queryReply = value; } });
   assert.equal(queryReply.handled, true, 'Unknown startup ownership must not fall through to an unrelated cwd selection');
   assert.match(queryReply.error, /not ready/);
   const ctx: any = { cwd: dir, mode: 'tui', hasUI: true, isIdle: () => true,

@@ -288,13 +288,13 @@ test('fullscreen native footer keeps double-clicks state-bound and never capture
       },
       custom: async (factory: any) => new Promise((resolve) => {
         const menu = factory({ terminal: { rows: 24 }, requestRender() {} }, theme, {}, resolve);
-        assert.match(menu.render(80).join('\n'), /Pinote/); menus++;
+        assert.match(menu.render(80).join('\n'), /Sample/); menus++;
         menu.handleInput('\x1b'); menu.dispose?.();
       }),
     } };
-  const view = () => ({ version: 1, title: 'Pinote · Tasks', revision: completed ? 'done' : selected ? 'active' : 'proposal', state: { selected },
+  const view = () => ({ version: 1, title: 'Sample · Tasks', revision: completed ? 'done' : selected ? 'active' : 'proposal', state: { selected },
     controls: ['accept', 'preview', 'done'].map((id) => ({ id, label: id, kind: 'action', revision: id + (selected ? '-active' : '-proposal') })),
-    footer: [{ text: '▤ ', openApp: true }, { text: completed ? 'Pinote · No task' : 'Task 日本語', width: 20,
+    footer: [{ text: '▤ ', openApp: true }, { text: completed ? 'Sample · No task' : 'Task 日本語', width: 20,
       ...(!completed ? selected ? { action: 'preview', doubleAction: 'done' } : { doubleAction: 'accept', style: { italic: true, color: 'accent' } } : {}) }] });
   const client: any = {
     getServerCapabilities: () => ({ experimental: { 'native-ui-v1': { actionRevisions: true, footerStyles: true, footerDoubleActions: true, footerNativeActions: true } } }),
