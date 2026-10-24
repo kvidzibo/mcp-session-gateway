@@ -118,7 +118,13 @@ test('Update all packages confirms once, updates unlinked active packages with A
       try {
         const lines = render();
         if (lines.includes('Gateway')) {
-          const target = opened ? 'Close' : 'Update all packages'; opened = true;
+          assert.equal(lines.find((line) => /^(→ |  )\S/.test(line))?.slice(2), 'Agent context');
+          assert.ok(!lines.some((line) => line.slice(2) === 'Update all packages'));
+          const target = opened ? 'Close' : 'Packages';
+          for (let i = 0; i < 20 && !render().includes(`→ ${target}`); i++) panel.handleInput(down);
+          assert.ok(render().includes(`→ ${target}`)); panel.handleInput('\r');
+        } else if (lines.includes('Gateway › Packages')) {
+          const target = opened ? 'Back' : 'Update all packages'; opened = true;
           for (let i = 0; i < 20 && !render().includes(`→ ${target}`); i++) panel.handleInput(down);
           assert.ok(render().includes(`→ ${target}`)); panel.handleInput('\r');
         } else if (lines.includes('Update all packages?')) {

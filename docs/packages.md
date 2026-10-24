@@ -63,7 +63,7 @@ fail closed.
 
 ## Update all packages
 
-**`/gateway` → Update all packages** works disconnected or with Auto update off. Review every
+**`/gateway` → Packages → Update all packages** works disconnected or with Auto update off. Review every
 preview line before confirming sources, commands and effects. Approval covers resolution, build,
 validation and activation; targets resolve **after approval**, unlike individual preparation. Auto
 update remains unchanged.
