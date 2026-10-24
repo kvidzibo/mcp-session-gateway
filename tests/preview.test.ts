@@ -32,6 +32,12 @@ test('native previews render titled Markdown cards with expanded raw JSON, safe 
     for (const line of json.split('\n')) assert.ok(plain.includes(line), `JSON remains expanded: ${line}`);
     assert.match(plain, /╭.*╮/);
     assert.match(plain, /╰─+╯/);
+    for (const prefix of ['{starts with brace}\nmore', '[plain note]', '```js\nunclosed']) {
+      const separate = stripVTControlCharacters(render(`Title\n\n${prefix}\n\n${json}`).render(140).join('\n'));
+      assert.match(separate, /```json/);
+      for (const line of json.split('\n')) assert.ok(separate.includes(line));
+    }
+    assert.match(stripVTControlCharacters(render('Title\n\n[1,\n\n{"value": 2}\n]').render(60).join('\n')), /```json/);
     for (const width of [0, 1, 2, 7, 8, 20, 60, 100, 140]) {
       assert.ok(card.render(width).every((line: string) => visibleWidth(line) <= width), `Overflow at ${width}`);
     }
@@ -46,6 +52,10 @@ test('native previews render titled Markdown cards with expanded raw JSON, safe 
     assert.match(stripVTControlCharacters(linked), /Complete/);
     assert.match(stripVTControlCharacters(linked), /Pending/);
     assert.match(stripVTControlCharacters(linked), /Action/);
+    setCapabilities({ ...capabilities, hyperlinks: false });
+    const fallback = render('Title\n\n[Action](pi-gateway-action://unsafe) [File](file:///tmp/unsafe) [Credentials](https://user:pass@example.com/)').render(140).join('\n');
+    assert.doesNotMatch(fallback, /\x1b\]8;;/);
+    assert.match(stripVTControlCharacters(fallback), /file:\/\/\/tmp\/unsafe/, 'Literal destinations remain visible, as in the old text preview');
     const invalid = stripVTControlCharacters(render('Title\n\n{not JSON}').render(60).join('\n'));
     assert.match(invalid, /\{not JSON\}/);
     assert.doesNotMatch(invalid, /```json/);

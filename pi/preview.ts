@@ -2,14 +2,17 @@ import { getMarkdownTheme, type Theme } from '@earendil-works/pi-coding-agent';
 import { Markdown, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import { clean } from '../src/native-ui.js';
 
-/** Recognize the raw JSON handoff appended by services without changing its contents. */
-function withJsonFence(body: string): string {
+/** Render appended JSON separately so an unfinished note fence cannot swallow it. */
+function markdownSections(body: string): string[] {
   const separator = Math.max(body.lastIndexOf('\n\n{'), body.lastIndexOf('\n\n['));
-  const start = /^(?:\{|\[)/.test(body) ? 0 : separator < 0 ? -1 : separator + 2;
-  if (start < 0) return body;
-  try { JSON.parse(body.slice(start)); }
-  catch { return body; }
-  return `${body.slice(0, start)}\`\`\`json\n${body.slice(start)}\n\`\`\``;
+  for (const start of separator < 0 ? [0] : [separator + 2, 0]) {
+    const json = body.slice(start);
+    if (!/^(?:\{|\[)/.test(json)) continue;
+    try { JSON.parse(json); }
+    catch { continue; }
+    return [body.slice(0, start).replace(/\n+$/g, ''), `\`\`\`json\n${json}\n\`\`\``];
+  }
+  return [body];
 }
 
 /** Markdown must not turn service text into executable terminal action links. */
@@ -28,16 +31,16 @@ function safeLinks(line: string): string {
 export function nativePreview(data: { title: string; text: string }, theme: Theme) {
   const [title, ...rest] = clean(data.text).split('\n');
   const body = rest.join('\n').replace(/^\n+|\n+$/g, '');
-  const markdown = new Markdown(withJsonFence(body), 0, 0, getMarkdownTheme());
+  const sections = markdownSections(body).filter(Boolean).map((text) => new Markdown(text, 0, 0, getMarkdownTheme()));
   const label = `${clean(data.title).replace(/\s+/g, ' ')} · display only · not sent to model`;
   return {
-    invalidate() { markdown.invalidate(); },
+    invalidate() { for (const section of sections) section.invalidate(); },
     render(width: number): string[] {
       if (width < 1) return [];
       const framed = width >= 8;
       const inner = framed ? width - 4 : width;
       const heading = new Text(theme.bold(theme.fg('text', title)), 0, 0).render(inner);
-      const content = [...heading, ...(body ? ['', ...markdown.render(inner)] : [])]
+      const content = [...heading, ...sections.flatMap((section) => ['', ...section.render(inner)])]
         .flatMap((line) => wrapTextWithAnsi(safeLinks(line), inner))
         .map((line) => truncateToWidth(line, inner, ''));
       const header = theme.fg('muted', label);
