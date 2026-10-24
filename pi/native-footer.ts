@@ -12,6 +12,7 @@ export class NativeFooter implements Component {
   private hits: Hit[] = [];
   private hover?: Hit;
   private armed?: string;
+  private singleClick?: ReturnType<typeof setTimeout>;
   private pending = 0;
   private queue = Promise.resolve();
   private disposed = false;
@@ -57,6 +58,24 @@ export class NativeFooter implements Component {
     });
   }
 
+  private cancelSingleClick(): void {
+    clearTimeout(this.singleClick);
+    this.singleClick = undefined;
+    this.armed = undefined;
+  }
+
+  private dispatch(hit: Hit, action?: string, open = false): void {
+    if (!action && !open) return;
+    this.pending++;
+    this.repaint();
+    this.queue = this.queue.then(async () => {
+      if (!this.disposed) await this.invoke(hit, hit.item, action);
+    }).catch(() => {}).finally(() => {
+      this.pending--;
+      if (!this.disposed) this.repaint();
+    });
+  }
+
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     const hit = this.hits.find((item) => item.y === event.y && event.x >= item.x && event.x < item.end);
     if (event.type === 'move') {
@@ -69,36 +88,35 @@ export class NativeFooter implements Component {
     let action: string | undefined;
     let open = false;
     if (event.button === 'right') {
-      this.armed = undefined;
+      this.cancelSingleClick();
       if (this.pending) return { handled: true, render: false };
       action = hit.item.secondaryAction;
     } else if (event.button === 'left') {
       const count = event.clickCount ?? 1;
       if (count === 1 && !this.pending) {
+        this.cancelSingleClick();
         this.armed = this.doubleKey(hit);
         action = hit.item.action;
         open = Boolean(hit.item.openApp);
+        if (this.armed) {
+          // Match Pi TUI's 500ms component double-click window (measured on release).
+          this.singleClick = setTimeout(() => {
+            this.cancelSingleClick();
+            this.dispatch(hit, action, open);
+          }, 500);
+          return { handled: true, render: false };
+        }
       } else if (count === 2 && this.armed && this.armed === this.doubleKey(hit)) {
-        this.armed = undefined;
+        this.cancelSingleClick();
         action = hit.item.doubleAction;
       } else {
-        this.armed = undefined;
+        this.cancelSingleClick();
       }
     }
-    if (action || open) {
-      this.pending++;
-      this.repaint();
-      // A fast double-click waits for its preview, but never retries a failed operation.
-      this.queue = this.queue.then(async () => {
-        if (!this.disposed) await this.invoke(hit, hit.item, action);
-      }).catch(() => {}).finally(() => {
-        this.pending--;
-        if (!this.disposed) this.repaint();
-      });
-    }
+    this.dispatch(hit, action, open);
     return { handled: true, render: false };
   }
 
   invalidate(): void { this.hits = []; this.hover = undefined; }
-  dispose(): void { this.disposed = true; this.hits = []; this.armed = undefined; }
+  dispose(): void { this.disposed = true; this.hits = []; this.cancelSingleClick(); }
 }

@@ -191,7 +191,10 @@ test('note preview preserves full counter rows through double-click completion, 
         const act = async (count: number) => {
           if (mode === 'fullscreen') {
             const text = native.render(140).join('\n');
-            native.handleMouse({ type: 'click', button: 'left', x: text.indexOf('Task title'), y: 0, clickCount: count });
+            const event = { type: 'click', button: 'left', x: text.indexOf('Task title'), y: 0 };
+            if (count === 2) native.handleMouse({ ...event, clickCount: 1 });
+            native.handleMouse({ ...event, clickCount: count });
+            if (count === 1) await new Promise(resolve => setTimeout(resolve, 510));
             await native.queue;
           } else {
             const url = statuses.get('gateway-ui:demo')!.match(/pi-gateway-action:[^\x1b\x07]+/)![0];
@@ -202,6 +205,7 @@ test('note preview preserves full counter rows through double-click completion, 
         assert.deepEqual(previews, [before], `${mode}: even transient preview renders must keep the title in place`);
         assert.deepEqual(heights(), before);
         await act(2);
+        assert.deepEqual(previews, [before], `${mode}: completion does not print another preview`);
         assert.match(mode === 'fullscreen' ? native.render(140).join('') : statuses.get('gateway-ui:demo')!, /No task/);
         if (mode === 'fullscreen') {
           native.handleMouse({ type: 'click', button: 'left', x: 0, y: 0, clickCount: 1 });

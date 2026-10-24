@@ -25,10 +25,9 @@ controls/confirmations without model turns.
 **Fullscreen (0.30.0+):** service footers use native mouse regions below the editor.
 Click normally; double-click invokes the declared double action. Action titles are not
 terminal hyperlinks, so they add no hyperlink underline or hand pointer and do not take
-keyboard focus. Hover hints name actions when space permits. A fast double-click waits
-for its single-click preview without collapsing the service counters or moving the title;
-one accepting gesture cannot complete the newly selected
-task. The app launcher opens the service menu; Escape returns to the editor. Safe external
+keyboard focus. Hover hints name actions when space permits. When a double action exists,
+single-click waits 500 ms; a double-click cancels it and invokes only the double action,
+without printing a preview. One accepting gesture cannot complete the newly selected task. The app launcher opens the service menu; Escape returns to the editor. Safe external
 URLs remain terminal links. No Kitty handler or saved terminal setting is needed for these
 native actions. Try a separate Pi process with `--tui-mode fullscreen`; regular mode is unchanged.
 
@@ -142,8 +141,8 @@ failures are also definite. Never mark after writes/receipt consumption. Ordinar
 disconnects retain possible-commit warnings; error text proves nothing.
 
 `preview` appends a display-only inline card, even during agent runs: first line as the title,
-Markdown body, and a trailing JSON object/array shown as an always-expanded syntax-highlighted
-code block, independent of unfinished body fences. Content wraps to the terminal width; only
+Markdown body, and a nonempty trailing JSON object/array shown as an always-expanded
+syntax-highlighted code block, independent of unfinished body fences. Empty objects/arrays are hidden. Content wraps to the terminal width; only
 credential-free HTTP(S) destinations receive explicit Markdown hyperlinks. Terminal-owned
 linkification of literal text is unchanged. Previews never enter model context.
 
