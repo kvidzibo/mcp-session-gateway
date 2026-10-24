@@ -14,7 +14,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 
 const root = resolve(import.meta.dirname, '..');
-test('operator settings stay private, route by service, and require confirmed schema-valid revisioned saves', { timeout: 30_000 }, async (t) => {
+test('operator settings stay private, route by service, and autosave schema-valid revisioned edits', { timeout: 30_000 }, async (t) => {
   const dir = await mkdtemp('/tmp/gateway-settings-');
   const config = join(dir, 'gateway.json');
   const service = `
@@ -78,7 +78,6 @@ test('operator settings stay private, route by service, and require confirmed sc
     assert.deepEqual([...ext.tools.keys()].sort(), ['gateway_call', 'gateway_tools']);
     let step = 1;
     const navigation = ['Services', 'alpha', 'Settings'];
-    let confirmations = 0;
     const notices: string[] = [];
     let countsWidget: { render(width: number): string[] } | undefined;
     let footerUpdates = 0;
@@ -95,21 +94,13 @@ test('operator settings stay private, route by service, and require confirmed sc
           case 4: return choices.find((s) => s.includes('enabled:'));
           case 5: return choices.find((s) => s.endsWith('true'));
           case 6: return choices.find((s) => s.includes('count:'));
-          case 7: return choices.find((s) => s.startsWith('Save changes'));
-          case 8: return choices.find((s) => s.includes('count:'));
-          case 9: return choices.find((s) => s.startsWith('Save changes'));
-          case 10: return choices.find((s) => s.startsWith('Save changes'));
+          case 7:
+            assert.ok(choices.some((s) => s.includes('count: 1')), 'Invalid existing edit is reverted');
+            return choices.find((s) => s.includes('count:'));
           default: assert.match(title, /Settings saved/); assert.ok(choices.some((s) => /fixed.*read-only/.test(s))); return 'Back';
         }
       },
       input: async () => step === 7 ? '0' : '2',
-      confirm: async (_title: string, preview: string) => {
-        assert.match(preview, /worker\/model: "test\/old" → "test\/new"/);
-        assert.match(preview, /worker\/thinking: "high" → "off"/);
-        assert.match(preview, /enabled: false → true/);
-        assert.match(preview, /count: 1 → 2/);
-        return ++confirmations > 1; // First decline must not write.
-      },
       notify: (text: string) => { notices.push(text); },
       custom: async (factory: Function, options?: {overlay:boolean}) => {
         let result: unknown;
@@ -117,8 +108,7 @@ test('operator settings stay private, route by service, and require confirmed sc
         try {
           const lines: string[] = panel.render(98);
           const isNavigation = lines[1]?.startsWith('Gateway');
-          assert.equal(options?.overlay, lines[1] === 'Save child-server settings?' ? true : undefined,
-            'Only confirmations are isolated; navigation and settings edit inline');
+          assert.equal(options, undefined, 'Navigation and autosaved settings edits stay inline');
           if (isNavigation) {
             if (lines[1] === 'Gateway › Services › alpha') {
               assert.deepEqual(lines.filter((line) => /^(→ |  )\S/.test(line)).map((line) => line.slice(2)),
@@ -134,9 +124,6 @@ test('operator settings stay private, route by service, and require confirmed sc
           } else if (lines.some((line) => line.includes('JSON value'))) {
             const text = await ctx.ui.input();
             panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(text); panel.handleInput('\r');
-          } else if (lines[1] === 'Save child-server settings?') {
-            const approved = await ctx.ui.confirm(lines[1], lines.slice(3, -3).join('\n'));
-            panel.handleInput(approved ? '\r' : '\u001b');
           } else {
             const choices = lines.filter((line) => /^(→ |  )/.test(line)).map((line) => line.slice(2));
             const choice = await ctx.ui.select(lines[1], choices);
@@ -153,7 +140,7 @@ test('operator settings stay private, route by service, and require confirmed sc
       const beforeMenu = footerUpdates;
       await ext.commands.get('gateway').handler('', ctx);
       assert.ok(footerUpdates > beforeMenu, 'Closing slash menus explicitly redraws the Full counters');
-      assert.equal(confirmations, 2);
+      assert.equal(step, 9, 'Completed edits save without a confirmation dialog');
       assert.ok(notices.some((s) => s.includes('must be >= 1')));
       await t.test('Full-display service clicks open their screen without requiring settings, renew links, and reject busy dialogs', async () => {
         const link = (name: string) => [...countsWidget!.render(140).join('\n').matchAll(/\x1b\]8;;(pi-gateway-action:[^\x07]+)\x07([^\x1b]+)/g)]
@@ -274,12 +261,10 @@ test('operator settings stay private, route by service, and require confirmed sc
             case 2: return choices.find((s) => s.includes('active:'));
             case 3: return choices.find((s) => s.endsWith('true'));
             case 4: return choices.find((s) => s.includes('note:'));
-            case 5: return choices.find((s) => s.startsWith('Save changes'));
             default: return 'Back';
           }
         },
         custom: ctx.ui.custom,
-        confirm: async () => true,
         notify: (text: string) => assert.fail(text),
       } };
       const doc = SettingsDocumentSchema.parse({schemaVersion:1,title:'Choice schemas',revision:'one',writable:true,
@@ -290,19 +275,10 @@ test('operator settings stay private, route by service, and require confirmed sc
         const panel = factory({terminal:{rows:30,columns:100},requestRender(){}}, {fg: (_color: string, text: string) => text}, {}, (value: unknown) => {result=value;completed=true;});
         try {
           const lines: string[] = panel.render(98);
-          assert.equal(options?.overlay, lines[1] === 'Save child-server settings?' ? true : undefined);
+          assert.equal(options, undefined);
           t.mock.timers.tick(30_001);
           assert.equal(completed, false, 'Taking time to review settings must not discard the draft');
-          if(lines[1] === 'Save child-server settings?') {
-            let preview = '';
-            for(let i=0;i<8;i++) {
-              preview += panel.render(98).slice(3,-3).join('');
-              panel.handleInput('\u001b[6~');
-            }
-            assert.ok(preview.includes('\\u0020'.repeat(80)), 'Significant spaces survive wrapping');
-            assert.ok(preview.includes('\\u200b\\u200e\\u200f'), 'Invisible characters remain explicit');
-            panel.handleInput('\r');
-          } else if (lines.some((line) => line.includes('JSON value'))) {
+          if (lines.some((line) => line.includes('JSON value'))) {
             panel.handleInput('\u0001'); panel.handleInput('\u000b'); panel.handleInput(JSON.stringify('a'+' '.repeat(80)+'b\u200b\u200e\u200f')); panel.handleInput('\r');
           }
           else {
@@ -316,12 +292,16 @@ test('operator settings stay private, route by service, and require confirmed sc
       };
       t.mock.timers.enable({ apis: ['setTimeout'] });
       try {
+        const expected = [{size:'large'}, {active:true}, {note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}];
+        let current = doc;
         await editSettings(choiceContext as unknown as ExtensionContext, doc, async (revision, patch) => {
-          assert.equal(revision, 'one'); assert.deepEqual(patch, {size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}); updates++;
-          return {...doc,revision:'two',values:{size:'large',active:true,note:'a'+' '.repeat(80)+'b\u200b\u200e\u200f'}};
+          assert.equal(revision, current.revision);
+          assert.deepEqual(patch, expected[updates++]);
+          current = {...current, revision:String(updates), values:{...current.values,...patch}};
+          return current;
         }, new AbortController().signal);
       } finally { t.mock.timers.reset(); }
-      assert.equal(updates, 1);
+      assert.equal(updates, 3);
     }
     // A client without the private operator environment gets no settings API.
     const ordinary = new Client({ name: 'no-operator', version: '1' });

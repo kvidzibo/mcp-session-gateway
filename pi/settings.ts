@@ -190,7 +190,7 @@ export async function inputSettings(ctx: ExtensionContext, title: string, value:
         const heading = title.split('\n').flatMap((line) => wrapTextWithAnsi(line, width)).slice(0, 2);
         const [border] = new DynamicBorder((text) => theme.fg('border', text)).render(width);
         return [border, ...heading.map((s) => theme.fg('accent', s)), '', ...input.render(width), '',
-          truncateToWidth(theme.fg('muted', options.multiline ? 'Shift+Enter newline · Enter stage · Esc back' : options.raw ? 'Enter stage · Esc back' : width < 40 ? 'Enter stage · Esc' : 'JSON value  Enter stage  Esc back'), width), border];
+          truncateToWidth(theme.fg('muted', options.multiline ? 'Shift+Enter newline · Enter submit · Esc cancel' : options.raw ? 'Enter submit · Esc back' : width < 40 ? 'Enter submit · Esc' : 'JSON value  Enter submit  Esc cancel'), width), border];
       },
       handleInput(data: string) {
         if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
@@ -234,43 +234,69 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
   // Human navigation has no RPC deadline; shutdown still cancels the draft.
   const options = { signal };
   let feedback = '';
+  let selectedEntry: string | undefined;
   while (!signal.aborted) {
-    const draft = structuredClone(document.values);
+    let draft = structuredClone(document.values);
     const rootProperties = object(document.schema.properties) ? Object.entries(document.schema.properties) : [];
     // A service can expose a named collection with a schema for newly added entries.
     const collection = rootProperties.length === 1 && object(rootProperties[0][1]) &&
       object(rootProperties[0][1].additionalProperties) && object(rootProperties[0][1].additionalProperties.properties)
       ? { key: rootProperties[0][0], schema: rootProperties[0][1], entry: rootProperties[0][1].additionalProperties } : undefined;
-    let selectedEntry: string | undefined;
+    let newEntry: string | undefined;
     // Browsing/cancelling must not compile a potentially huge service schema.
     let validate: ReturnType<typeof compileSchema> | undefined;
     // Only inline primitive controls are editable. Full schema validation still applies on save.
     const editable = (field: Field) => document.writable && !document.conflict && !field.readonly &&
       supported(field.schema);
+    const saveDraft = async (): Promise<boolean> => {
+      const leaves = fields(document.schema, [], false, draft);
+      if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
+      const changes = leaves.filter((f) =>
+        JSON.stringify(at(draft, f.path)) !== JSON.stringify(at(document.values, f.path)));
+      if (!changes.length || signal.aborted) return true;
+      const patch: ObjectValue = {};
+      for (const changed of changes) put(patch, changed.path, at(draft, changed.path));
+      try {
+        document = await update(document.revision, patch);
+        feedback = 'Settings saved automatically';
+        return true;
+      } catch {
+        // Uncertain writes and conflicts require a fresh get, never an automatic replay.
+        ctx.ui.notify('Settings save failed or conflicted. Reopen /gateway → Services → Settings to read current values; do not replay blindly.', 'error');
+        return false;
+      }
+    };
     while (!signal.aborted) {
       const leaves = fields(document.schema, [], false, draft);
       if (leaves.length > 500 || leaves.some((f) => !f.path.length)) throw new Error('Unsupported settings schema');
-      const changes = leaves.filter((f) => JSON.stringify(at(draft, f.path)) !== JSON.stringify(at(document.values, f.path)));
       const visible = collection ? leaves.filter((f) => f.path[0] === collection.key && f.path[1] === selectedEntry) : leaves;
       const collectionValue = collection ? draft[collection.key] : undefined;
       const entries = object(collectionValue) ? Object.keys(collectionValue) : [];
       const summary = (field: Field) => {
         const value = at(draft, field.path);
         return field.schema['x-multiline'] === true && typeof value === 'string' && value.length
-          ? `${value.split('\n').length} lines (${value.length} characters)` : clean(display(value));
+          ? `${value.split('\n').length} lines (≈${Math.ceil(value.length / 4)} tokens)` : clean(display(value));
       };
       const labels = collection && selectedEntry === undefined ? entries.map((key) => clean(key)) : visible.map((f, i) =>
         `${i + 1}. ${collection ? clean(String(f.schema.title ?? f.path.at(-1))) : pathLabel(f.path)}: ${summary(f)}${editable(f) ? '' : ' [read-only]'}`);
       const canAdd = collection && editable({ path: [collection.key], schema: { type: 'string' }, readonly:
         [document.schema, collection.schema, collection.entry].some(restricted) });
       const add = `Add ${String(collection?.entry.title ?? 'entry').toLowerCase()}`;
-      const save = `Save changes (${changes.length})`;
-      const choice = await selectSettingsOption(ctx, clean([selectedEntry ? `${document.title} › ${selectedEntry}` : document.title, feedback, document.warning,
+      const choice = await selectSettingsOption(ctx, clean([selectedEntry !== undefined ? `${document.title} › ${selectedEntry}${selectedEntry === newEntry ? ' [new draft — not saved; Back cancels]' : ''}` : document.title,
+        feedback || (document.writable && !document.conflict ? 'Valid edits save automatically' : ''), document.warning,
         document.applyTo ? `Applies to: ${document.applyTo}` : '', !document.writable ? 'Read-only' : ''].filter(Boolean).join('\n')),
-        [...labels, ...(canAdd && selectedEntry === undefined ? [add] : []), save, 'Back'], options);
+        [...labels, ...(canAdd && selectedEntry === undefined ? [add] : []), 'Back'], options);
       if (signal.aborted) return;
       if (!choice || choice === 'Back') {
-        if (selectedEntry !== undefined) { selectedEntry = undefined; continue; }
+        if (selectedEntry !== undefined) {
+          if (newEntry !== undefined && collection && object(draft[collection.key])) {
+            delete (draft[collection.key] as ObjectValue)[newEntry];
+            newEntry = undefined;
+            feedback = '';
+          }
+          selectedEntry = undefined;
+          continue;
+        }
         return;
       }
       if (collection && choice === add && canAdd) {
@@ -287,30 +313,17 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
           else if (schema.type === 'string') entry[key] = '';
         }
         put(draft, [collection.key, name], entry);
-        selectedEntry = name;
+        selectedEntry = newEntry = name;
+        validate ??= compileSchema(settingsValidationSchema(document.schema));
+        const error = validate(draft);
+        if (!error) {
+          if (!await saveDraft()) return;
+          break;
+        }
+        feedback = `Draft invalid — not saved: ${clean(error)}`;
         continue;
       }
       if (collection && selectedEntry === undefined && labels.includes(choice)) { selectedEntry = entries[labels.indexOf(choice)]; continue; }
-      if (choice === save) {
-        if (!changes.length || !document.writable || document.conflict) continue;
-        validate ??= compileSchema(settingsValidationSchema(document.schema));
-        const error = validate(draft);
-        if (error) { ctx.ui.notify(clean(error), 'error'); continue; }
-        const patch: ObjectValue = {};
-        for (const field of changes) put(patch, field.path, at(draft, field.path));
-        const preview = changes.map((f) => `${pathLabel(f.path)}: ${display(at(document.values, f.path))} → ${display(at(draft, f.path))}`).join('\n');
-        const confirmation = `${preview}\n\nApplies to: ${clean(document.applyTo ?? 'server-defined')}`;
-        if (!await confirmSettings(ctx, confirmation, options) || signal.aborted) continue;
-        try {
-          document = await update(document.revision, patch);
-          feedback = 'Settings saved';
-          break;
-        } catch {
-          // Uncertain writes and conflicts require a fresh get, never an automatic replay.
-          ctx.ui.notify('Settings save failed or conflicted. Reopen /gateway → Services → Settings to read current values; do not replay blindly.', 'error');
-          return;
-        }
-      }
       const field = visible[labels.indexOf(choice)];
       if (!field || !editable(field)) continue;
       const key = field.path[field.path.length - 1];
@@ -358,7 +371,8 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
           ctx.ui.notify('Enter a JSON string or finite number matching this field', 'error'); continue;
         }
       }
-      // Model changes must stage supported reasoning in the same confirmed patch.
+      const before = structuredClone(draft);
+      // Model and supported reasoning are one atomic edit, including cancellation.
       if (key === 'model' && document.models && next !== siblingModel) {
         const thinkingPath = [...field.path.slice(0, -1), 'thinking'];
         const thinkingField = leaves.find((f) => JSON.stringify(f.path) === JSON.stringify(thinkingPath));
@@ -371,6 +385,19 @@ export async function editSettings(ctx: ExtensionContext, initial: SettingsDocum
         }
       }
       put(draft, field.path, next);
+      if (signal.aborted) return;
+      validate ??= compileSchema(settingsValidationSchema(document.schema));
+      const error = validate(draft);
+      if (error) {
+        if (newEntry !== undefined) feedback = `Draft invalid — not saved: ${clean(error)}`;
+        else {
+          draft = before;
+          ctx.ui.notify(`Edit not saved; previous value restored: ${clean(error)}`, 'error');
+        }
+        continue;
+      }
+      if (!await saveDraft()) return;
+      break;
     }
   }
 }

@@ -12,21 +12,25 @@ connection and v1; other services work normally. See [delegate setup](integratio
 
 Pi-delegate lists roles first. Select one to edit model, thinking, tool checkboxes, extension access,
 enablement and its multiline prompt. **Add role** creates a draft with no tools or extension access;
-choose a model and enter a prompt before saving. Extension access enables configured extension
-and MCP discovery, not a sandbox or per-extension allowlist.
+choose a model and enter a prompt to complete it; it saves automatically once valid. Extension access
+enables configured extension and MCP discovery, not a sandbox or per-extension allowlist.
 
-1. Edit draft; type case-insensitive words to filter fields/choices, including models/providers.
+1. Type case-insensitive words to filter fields/choices, including models/providers.
    Backspace edits search; Escape goes back.
-2. **Save changes**: visibly review every preview line before Enter. Resizing resets review;
-   unrendered resize events cannot authorize writes. Decline preserves draft; Escape/Back discards.
-3. Confirm. Service displays apply policy; pi-delegate changes affect future jobs, not
-   running/queued jobs.
+2. Completed valid edits **save automatically**, without a separate Save/review action, and keep
+   the selected role open. Enter submits multiline text; Shift+Enter inserts a newline. Checkbox
+   **Done** commits. Model and reasoning choices save together; Escape cancels an incomplete field
+   edit without sending it. Invalid existing-role edits report an error and restore the previous value.
+3. New roles are labeled **new draft — not saved**, with validation errors until complete/valid.
+   Back/Escape from the new role cancels that draft. Valid drafts save automatically.
+   Service displays apply policy; pi-delegate changes affect future jobs, not running/queued jobs.
 
-Schema supplies fields, not hardcoded names/Pi's catalogue. Isolated scrollable overlays preserve
-controls beside widgets/footers; settings cannot overlap one-shot approvals. **Before confirmation,
-nothing dispatches**, including cancellation/timeout. After dispatch, cancellation/timeout may leave
-committed writes. After conflict/uncertainty, reopen/read; never replay. Started-request
-cancellation/timeout retires connection: restart first, collecting/cancelling work as needed.
+Schema supplies fields, not hardcoded names/Pi's catalogue. Native inline controls preserve
+spacing and navigation beside widgets/footers; settings cannot overlap one-shot approvals.
+Cancelling an incomplete edit sends nothing; previously saved edits remain saved.
+After dispatch, cancellation/timeout may leave committed writes. After conflict/uncertainty,
+reopen/read; never replay. Started-request cancellation/timeout retires connection: restart first,
+collecting/cancelling work as needed.
 **`/reload` restarts gateway/children; it does not save settings.**
 
 ## Service opt-in
@@ -88,20 +92,20 @@ prompts and permissions belong only in this trusted operator route, never tools/
 | Inline nested objects/primitives | Editable; a sole named collection lists entries first |
 | `enum`/primitive `oneOf` constants | Selectors, even without `type` |
 | Strings/numbers | Focused single-line JSON; quote strings, escape newlines/controls |
-| String with `x-multiline: true` | Plain multiline editor; Shift+Enter newline, Enter stages |
-| Unique arrays with primitive `items.enum` | Checkboxes; Done stages, Escape discards this field's edits |
+| String with `x-multiline: true` | Plain multiline editor; Shift+Enter newline, Enter submits/saves; summary shows lines and approximate tokens (`ceil(characters / 4)`; model tokenizer varies) |
+| Unique arrays with primitive `items.enum` | Checkboxes; Done commits, Escape discards this field's edits |
 | Collection with object `additionalProperties` | Add a named entry using its schema/defaults; `propertyNames` validates names |
 | `readOnly` | Propagates to descendants |
 | Complex unions/other arrays/`$ref` controls/unsupported types | View-only |
 
 Selectors use isolated single-row scrolling lists; empty results are unselectable. Lists truncate
-labels; previews show complete values, escaping spaces/non-ASCII in values/paths as `\uXXXX` to
-expose invisible/bidirectional characters and preserve whitespace.
+labels; single-line values/paths escape spaces/non-ASCII as `\uXXXX` to expose invisible/bidirectional
+characters. Open a multiline field to inspect its full text.
 
 Full JSON Schema 2020-12 validation precedes saving, not opening. Large distinct constant-only
 `oneOf` compiles as equivalent `enum`, retaining titles; referenced/duplicate/constrained
 alternatives stay unchanged. Paths use JSON Pointer escaping; unsafe prototype names are refused.
-Limits: **16 object levels, 500 leaves**. New entries explicitly stage schema defaults, but no model
+Limits: **16 object levels, 500 leaves**. New entries explicitly use schema defaults, but no model
 is silently selected. There is no field deletion/reset API. Tool arrays recognize `*` as all tools;
 deselecting one replaces it with an explicit list of the remaining offered tools.
 
@@ -114,7 +118,7 @@ Optional `models` uses pi-delegate's hint contract:
 ```
 
 String `model` fields use available entries; sibling `thinking` uses supported levels. Model changes
-stage both, offering reasoning choice when sibling editable. Unavailable current choices remain
+save both atomically, offering reasoning choice when sibling editable. Unavailable current choices remain
 visible/unselectable; no fallback. Availability describes service configuration, not
 credential/endpoint health. Other services need no catalogue/delegate roles.
 
@@ -130,7 +134,7 @@ credential/endpoint health. Other services need no catalogue/delegate roles.
 }
 ```
 
-Patch only changed leaves, including all staged fields of new entries. Service must reject stale revisions, validate entire
+Patch only changed leaves, including all fields of completed new entries. Service must reject stale revisions, validate entire
 prospective state, preserve unrelated values, persist atomically and return envelope/new revision.
 Service owns accepted-work effects; pi-delegate's `future-jobs` retains acceptance-time policy.
 
@@ -160,6 +164,6 @@ Same upstream MCP connection:
 
 Gateway authenticates upstream first, selects existing child connection, substitutes private token,
 forwards fixed method. Per-service serialization, timeouts/cancellation/cleanup apply. **Never
-expose generic tool/custom-RPC forwarding.** Hosts must show exact changes and obtain human
-confirmation; token authenticates route, not clicks. Hidden methods/stdio are no OS sandbox; trust
-services.
+expose generic tool/custom-RPC forwarding.** Hosts must expose edits only through trusted operator UI;
+completed valid field edits authorize revisioned updates without a separate confirmation. The token
+authenticates the route, not clicks. Hidden methods/stdio are no OS sandbox; trust services.
