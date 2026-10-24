@@ -146,7 +146,7 @@ configuration disables are excluded. Full adds a wrapping panel below the editor
 
 ```text
  MCP 3 services · 31 tool calls
- delegate ✓12 ✗0  │  pinote ✓17 ✗2  │  browser ✓0 ✗0
+ delegate ✓12 ✗0  │  sample ✓17 ✗2  │  browser ✓0 ✗0
 ```
 
 Click a **service name** for its controls (only connected services); keyboard:

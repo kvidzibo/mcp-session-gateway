@@ -16,7 +16,7 @@ test('native apps reuse inline Pi menus with live refresh, native bindings, and 
   const controller = new AbortController();
   const terminal = { rows: 30, columns: 100 };
   const uri = 'gateway-resource://demo/test%3A%2F%2Froot';
-  const view = { version: 1, title: 'Pinote · Tasks', revision: 'r1', state: {},
+  const view = { version: 1, title: 'Sample · Tasks', revision: 'r1', state: {},
     body: 'Selected task\n\nDetails '.repeat(30), controls: Array.from({ length: 24 }, (_, index) => ({
       id: index === 0 ? '__back' : index === 1 ? 'refresh' : String(index), kind: 'action',
       label: `Task ${index + 1}: ${'long title '.repeat(10)}`, description: `Description ${index + 1}: ${'Useful explanation. '.repeat(5)}`,
@@ -42,7 +42,7 @@ test('native apps reuse inline Pi menus with live refresh, native bindings, and 
       try {
         const lines = render();
         assert.match(lines[0], /^─+$/);
-        assert.equal(lines[1], 'Gateway › Services › demo › Pinote · Tasks');
+        assert.equal(lines[1], 'Gateway › Services › demo › Sample · Tasks');
         assert.match(lines.at(-1)!, /^─+$/);
         assert.match(lines.join('\n'), /ctrl\+p\/ctrl\+n.*ctrl\+y.*ctrl\+x/);
         assert.ok(lines.some((line) => /Selected task.*\.\.\.$/.test(line)), 'Long bodies have a visibly truncated summary');
