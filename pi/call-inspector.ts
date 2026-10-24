@@ -73,7 +73,8 @@ async function showCall(ctx: ExtensionContext, history: CallHistory, call: Retai
         reveal = false;
         const body = lines.slice(scroll.scrollTop, scroll.scrollTop + page);
         backRow = body.length + 3;
-        const hint = width < 60 ? `${cancel.split('/')[0]} back · Tab · ${confirm} toggle` : `Tab section · ${confirm} toggle · ↑↓/Pg scroll · ${cancel} back`;
+        const scrollKeys = tui.mode === 'fullscreen' ? '↑↓' : '↑↓/Pg';
+        const hint = width < 60 ? `${cancel.split('/')[0]} back · Tab · ${confirm} toggle` : `Tab section · ${confirm} toggle · ${scrollKeys} scroll · ${cancel} back`;
         return [...border.render(width), truncateToWidth(theme.fg('accent', `${call.service} › ${call.tool.replace(/\n/g, ' ')} · ${call.status}`), width),
           ...body, '',
           truncateToWidth(theme.fg(selected === 2 ? 'accent' : 'muted', `${selected === 2 ? '›' : ' '} Back`), width),

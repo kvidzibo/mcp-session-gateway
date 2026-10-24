@@ -133,7 +133,8 @@ History lists tool names and trimmed parameter/result previews. Enter opens a ca
 two visible lines per preview. Result previews show readable text when available; expansion shows
 the complete retained MCP response. **Tab** selects Parameters, Result/error, or Back; **Enter**
 expands/collapses each payload independently. In fullscreen, click a section heading to toggle it.
-Arrow/Page keys scroll, and Back/Escape returns to the list. Selection, confirmation and cancel
+Arrow keys or the mouse wheel scroll; regular mode also supports Page keys (fullscreen keeps Pi's
+transcript page shortcuts). Back/Escape returns to the list. Selection, confirmation and cancel
 follow Pi's configured selection keybindings. **r** refreshes the filtered list; an open call
 updates when its result arrives or the connection closes. These are inline native screens,
 not overlays, and do not send anything to the model.
