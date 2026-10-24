@@ -255,7 +255,8 @@ test('styled double-click titles accept then complete only on fresh capabilities
   } finally { await host.stop(); await bridge.stop(); }
 });
 
-test('fullscreen native footer keeps double-clicks state-bound and never captures editor focus', async () => {
+test('fullscreen native footer keeps double-clicks state-bound and never captures editor focus', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const statuses = new Map<string, string>(), actions: string[] = [], notices: string[] = [];
   const draft = 'Keep this draft 日本語';
   let selected = false, completed = false, widget: any, mode = 'fullscreen', menus = 0;
@@ -312,9 +313,18 @@ test('fullscreen native footer keeps double-clicks state-bound and never capture
     assert.deepEqual(actions, ['accept'], 'Replayed double/triple click cannot complete the newly accepted task');
     mouse(3, 1, 'move');
     assert.match(widget.render(100).join('\n'), /Double-click: done/, 'Hover hint names the action');
-    mouse(3); mouse(3, 2);
+    mouse(3);
+    await settle();
+    assert.deepEqual(actions, ['accept'], 'Single-click waits before printing');
+    t.mock.timers.tick(499); await settle();
+    assert.deepEqual(actions, ['accept']);
+    t.mock.timers.tick(1);
     releasePreview!(); await settle();
-    assert.deepEqual(actions, ['accept', 'preview', 'done'], 'A fast double-click waits for its preview');
+    assert.deepEqual(actions, ['accept', 'preview'], 'Single-click prints after the double-click window');
+    widget.render(100);
+    mouse(3); mouse(3, 2); await settle();
+    t.mock.timers.tick(501); await settle();
+    assert.deepEqual(actions, ['accept', 'preview', 'done'], 'Double-click invokes only its double action');
     widget.render(100);
     mouse(0); await settle();
     assert.equal(menus, 1, 'Launcher opens the app, not a service write');
@@ -331,5 +341,5 @@ test('fullscreen native footer keeps double-clicks state-bound and never capture
     assert.equal((host.meta('demo')['native-ui/features'] as any).footerNativeActions, undefined, 'Regular mode never negotiates native-only fields');
     assert.equal(widget, undefined, 'Regular mode leaves no empty native widget');
     assert.deepEqual(notices, []);
-  } finally { releasePreview?.(); await host.stop(); }
+  } finally { releasePreview?.(); await host.stop(); t.mock.timers.reset(); }
 });

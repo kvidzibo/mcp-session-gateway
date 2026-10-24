@@ -24,7 +24,8 @@ test('native previews render titled Markdown cards with expanded raw JSON, safe 
     const card = render(`Autosave delegate settings and show estimated prompt tokens\n\nWorktree: /tmp/mcp-settings-autosave\nBranch: feat/settings-autosave-tokens\n\n${json}`);
     const raw = card.render(140).join('\n');
     const plain = stripVTControlCharacters(raw);
-    assert.match(plain, /Pinote · Tasks · display only · not sent to model/);
+    assert.match(plain, /Pinote · Tasks/);
+    assert.doesNotMatch(plain, /display only|not sent to model/);
     assert.match(raw, /\x1b\[1mAutosave delegate settings and show estimated prompt tokens/);
     assert.match(plain, /Worktree: \/tmp\/mcp-settings-autosave/);
     assert.match(plain, /Branch: feat\/settings-autosave-tokens/);
@@ -61,6 +62,12 @@ test('native previews render titled Markdown cards with expanded raw JSON, safe 
     assert.doesNotMatch(invalid, /```json/);
     assert.match(stripVTControlCharacters(render('Title\n\n[1, 2]').render(60).join('\n')), /```json/);
     assert.doesNotMatch(stripVTControlCharacters(render('Only a title').render(60).join('\n')), /```json/);
+    for (const empty of ['{}', '{\n}', '[]', '[\n]']) {
+      const text = stripVTControlCharacters(render(`Title\n\nBody\n\n${empty}`).render(60).join('\n'));
+      assert.match(text, /Body/);
+      assert.doesNotMatch(text, /```json|[{}\[\]]/);
+      assert.doesNotMatch(stripVTControlCharacters(render(`Title\n\n${empty}`).render(60).join('\n')), /```json/);
+    }
     const wide = render('界'.repeat(80) + '\n\n' + 'Long body '.repeat(50));
     for (const width of [1, 8, 28, 100]) assert.ok(wide.render(width).every((line: string) => visibleWidth(line) <= width));
     assert.equal(renderers.get('gateway-native-preview')!({ data: { text: 'Missing title' } }, {}, theme), undefined);
