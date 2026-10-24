@@ -12,19 +12,32 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 /** Register only dependency-free forwarding interfaces until the session actually starts. */
 export default function gatewayExtension(pi: ExtensionAPI): void {
   pi.registerFlag('gateway-config', { type: 'string', description: 'Start a stdio gateway using this config file' });
-  const tools = new Map<string, ToolDefinition['execute']>();
+  const tools = new Map<string, ToolDefinition>();
   const commands = new Map<string, Parameters<ExtensionAPI['registerCommand']>[1]>();
   const renderers = new Map<string, EntryRenderer>();
   for (const type of gatewayEntries) pi.registerEntryRenderer(type, (entry, options, theme) => ({
     render: (width) => renderers.get(type)?.(entry, options, theme)?.render(width) ?? [],
     invalidate() {}, // Recreate the real component on each render, including after lazy loading.
   }));
+  const callRenderers: Pick<ToolDefinition, 'renderCall' | 'renderResult'> = {
+    renderCall: (...args) => {
+      const render = tools.get(gatewayTools.call.name)?.renderCall;
+      if (!render) throw new Error('Gateway renderer is not ready'); // Pi uses its native fallback until loaded.
+      return render(...args);
+    },
+    renderResult: (...args) => {
+      const render = tools.get(gatewayTools.call.name)?.renderResult;
+      if (!render) throw new Error('Gateway renderer is not ready');
+      return render(...args);
+    },
+  };
   for (const definition of Object.values(gatewayTools)) pi.registerTool({
     ...definition,
+    ...(definition.name === gatewayTools.call.name ? callRenderers : {}),
     execute: (...args) => {
       const tool = tools.get(definition.name);
       if (!tool) throw new Error('Gateway is not ready; check its startup error and /reload');
-      return tool(...args);
+      return tool.execute(...args);
     },
   });
   for (const [name, description] of Object.entries(gatewayCommands)) pi.registerCommand(name, {
@@ -111,7 +124,7 @@ export default function gatewayExtension(pi: ExtensionAPI): void {
         const runtimePi: ExtensionAPI = {
           ...pi,
           registerFlag() {},
-          registerTool: (tool) => { tools.set(tool.name, tool.execute as ToolDefinition['execute']); },
+          registerTool: (tool) => { tools.set(tool.name, tool as ToolDefinition); },
           registerCommand: (name, command) => { commands.set(name, command); },
           registerEntryRenderer: (type, renderer) => { renderers.set(type, renderer as EntryRenderer); },
         };

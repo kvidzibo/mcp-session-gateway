@@ -224,6 +224,10 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
     try {
       await dispatch('session_start');
       const tool = ext.tools.get('gateway_call').definition;
+      const renderArgs = { name: 'checks__structured', arguments: { value: 42 } };
+      const renderContext = { args: renderArgs, expanded: false, isPartial: false, executionStarted: true, argsComplete: true, showImages: false, isError: false };
+      const renderTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+      assert.match(tool.renderCall(renderArgs, renderTheme, renderContext).render(80).join('\n'), /checks › structured/);
       const invoke = (signal?: AbortSignal) => tool.execute('test', { name: 'demo__increment', arguments: {} }, signal, undefined, ctx);
       // Cancel the first incoming elicitation: its SDK request ID is exactly 0.
       waitForCancel = true;
@@ -242,6 +246,7 @@ test('approvals fail closed, resource refresh stays in UI, and the adapter loads
       for (let round = 0; round < 2; round++) {
         const result = await tool.execute('schema', { name: 'checks__structured', arguments: { value: 42 } }, undefined, undefined, ctx);
         assert.deepEqual(JSON.parse(result.content[0].text), { value: 42, env: 'interpolation-works' });
+        assert.match(tool.renderResult(result, { expanded: true, isPartial: false }, renderTheme, renderContext).render(80).join('\n'), /"value": 42/);
         assert.ok(!JSON.stringify(result).includes('private-meta'));
       }
       await assert.rejects(tool.execute('schema', { name: 'checks__structured', arguments: { value: 42, unexpected: true } }, undefined, undefined, ctx), /Invalid arguments/);
