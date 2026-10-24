@@ -18,12 +18,14 @@ export function agentContextTokens(text: string): number {
   return text ? Math.ceil((text.length + '<gateway_tools>\n\n</gateway_tools>'.length) / 4) : 0;
 }
 
-/** Shared by the prompt section and its display-only preview. */
-export function agentContextText(services: Pick<ServiceConfig, 'name' | 'description' | 'agentContext'>[], tools: Tool[]): string {
+type ContextService = Pick<ServiceConfig, 'name' | 'description' | 'agentContext' | 'enabled'>;
+
+/** The exact advertised representation, shared by readable preview and injection. */
+export function agentContextCatalog(services: ContextService[], tools: Tool[]) {
   const visible = tools.filter(modelVisible).sort((a, b) => a.name.localeCompare(b.name));
-  const catalog = [...services].sort((a, b) => a.name.localeCompare(b.name)).flatMap((service) => {
+  return [...services].sort((a, b) => a.name.localeCompare(b.name)).flatMap((service) => {
     const mode = service.agentContext ?? 'off';
-    if (mode === 'off') return [];
+    if (service.enabled === false || mode === 'off') return [];
     const prefix = `${service.name}__`;
     const inventory = visible.filter((tool) => tool.name.startsWith(prefix));
     // Configured does not mean running; never advertise unavailable or app-only tools.
@@ -38,6 +40,11 @@ export function agentContextText(services: Pick<ServiceConfig, 'name' | 'descrip
       })) } : {}),
     }];
   });
+}
+
+export type AgentContextCatalog = ReturnType<typeof agentContextCatalog>;
+
+export function agentContextRaw(catalog: AgentContextCatalog): string {
   if (!catalog.length) return '';
   return [
     'Available local gateway services. Call tools through gateway_call with name and arguments.',
@@ -47,4 +54,9 @@ export function agentContextText(services: Pick<ServiceConfig, 'name' | 'descrip
     JSON.stringify(catalog, null, 2).replace(/[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,
       (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`),
   ].join('\n\n');
+}
+
+/** Shared by the prompt section and its display-only preview. */
+export function agentContextText(services: ContextService[], tools: Tool[]): string {
+  return agentContextRaw(agentContextCatalog(services, tools));
 }

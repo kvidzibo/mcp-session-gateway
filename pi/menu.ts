@@ -43,7 +43,7 @@ export class GatewayMenu {
       const rebuild = (selectedId?: string) => {
         const terms = (input?.getValue() ?? '').toLowerCase().split(/\s+/).filter(Boolean);
         filtered = choices.filter((item) => terms.every((term) => oneLine(`${item.label} ${item.description}`).toLowerCase().includes(term)));
-        list = new SelectList(filtered.map((item) => ({ value: item.id, label: `${oneLine(item.label)}${item.disabled ? ' (unavailable)' : ''}` })), capacity, {
+        list = new SelectList(filtered.map((item) => ({ value: item.id, label: item.disabled ? theme.fg('dim', `${oneLine(item.label)} (unavailable)`) : oneLine(item.label) })), capacity, {
           selectedPrefix: (s) => theme.fg('accent', s), selectedText: (s) => theme.fg(filtered.find((item) => item.id === list.getSelectedItem()?.value)?.disabled ? 'dim' : 'accent', s),
           description: (s) => theme.fg('muted', s), scrollInfo: (s) => theme.fg('dim', s), noMatch: () => theme.fg('muted', 'No matching choices'),
         });
