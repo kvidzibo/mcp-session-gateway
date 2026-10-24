@@ -124,7 +124,7 @@ model.
 native tool expansion (the displayed configurable shortcut or click) for full arguments and
 results, including original pretty JSON/metadata for recognized delegate jobs. Delegate answers
 render as Markdown without summarization; a job status of `done` is unverified, not proof of task
-completion. This formatting does not change model-facing data or image handling.
+completion. Other text stays literal. Formatting does not change model-facing data or image handling.
 
 | Command/action | Purpose |
 |---|---|
@@ -145,7 +145,12 @@ Resources, Connection / restart…, Enable/disable service, then Back.
 The footer's ` MCP 3 services` excludes disabled/unactivated services at the last startup,
 **not a health check**. Click it to open Services/recovery; Kitty needs the
 [click handler](docs/native-ui.md#terminal-clicks). **Display: Minimal / Full** saves immediately;
-Full adds clickable service counters, collapsed to one summary row while a gateway dialog is open
+Full adds clickable service counters: service names open controls; individual success/failure/pending
+counts open filtered tool-call history. Keyboard: **`/gateway` → Tool call history**. Parameters and
+results have trimmed previews, independent expansion, and scrolling in native inline screens.
+History keeps only the latest 100 calls in memory (16,384 characters per payload), never logs or
+persists payloads, and shows when historical totals have no retained payload. Reload/shutdown clears
+payloads, not saved totals. Counters collapse to one summary row while a gateway dialog is open
 to keep controls visible. See [counter
 semantics](docs/reference.md#display-and-call-counts) and the historical [startup
 snapshot](docs/reference.md#startup-snapshot).
@@ -181,8 +186,11 @@ jobs for **all** services in this session. Services controls also work while dis
 
 ### Child-server settings
 
-Highlight a service and press **Tab**; edit, choose **Save changes**, review and confirm. Declining
-keeps the draft; Escape/Back discards it. Type to filter. Settings require TUI mode and [service
+Highlight a service and press **Tab**; completed valid edits **save automatically**, keeping the
+selected role open. Enter saves multiline text; checkbox Done commits; Escape cancels incomplete
+field edits. New roles remain labeled drafts until valid; Back cancels them. Invalid existing edits
+report an error and revert. Prompt summaries show lines and approximate tokens (characters/4 rounded
+up; model tokenizer varies). Type to filter. Settings require TUI mode and [service
 opt-in](docs/settings.md). For pi-delegate, add `"settings": { "tokenEnv":
 "PI_DELEGATE_SETTINGS_TOKEN" }` inside its existing entry. This names a variable, not a token value;
 never configure the token. Its settings action is **Roles**: select or add a role, then edit its

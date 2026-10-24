@@ -7,13 +7,15 @@ import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type
 import { gatewayCommands, gatewayTools } from './definitions.js';
 import { gatewayCallRenderers } from './tool-renderers.js';
 import type { ExtensionAPI, ExtensionContext, ExtensionHandler, SessionStartEvent, SessionShutdownEvent } from '@earendil-works/pi-coding-agent';
-import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
+import { Loader, Text, truncateToWidth, getOsc8LinkAtColumn, type TuiMouseEvent } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
 import { readAgentContext, saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
 import { CallEventSchema } from '../src/call-events.js';
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
+import { CallHistory, type CallStatus } from './call-history.js';
+import { inspectCalls } from './call-inspector.js';
 import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
@@ -64,6 +66,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   let footerContext: ExtensionContext | undefined;
   let display: Display = 'minimal';
   let callCounts: CallCounts | undefined;
+  const callHistory = new CallHistory();
   let countsSaveWarning = false;
   function saveCounts(): void {
     if (!callCounts) return;
@@ -73,7 +76,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       countsSaveWarning = true;
     }
   }
-  function interruptCalls(): void { if (callCounts?.interrupt()) saveCounts(); }
+  function interruptCalls(): void { callHistory.interrupt(); if (callCounts?.interrupt()) saveCounts(); }
   let footerBridge: FooterActions | undefined;
   const disabledServices = new Set<string>();
   let startupStatus: StartupSummary = { services: [], unavailable: true };
@@ -105,36 +108,69 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     const suffix = state === 'off' ? ' · off' : state === 'starting' ? ' · starting' : disconnectedServices.size ? ` · !${disconnectedServices.size}` : '';
     const text = ` MCP ${footerCount ?? '?'} ${footerCount === 1 ? 'service' : 'services'}${suffix}`;
     const styled = ctx.ui.theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text);
-    const url = footerBridge?.link('gateway', async () => {
+    const openServices = async () => {
       // Links are single-use. Refresh even after a busy-dialog rejection.
       renderFooter();
       if (footerContext !== ctx || shuttingDown) return false;
       try { await gatewayCommand('services').handler('', ctx); return true; }
       finally { renderFooter(); }
-    });
+    };
+    const url = footerBridge?.link('gateway', openServices);
     const linked = (text: string) => url ? `\x1b]8;;${url}\x07${text}\x1b]8;;\x07` : text;
     if (display === 'full') {
       const serviceLinks = new Map<string, string>();
+      const countLinks = new Map<string, string>();
+      const clicks = new Map<string, () => Promise<boolean>>();
+      if (url) clicks.set(url, openServices);
+      for (const service of new Set([...footerServices, ...callCounts?.counts.keys() ?? []])) {
+        for (const status of ['success', 'failure', 'pending'] as const) {
+          const invoke = async () => {
+            renderFooter();
+            if (footerContext !== ctx || shuttingDown) return false;
+            try { await gatewayCommand({ service, status }).handler('', ctx); return true; }
+            finally { renderFooter(); }
+          };
+          const link = footerBridge?.link(`${service}:${status}`, invoke);
+          if (link) { countLinks.set(`${service}:${status}`, link); clicks.set(link, invoke); }
+        }
+      }
       if (connected && state === 'up') for (const service of footerServices) {
         if (disconnectedServices.has(service)) continue;
-        const link = footerBridge?.link(service, async () => {
+        const invoke = async () => {
           renderFooter();
           if (footerContext !== ctx || shuttingDown) return false;
           try { await gatewayCommand({ service }).handler('', ctx); return true; }
           finally { renderFooter(); }
-        });
-        if (link) serviceLinks.set(service, link);
+        };
+        const link = footerBridge?.link(service, invoke);
+        if (link) { serviceLinks.set(service, link); clicks.set(link, invoke); }
       }
       ctx.ui.setStatus('gateway', undefined);
-      ctx.ui.setWidget('gateway-call-counts', (_tui, theme) => ({
-        render: (width: number) => {
-          const header = `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`;
-          // Wrapped counters must not push an active dialog's controls offscreen.
-          return uiBusy === 'dialog' ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
-            footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks);
-        },
-        invalidate() {},
-      }), { placement: 'belowEditor' });
+      ctx.ui.setWidget('gateway-call-counts', (tui, theme) => {
+        let linkedLines: string[] = [];
+        return {
+          render: (width: number) => {
+            linkedLines = [];
+            const header = `${linked(theme.fg(state === 'off' ? 'error' : disconnectedServices.size ? 'warning' : 'muted', text))} · ${callCounts?.total() ?? 0} tool calls`;
+            // Wrapped counters must not push an active dialog's controls offscreen.
+            const lines = uiBusy === 'dialog' ? [truncateToWidth(header, width)] : callCountLines(width, theme, header,
+              footerServices, new Map([...callCounts?.counts ?? []].filter(([name]) => !disabledServices.has(name))), disconnectedServices, serviceLinks, countLinks);
+            if (tui.mode !== 'fullscreen') return lines;
+            linkedLines = lines;
+            // Native fullscreen clicks stay inside Pi rather than launching the terminal helper.
+            return lines.map((line) => line.replace(/\x1b\]8;[^;]*;[^\x07\x1b]*(?:\x07|\x1b\\)/g, ''));
+          },
+          handleMouse(event: TuiMouseEvent) {
+            if (event.type !== 'click' || event.button !== 'left' || event.ctrl || event.alt || event.shift) return;
+            const link = getOsc8LinkAtColumn(linkedLines[event.y] ?? '', event.x);
+            const invoke = link ? clicks.get(link) : undefined;
+            if (!invoke) return;
+            void invoke().catch(() => {});
+            return { handled: true, render: true };
+          },
+          invalidate() { linkedLines = []; },
+        };
+      }, { placement: 'belowEditor' });
     } else {
       ctx.ui.setWidget('gateway-call-counts', undefined);
       ctx.ui.setStatus('gateway', linked(styled));
@@ -342,7 +378,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); callLifetime.abort(servicesReady ? connectionLost : undefined); void native.stop(); } };
     current.setNotificationHandler(CallEventSchema, ({ params }) => {
       if (client !== current || callLifetime.signal.aborted || callCounts !== countsOwner || shuttingDown || !configuredServices.includes(params.service)) return;
-      if (callCounts?.event(params)) { saveCounts(); renderFooter(); }
+      if (callCounts?.event(params)) { callHistory.event(params); saveCounts(); renderFooter(); }
     });
     current.setNotificationHandler(ChangedSchema, async ({ params }) => { await native.refresh(params.uri); });
     current.setNotificationHandler(InvalidatedSchema, ({ params }) => {
@@ -389,6 +425,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   const onStart: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
     shuttingDown = false;
     countsSaveWarning = false;
+    callHistory.clear();
     const scope = resolve(String(pi.getFlag('gateway-config') ?? ''));
     callCounts = new CallCounts(ctx.sessionManager.getSessionId(), scope, ctx.sessionManager.getEntries?.() ?? ctx.sessionManager.getBranch());
     try { await start(ctx, false, event.reason, true); }
@@ -403,7 +440,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     const bridge = footerBridge; footerBridge = undefined;
     footerContext?.ui.setStatus('gateway', undefined);
     footerContext?.ui.setWidget('gateway-call-counts', undefined); footerContext = undefined;
-    try { await close(); } finally { await bridge?.stop(); }
+    try { await close(); } finally { callHistory.clear(); await bridge?.stop(); }
   };
   if (lifecycle) lifecycle.shutdown = onShutdown;
   else pi.on('session_shutdown', onShutdown);
@@ -427,7 +464,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       ctx.ui.notify(clean(`Gateway agent context unavailable: ${String(error)}`), 'warning');
     }
   });
-  const gatewayCommand = (initialAction?: 'services' | { service: string }) => ({
+  const gatewayCommand = (initialAction?: 'services' | { service: string; status?: CallStatus }) => ({
     description: gatewayCommands[initialAction ? 'pi-services' : 'gateway'],
     handler: async (_args: string, ctx: ExtensionContext) => {
       if (!ctx.hasUI || ctx.mode !== 'tui') { ctx.ui.notify('Gateway menus require TUI mode', 'warning'); return; }
@@ -446,6 +483,10 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
       let nextAction = connected && initialAction ? 'services' : undefined;
       let directService = typeof initialAction === 'object' ? initialAction.service : undefined;
       try {
+        if (typeof initialAction === 'object' && initialAction.status) {
+          await inspectCalls(ctx, menu, callHistory, initialAction.service, initialAction.status, () => callCounts?.counts.get(initialAction.service), signal);
+          return;
+        }
         while (!signal.aborted) {
           let autoUpdate: boolean | undefined, autoUpdateError = '';
           let menuDisplay: Display | undefined, displayError = '';
@@ -455,6 +496,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
           catch (error) { autoUpdateError = clean(String(error)); }
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
             { id: 'services', label: 'Services', description: 'Enable/disable services, open apps, edit settings or read resources.' },
+            { id: 'calls', label: 'Tool call history', description: 'Inspect retained parameters and results privately. Session totals may include calls whose payloads are unavailable.' },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
             { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
@@ -467,7 +509,17 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
           nextAction = undefined;
           if (!action) break;
           try {
-            if (action === 'display' && menuDisplay !== undefined) {
+            if (action === 'calls') {
+              while (!signal.aborted) {
+                const service = await menu.choose(['Gateway', 'Tool calls'], 'Memory-only recent child dispatches · no payloads saved', [...new Set([...configuredServices, ...callCounts?.counts.keys() ?? []])].map((name) => ({ id: name, label: name, description: 'Choose a status filter.' })));
+                if (!service) break;
+                while (!signal.aborted) {
+                  const status = await menu.choose(['Gateway', 'Tool calls', service], 'Session totals include payloads no longer retained', (['success', 'failure', 'pending'] as const).map((status) => ({ id: status, label: `${status} (${callCounts?.counts.get(service)?.[status] ?? 0})`, description: 'Open filtered retained calls.' })));
+                  if (!status) break;
+                  await inspectCalls(ctx, menu, callHistory, service, status as CallStatus, () => callCounts?.counts.get(service), signal);
+                }
+              }
+            } else if (action === 'display' && menuDisplay !== undefined) {
               display = await toggleDisplay(configPath, menuDisplay, signal);
               renderFooter();
             } else if (action === 'auto-update' && autoUpdate !== undefined) {

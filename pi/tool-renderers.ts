@@ -86,7 +86,7 @@ export const gatewayCallRenderers: Pick<ToolDefinition<typeof gatewayTools.call.
         const value = parsed(item.text);
         body.addChild(value !== undefined
           ? new Text(theme.fg('toolOutput', safe(json(value))), 0, 0)
-          : new Markdown(safe(item.text), 0, 0, getMarkdownTheme()));
+          : new Text(theme.fg('toolOutput', safe(item.text)), 0, 0));
       }
     }
     return preview(body, expanded, 12, true);

@@ -5,7 +5,7 @@ import { visibleWidth } from '@earendil-works/pi-tui';
 import { editSettings } from '../pi/settings.js';
 import type { SettingsDocument } from '../src/settings.js';
 
-test('role drafts support nested fields, toggles, multiline prompts and safe creation only after review', async () => {
+test('roles autosave nested fields, toggles and multiline prompts while incomplete new roles stay drafts', async () => {
   const role = { type: 'object', title: 'Role', additionalProperties: false, properties: {
     model: { type: 'string', title: 'Model', enum: ['test/before', 'test/after'] },
     thinking: { type: 'string', title: 'Thinking', enum: ['off', 'high'], default: 'off' },
@@ -29,6 +29,14 @@ test('role drafts support nested fields, toggles, multiline prompts and safe cre
     ['Roles › recon', ['1. Model', '\r']],
     ['agents/recon/model', ['After', '\r']],
     ['Reasoning for selected model', ['high', '\r']],
+    ['Roles › recon', ['1. Model', '\r']],
+    ['agents/recon/model', ['Before', '\r']],
+    ['Reasoning for selected model', ['\u001b']],
+    ['Roles › recon', ['5. Prompt', '\r']],
+    ['agents/recon/prompt', ['\u0001', '\u000b', '\r']],
+    ['Roles › recon', ['3. Tools', '\r']],
+    ['agents/recon/tools', ['bash', '\r']],
+    ['agents/recon/tools', ['\u001b']],
     ['Roles › recon', ['3. Tools', '\r']],
     ['agents/recon/tools', ['"*"', '\r']],
     ['agents/recon/tools', ['read', '\r']],
@@ -50,10 +58,19 @@ test('role drafts support nested fields, toggles, multiline prompts and safe cre
     ['Reasoning for selected model', ['off', '\r']],
     ['Roles › writer', ['5. Prompt', '\r']],
     ['agents/writer/prompt', ['Write documentation.', '\r']],
-    ['Roles › writer', ['Save changes', '\r']],
-    ['Save child-server settings?', ['\u001b']],
-    ['Roles › writer', ['Save changes', '\r']],
-    ['Save child-server settings?', ['REVIEW']],
+    ['Roles › writer', ['\u001b']],
+    ['Roles', ['Add role', '\r']],
+    ['Add role: name', ['discarded', '\r']],
+    ['Roles › discarded', ['1. Model', '\r']],
+    ['agents/discarded/model', ['After', '\r']],
+    ['Reasoning for selected model', ['off', '\r']],
+    ['Roles › discarded', ['5. Prompt', '\r']],
+    ['agents/discarded/prompt', ['Incomplete', '\u001b']],
+    ['Roles › discarded', ['Back', '\r']],
+    ['Roles', ['recon', '\r']],
+    ['Roles › recon', ['6. Enabled', '\r']],
+    ['agents/recon/enabled', ['false', '\r']],
+    ['Roles › recon', ['\u001b']],
     ['Roles', ['\u001b']],
   ];
   let saves = 0;
@@ -79,31 +96,68 @@ test('role drafts support nested fields, toggles, multiline prompts and safe cre
         assert.match(render(), /Extensions: false/);
         assert.match(render(), /Prompt: ""/);
       }
-      if (step[0] === 'Roles › recon' && step[1][0] === '\u001b') assert.match(render(), /Prompt: 2 lines \(30 characters\)/);
-      for (const key of step[1]) {
-        if (key === 'REVIEW') {
-          assert.equal(saves, 0);
-          for (let i = 0; i < 100 && !render().includes('Enter save'); i++) { panel.handleInput('\u001b[6~'); render(); }
-          assert.match(render(), /Enter save/);
-          panel.handleInput('\r');
-        } else panel.handleInput(key);
-        render();
+      if (step[0] === 'Roles › recon' && step[1][0] === '\u001b') assert.match(render(), /Prompt: 2 lines \(≈8 tokens\)/);
+      if (step[0] === 'Roles › discarded') {
+        assert.match(render(), /new draft/);
+        assert.match(render(), /Draft invalid — not saved/);
       }
+      for (const key of step[1]) { panel.handleInput(key); render(); }
       assert.ok(complete, `Dialog completed: ${step[0]}`);
       return answer;
     } finally { panel.dispose(); }
   } } } as unknown as ExtensionContext;
+  const expected: Record<string, object>[] = [
+    { recon: { model: 'test/after', thinking: 'high' } },
+    { recon: { tools: ['bash', 'read'] } },
+    { recon: { extensions: true } },
+    { recon: { prompt: 'Inspect only.\nReport evidence.' } },
+    { writer: { model: 'test/after', thinking: 'off', tools: [], extensions: false, prompt: 'Write documentation.', enabled: true } },
+    { recon: { enabled: false } },
+  ];
+  let current = structuredClone(document);
   await editSettings(ctx, document, async (revision, patch) => {
-    saves++;
-    assert.equal(revision, 'one');
-    assert.deepEqual(patch, { agents: {
-      recon: { model: 'test/after', thinking: 'high', tools: ['bash', 'read'], extensions: true, prompt: 'Inspect only.\nReport evidence.' },
-      writer: { model: 'test/after', thinking: 'off', tools: [], extensions: false, prompt: 'Write documentation.', enabled: true },
-    } });
-    return { ...document, revision: 'two', values: { agents: { recon: { ...original, ...(patch.agents as any).recon }, writer: (patch.agents as any).writer } } };
+    assert.equal(revision, current.revision);
+    assert.deepEqual(patch, { agents: expected[saves++] });
+    const agents = current.values.agents as Record<string, object>;
+    for (const [name, value] of Object.entries(patch.agents as Record<string, object>)) agents[name] = { ...agents[name], ...value };
+    current = { ...current, revision: String(saves) };
+    return structuredClone(current);
   }, new AbortController().signal);
-  assert.equal(saves, 1);
+  assert.equal(saves, expected.length);
   assert.equal(steps.length, 0);
-  assert.deepEqual(notices, ['Enter a valid, unused name', 'Enter a valid, unused name']);
+  assert.match(notices[0], /Edit not saved; previous value restored/);
+  assert.deepEqual(notices.slice(1), ['Enter a valid, unused name', 'Enter a valid, unused name']);
   assert.deepEqual(document.values, { agents: { recon: original } }, 'No mutation of the source settings');
+});
+
+test('failed autosave stops editing without retrying an uncertain or conflicting write', async () => {
+  for (const failure of ['revision conflict', 'uncertain write']) {
+    let dialogs = 0, updates = 0;
+    const notices: string[] = [];
+    const ctx = { ui: {
+      notify: (text: string) => notices.push(text),
+      custom: async (factory: Function) => {
+        assert.ok(++dialogs <= 2, 'No editing after the failed update');
+        let answer: unknown;
+        const panel = factory({ terminal: { rows: 30, columns: 90 }, requestRender() {} },
+          { fg: (_: string, text: string) => text }, {}, (value: unknown) => { answer = value; });
+        try {
+          panel.render(90);
+          panel.handleInput('\r');
+          return answer;
+        } finally { panel.dispose(); }
+      },
+    } } as unknown as ExtensionContext;
+    await editSettings(ctx, { schemaVersion: 1, title: 'Settings', revision: 'one', writable: true,
+      schema: { type: 'object', properties: { enabled: { type: 'boolean' } } }, values: { enabled: false } },
+    async (revision, patch) => {
+      updates++;
+      assert.equal(revision, 'one');
+      assert.deepEqual(patch, { enabled: true });
+      throw new Error(failure);
+    }, new AbortController().signal);
+    assert.equal(updates, 1);
+    assert.equal(dialogs, 2);
+    assert.match(notices[0], /Reopen.*do not replay blindly/);
+  }
 });

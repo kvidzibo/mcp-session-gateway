@@ -30,7 +30,8 @@ test('gateway_call native rendering retains raw details and bounds compact termi
   const restored = tool.renderCall(context.args, theme, { ...context, executionStarted: false, argsComplete: false });
   assert.ok(!stripVTControlCharacters(restored.render(40).join('\n')).includes('Receiving arguments'));
   assert.match(render('{"ok":true,"nested":{"n":2}}', true), /"nested": \{\n\s+"n": 2/);
-  assert.match(render('plain **Markdown** text', true), /Markdown/);
+  const plain = 'use_snake_case and *not emphasis?* [label](https://example.com/raw)';
+  assert.ok(render(plain, true, 120).includes(plain));
   const answer = 'Exact answer with **formatting**.\n\n' + '界🙂 long paragraph '.repeat(60) + '\n\nANSWER_TAIL';
   const raw = { jobId: 'job-123', cwd: '/tmp/work', durationMs: 1234, extra: 'RAW_ONLY', job: { status: 'done', role: 'reviewer', kind: 'review', model: 'test/model', reasoning: 'high', answer } };
   context.args.name = 'delegate__delegate_status';

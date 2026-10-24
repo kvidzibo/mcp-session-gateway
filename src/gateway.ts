@@ -26,7 +26,7 @@ import { errorMessage, writeDiagnostic } from './diagnostics.js';
 import { gatewayIdentity } from './identity.js';
 import { GATEWAY_STATUS, GatewayStatusRequestSchema } from './status.js';
 import { modelVisible } from './tools.js';
-import type { CallEvent } from './call-events.js';
+import { callPayload, type CallEvent } from './call-events.js';
 import { handleElicitation, trackRequests } from './elicitation.js';
 import { authorize, validToken, SETTINGS_EXTENSION, SETTINGS_GET, SETTINGS_UPDATE, OPERATOR_EXTENSION, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorListSchema, OperatorGetSchema, OperatorUpdateSchema, SettingsCapabilitySchema, SettingsDocumentSchema } from './settings.js';
 import { ActionSchema, ActionResultSchema, ChangedSchema } from './native-ui.js';
@@ -205,9 +205,9 @@ export class Gateway {
           const signal = AbortSignal.any([extra.signal, finished.signal, service.closed.signal]);
           service.active = { id: extra.requestId, signal, tool: request.params.name };
           const id = randomUUID();
-          const report = (phase: CallEvent['phase']) => {
+          const report = (phase: CallEvent['phase'], output?: unknown) => {
             void this.server.notification({ method: 'notifications/gateway/tool-call',
-              params: { id, service: service.config.name, phase } }).catch(() => {});
+              params: { id, service: service.config.name, phase, ...(phase === 'started' ? { tool: tool.originalName.slice(0, 256), parameters: callPayload(request.params.arguments) } : { output: callPayload(output) }) } }).catch(() => {});
           };
           report('started');
           try {
@@ -231,10 +231,10 @@ export class Gateway {
                 },
               } : {}),
             });
-            report(result.isError ? 'failure' : 'success');
+            report(result.isError ? 'failure' : 'success', result);
             return result;
           } catch (error) {
-            report('failure');
+            report('failure', errorMessage(error));
             throw error;
           } finally {
             finished.abort();
