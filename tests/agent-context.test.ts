@@ -186,8 +186,12 @@ test('inline agent context tree expands only injected schemas, toggles exact raw
     { name: 'full', agentContext: 'full', description: 'Full service' },
     { name: 'service', agentContext: 'service', description: 'Service summary' },
     { name: 'summary', agentContext: 'summary' },
+    { name: 'aaa', agentContext: 'full', enabled: false },
+    { name: 'zzz', agentContext: 'full', enabled: false },
+    { name: 'z-off', agentContext: 'off' },
+    { name: 'z-stopped', agentContext: 'full' },
   ];
-  const inventory: any[] = services.map(({ name }) => ({ name: `${name}__read`, description: `${name} tool description`,
+  const inventory: any[] = services.filter(({ name }) => name !== 'z-stopped').map(({ name }) => ({ name: `${name}__read`, description: `${name} tool description`,
     inputSchema: { type: 'object', description: 'schema tail ' + 'detail '.repeat(1000) } }));
   const catalog = agentContextCatalog(services, inventory);
   let panel: any, completed = false;
@@ -216,7 +220,9 @@ test('inline agent context tree expands only injected schemas, toggles exact raw
     assert.match(body(), /Full service/);
     assert.doesNotMatch(body(), /full tool description|schema tail/, 'Services start collapsed');
     panel.handleInput('x');
-    assert.match(body(), /full__read/);
+    const full = catalog.find((entry) => entry.name === 'full')!;
+    const fullTokens = Math.ceil(JSON.stringify(full.tools![0], null, 2).length / 4).toLocaleString('en-US');
+    assert.ok(body().includes(`full__read · ≈${fullTokens} tokens`));
     panel.handleInput('j'); panel.handleInput('x');
     assert.match(body(), /schema tail/);
     const top = body(); panel.handleInput('d');
@@ -228,13 +234,26 @@ test('inline agent context tree expands only injected schemas, toggles exact raw
     assert.doesNotMatch(body(), /service__read/, 'Service-only entries never invent tools');
     panel.handleInput('j'); render(); panel.handleInput('x'); render();
     panel.handleInput('j'); render(); panel.handleInput('x');
-    assert.match(body(), /schema not injected/);
+    const summary = catalog.find((entry) => entry.name === 'summary')!;
+    const summaryTokens = Math.ceil(JSON.stringify(summary.tools![0], null, 2).length / 4).toLocaleString('en-US');
+    assert.ok(body().includes(`summary__read · ≈${summaryTokens} tokens · schema not injected`));
     assert.doesNotMatch(body(), /schema tail/, 'Summary tools never reveal an omitted schema');
     panel.handleInput('\t');
     terminal.rows = 10_000; terminal.columns = 30_000;
     assert.equal(render().slice(3, -4).map((line) => line.trimEnd()).join('\n'), agentContextRaw(catalog));
     panel.handleInput('\t');
     assert.match(body(), /Service-only entry/);
+    const tree = body();
+    for (const service of services) {
+      const entry = catalog.find((entry) => entry.name === service.name);
+      const tokens = agentContextTokens(agentContextRaw(entry ? [entry] : [])).toLocaleString('en-US');
+      assert.ok(tree.split('\n').some((line) => line.includes(`${service.name} · `) && line.includes(` · ≈${tokens} tokens`)));
+    }
+    const order = ['full', 'service', 'summary', 'z-off', 'z-stopped', 'aaa', 'zzz'];
+    assert.deepEqual([...tree.matchAll(/[▸▾·] ([\w-]+) · (?:Full schemas|Off|Service name|Tool names)/g)].map((match) => match[1]), order);
+    assert.match(tree, /aaa · Full schemas · ≈0 tokens · disabled \(locked\)/);
+    assert.match(tree, /z-(?:off|stopped) · (?:Off|Full schemas) · ≈0 tokens/);
+    assert.doesNotMatch(tree, /aaa__read|zzz__read|z-off__read|z-stopped__read/);
     for (const mode of ['regular', 'fullscreen']) for (const width of [20, 28, 38, 80]) for (const height of [9, 18, 30]) {
       tui.mode = mode; terminal.columns = width; terminal.rows = height;
       const lines = render();
