@@ -76,8 +76,8 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     const inventory = JSON.parse((await tools.get('gateway_tools').execute('', {})).content[0].text);
     inventory.push({ name: 'demo__long', description: 'x'.repeat(21_000) + '\u202etail', inputSchema: { type: 'object' } });
     t.mock.method(Client.prototype, 'listTools', async () => ({ tools: inventory }));
-    for (const [mode, label] of [['summary', 'Names & descriptions'], ['full', 'Full schemas']] as const) {
-      await menu(`Injection: ${mode === 'summary' ? 'Off' : 'Names & descriptions'}`, label, 'Preview injected context');
+    for (const mode of ['summary', 'full'] as const) {
+      await menu(`Injection: ${mode === 'summary' ? 'Off' : 'Names & descriptions'}`, 'Preview injected context');
       assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), { ...original, agentContext: mode }, 'Preserve raw env and unrelated configuration');
       await before();
       assert.equal(sections.gateway_tools, agentContextText(mode, inventory));
@@ -104,7 +104,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     await handlers.get('session_start')!({ reason: 'resume' }, ctx);
     await before();
     assert.match(sections.gateway_tools, /inputSchema/);
-    await menu('Injection: Full schemas', 'Off');
+    await menu('Injection: Full schemas');
     await before();
     assert.deepEqual({ ...sections }, { other: 'preserved' });
     assert.equal(agentContextTokens(''), 0);
