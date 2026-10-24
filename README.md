@@ -120,6 +120,12 @@ Pi reads `~/.pi/agent/mcp.json` and trusted projects' `.pi/mcp.json`. Diagnose w
 `example__read_file`. Menus/panels stay outside model context; explicit tool results still reach the
 model.
 
+`gateway_call` transcripts show compact service/tool, arguments and result previews. Use Pi’s
+native tool expansion (the displayed configurable shortcut or click) for full arguments and
+results, including original pretty JSON/metadata for recognized delegate jobs. Delegate answers
+render as Markdown without summarization; a job status of `done` is unverified, not proof of task
+completion. Other text stays literal. Formatting does not change model-facing data or image handling.
+
 | Command/action | Purpose |
 |---|---|
 | `/gateway` | Operator menu; package/recovery actions also work disconnected |

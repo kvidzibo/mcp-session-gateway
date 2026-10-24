@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { CallToolResultSchema, type ElicitRequestParams, type ElicitResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { gatewayCommands, gatewayTools } from './definitions.js';
+import { gatewayCallRenderers } from './tool-renderers.js';
 import type { ExtensionAPI, ExtensionContext, ExtensionHandler, SessionStartEvent, SessionShutdownEvent } from '@earendil-works/pi-coding-agent';
 import { Loader, Text, truncateToWidth, getOsc8LinkAtColumn, type TuiMouseEvent } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
@@ -681,6 +682,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   });
   pi.registerTool({
     ...gatewayTools.call,
+    ...gatewayCallRenderers,
     async execute(_id, params, signal) {
       const result = await invokeTool(params.name, params.arguments, signal);
       const content = result.content.map((item) => item.type === 'text' || item.type === 'image' ? item : { type: 'text' as const, text: JSON.stringify(item) });
