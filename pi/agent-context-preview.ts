@@ -3,14 +3,16 @@ import { Key, matchesKey, ScrollView, Text, truncateToWidth, wrapTextWithAnsi, t
 import type { ServiceConfig } from '../src/config.js';
 import { cleanUnbounded } from '../src/native-ui.js';
 import { agentContextLabels, agentContextRaw, agentContextTokens, type AgentContextCatalog } from './agent-context.js';
+import { serviceContextRaw, serviceContextTokens, type ServiceContextEntry } from './service-context.js';
 import { inlineHeight } from './menu.js';
 
 export interface ContextSnapshot {
   services: ServiceConfig[];
   catalog: AgentContextCatalog;
+  additional?: ServiceContextEntry[];
 }
 
-/** Private, temporary native inline screen. No model messages or session entries. */
+/** Private, temporary native inline screen. No model messages or persisted task snapshots. */
 export async function previewAgentContext(ctx: ExtensionContext, source: (signal: AbortSignal) => Promise<ContextSnapshot>,
   signal: AbortSignal, connection?: AbortSignal): Promise<void> {
   if (signal.aborted) return;
@@ -62,7 +64,10 @@ export async function previewAgentContext(ctx: ExtensionContext, source: (signal
           const marker = expandable ? expanded.has(id) ? '▾' : '▸' : '·';
           lines.push(...wrapTextWithAnsi(theme.fg(disabled ? 'dim' : selected === id ? 'accent' : 'muted', `${selected === id ? '›' : ' '} ${' '.repeat(indent)}${marker} ${cleanUnbounded(label)}`), width));
         };
-        const injected = snapshot ? agentContextRaw(snapshot.catalog) : '';
+        const toolText = snapshot ? agentContextRaw(snapshot.catalog) : '';
+        const extraText = serviceContextRaw(snapshot?.additional ?? []);
+        const injected = extraText ? [toolText ? `<gateway_tools>\n${toolText}\n</gateway_tools>` : '',
+          `<gateway_service_context>\n${extraText}\n</gateway_service_context>`].filter(Boolean).join('\n\n') : toolText;
         if (status) add(status);
         else if (raw) add(injected || 'No gateway catalog will be added: injection is off or selected services have no available model-visible tools.');
         else if (snapshot) {
@@ -72,7 +77,7 @@ export async function previewAgentContext(ctx: ExtensionContext, source: (signal
             const id = `service:${service.name}`;
             if (!selected) selected = id;
             const tokens = agentContextTokens(agentContextRaw(entry ? [entry] : []));
-            row(id, `${service.name} · ${agentContextLabels[service.agentContext ?? 'off']} · ≈${tokens.toLocaleString('en-US')} tokens${service.enabled === false ? ' · disabled (locked)' : ''}`, !!entry?.tools?.length, 0, service.enabled === false);
+            row(id, `${service.name} · Tools · ${agentContextLabels[service.agentContext ?? 'off']} · ≈${tokens.toLocaleString('en-US')} tokens${service.enabled === false ? ' · disabled (locked)' : ''}`, !!entry?.tools?.length, 0, service.enabled === false);
             if (entry?.description) add(entry.description, 4);
             else if (service.description) add(service.description, 4);
             if (!entry) add(service.enabled === false ? 'Saved preference retained; enable the service to change it.' : 'Not injected: off or no available model-visible tools.', 4);
@@ -87,9 +92,16 @@ export async function previewAgentContext(ctx: ExtensionContext, source: (signal
                 add(JSON.stringify(tool.inputSchema, null, 2), 6);
               }
             }
+            const extra = snapshot.additional?.find((entry) => entry.service === service.name);
+            if (extra) {
+              const exact = serviceContextRaw([extra]);
+              const extraId = `additional:${service.name}`;
+              row(extraId, `Additional context · gateway_service_context · ≈${serviceContextTokens(exact).toLocaleString('en-US')} tokens`, true, 2);
+              if (expanded.has(extraId)) add(extra.text ?? 'Context unavailable. This does not mean no task is selected.', 6);
+            } else add('Additional context · not injected (off, disabled or unsupported).', 4);
             add('');
           }
-          if (!snapshot.catalog.length) add('No gateway catalog will be added: injection is off or selected services have no available model-visible tools.');
+          if (!snapshot.catalog.length && !snapshot.additional?.length) add('No gateway catalog will be added: injection is off or selected services have no available model-visible tools.');
         }
         rows.push({ id: '__back', row: lines.length, expandable: false });
         if (!raw && !status && !rows.some((row) => row.id === selected)) selected = rows[0].id;
@@ -108,7 +120,7 @@ export async function previewAgentContext(ctx: ExtensionContext, source: (signal
           ? [`${up}/${down} ${raw ? 'scroll' : 'select'} · ${confirm} ${action}`, `Tab ${raw ? 'tree' : 'raw'} · Pg · r · ${cancel.split('/')[0]}`]
           : [`Tab ${raw ? 'tree' : 'raw'} · ${up}/${down} ${raw ? 'scroll' : 'select'} · ${confirm} ${action} · ${keyText('tui.select.pageUp')}/${keyText('tui.select.pageDown')} scroll · r refresh · ${cancel} back`];
         return [...border.render(width), truncateToWidth(theme.fg('accent', `Gateway › Agent context › Preview · ${raw ? 'Raw' : 'Tree'}`), width),
-          truncateToWidth(theme.fg('muted', `≈${agentContextTokens(injected).toLocaleString('en-US')} tokens · rough estimate · display only`), width),
+          truncateToWidth(theme.fg('muted', `≈${(agentContextTokens(toolText) + serviceContextTokens(extraText)).toLocaleString('en-US')} tokens · rough estimate · display only`), width),
           ...body, '', theme.fg(raw || selected === '__back' ? 'accent' : 'muted', `${raw || selected === '__back' ? '›' : ' '} Back`),
           ...hints.map((hint) => truncateToWidth(theme.fg('muted', hint), width)), ...border.render(width)];
       },

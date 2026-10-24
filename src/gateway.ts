@@ -128,17 +128,25 @@ export class Gateway {
       await this.ready;
       const resources = [];
       for (const service of this.services.filter((item) => item.connected && item.client.getServerCapabilities()?.resources)) {
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        let pages = 0;
-        do {
-          if (++pages > 1000) throw new Error(`Too many resource pages from ${service.config.name}`);
-          const page = await this.withService(service, extra.signal, () => service.client.listResources(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs, signal: extra.signal }));
-          for (const resource of page.resources) resources.push({ ...resource, uri: this.resourceUri(service.config.name, resource.uri) });
-          cursor = page.nextCursor;
-          if (cursor !== undefined && (!cursor || seen.has(cursor))) throw new Error(`Invalid resource cursor from ${service.config.name}`);
-          if (cursor) seen.add(cursor);
-        } while (cursor !== undefined);
+        try {
+          const serviceResources = [];
+          let cursor: string | undefined;
+          const seen = new Set<string>();
+          let pages = 0;
+          do {
+            if (++pages > 1000) throw new Error(`Too many resource pages from ${service.config.name}`);
+            const page = await this.withService(service, extra.signal, () => service.client.listResources(cursor ? { cursor } : undefined, { timeout: this.config.timeoutMs, signal: extra.signal }));
+            for (const resource of page.resources) serviceResources.push({ ...resource, uri: this.resourceUri(service.config.name, resource.uri) });
+            cursor = page.nextCursor;
+            if (cursor !== undefined && (!cursor || seen.has(cursor))) throw new Error(`Invalid resource cursor from ${service.config.name}`);
+            if (cursor) seen.add(cursor);
+          } while (cursor !== undefined);
+          resources.push(...serviceResources);
+        } catch (error) {
+          extra.signal.throwIfAborted();
+          if (request.params?._meta?.['gateway/service-context-discovery'] !== true) throw error;
+          this.log(`Server ${service.config.name}: resource discovery unavailable`);
+        }
       }
       return { resources };
     }));

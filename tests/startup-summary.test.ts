@@ -103,8 +103,8 @@ test('startup snapshot reports observed connections including zero-tool and stop
     }
     const text = renderer.render(100).join('\n');
     assert.match(text, /Startup snapshot · 2\/4 connected · 1 service tool/);
-    assert.match(text, new RegExp(`demo\\s+connected · 1 tool · ≈${expectedTokens} tokens`));
-    assert.match(text, /zero\s+connected · 0 tools · ≈0 tokens/);
+    assert.match(text, new RegExp(`demo\\s+connected · 1 tool · ≈${expectedTokens} tool-only tokens`));
+    assert.match(text, /zero\s+connected · 0 tools · ≈0 tool-only tokens/);
     assert.match(text, /pending\s+disabled\s*│/);
     assert.match(text, /disabled\s+disabled\s*│/);
     assert.doesNotMatch(text, /stopped|package not activated/);
@@ -114,7 +114,7 @@ test('startup snapshot reports observed connections including zero-tool and stop
     assert.match(legacy, /legacy\s+connected · 2 tools/);
     assert.doesNotMatch(legacy, /tokens/);
     assert.match(startupSummary({ services: [{ name: 'large', state: 'connected', tools: 3 }],
-      contextTokens: { large: 1234 } }, theme).render(100).join('\n'), /3 tools · ≈1\.2k tokens/);
+      contextTokens: { large: 1234 } }, theme).render(100).join('\n'), /3 tools · ≈1\.2k tool-only tokens/);
     const longNames = startupSummary({ services: [{ name: 'wide', state: 'connected', tools: 2,
       toolNames: ['界'.repeat(50), 'unsafe\x1b[31m\nname'] }] }, theme);
     for (const width of [1, 8, 28, 48, 100]) {
@@ -159,7 +159,7 @@ test('startup snapshot reports observed connections including zero-tool and stop
       assert.equal(entries[0].data.contextTokens.demo, tokens, `${mode}: estimates the actual injected context`);
       assert.equal(tokens === 0, mode === 'off');
       assert.match(renderers.get('gateway-startup')!(entries[0], {}, theme).render(100).join('\n'),
-        new RegExp(`1 tool · ≈${tokens} tokens`));
+        new RegExp(`1 tool · ≈${tokens} tool-only tokens`));
     }
     await stop(); entries = [];
     await rm(config);

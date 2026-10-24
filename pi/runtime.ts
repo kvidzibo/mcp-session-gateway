@@ -11,7 +11,7 @@ import { Loader, Text, truncateToWidth, getOsc8LinkAtColumn, type TuiMouseEvent 
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
-import { saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
+import { saveAdditionalContext, saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
 import { CallEventSchema } from '../src/call-events.js';
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
 import { CallHistory, type CallStatus } from './call-history.js';
@@ -35,6 +35,7 @@ import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
+import { ServiceContext, serviceContextRaw } from './service-context.js';
 import { previewAgentContext } from './agent-context-preview.js';
 import { agentContextCatalog, agentContextRaw, agentContextLabels, agentContextText, agentContextTokens, nextAgentContextMode } from './agent-context.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -223,6 +224,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
 
   function closeConnection(): Promise<void> {
     if (!connectionClosing) {
+      additional.resources.clear();
       const stoppingNative = native.stop();
       connectionClosing = (async () => {
         try { await client?.close(); }
@@ -454,25 +456,49 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  async function contextSnapshot(signal?: AbortSignal) {
+  const additional = new ServiceContext(connection, (service) => native.contextMeta(service), (service, run) => native.readContext(service, run));
+  async function contextSnapshot(signal: AbortSignal = lifetime.signal, ctx = footerContext) {
     const path = pi.getFlag('gateway-config');
-    if (typeof path !== 'string' || !path) return { services: [], catalog: [] };
+    if (typeof path !== 'string' || !path) return { services: [], catalog: [], additional: [] };
+    const current = native.current();
+    const operation = AbortSignal.any([signal, lifetime.signal]);
     const { services } = await loadConfig(path, { expandEnvironment: false });
-    const inventory = services.every((service) => service.enabled === false || service.agentContext === 'off') ? [] : await tools(signal);
-    signal?.throwIfAborted();
-    return { services, catalog: agentContextCatalog(services, inventory) };
-  }
-  async function contextText(signal?: AbortSignal): Promise<string> {
-    return agentContextRaw((await contextSnapshot(signal)).catalog);
+    let inventory: Tool[] = [];
+    try {
+      if (services.some((service) => service.enabled !== false && service.agentContext !== 'off')) inventory = await tools(operation);
+    } catch { /* Additional context is independent of model-visible tool discovery. */ }
+    operation.throwIfAborted();
+    if (!current()) throw new Error('Gateway context changed');
+    try { await additional.discover(operation, timeout); }
+    catch { /* Known roots may still be readable; each enabled read reports its own failure. */ }
+    operation.throwIfAborted();
+    if (!current()) throw new Error('Gateway context changed');
+    const entries = await additional.read(services, operation, timeout, (service) => {
+      if (current() && !operation.aborted) ctx?.ui.notify(`Gateway service context unavailable: ${service}`, 'warning');
+    });
+    operation.throwIfAborted();
+    if (!current()) throw new Error('Gateway context changed');
+    // Recheck preferences after I/O: disabling must suppress even an in-flight result.
+    const latest = (await loadConfig(path, { expandEnvironment: false })).services;
+    operation.throwIfAborted();
+    if (!current()) throw new Error('Gateway context changed');
+    return { services: latest, catalog: agentContextCatalog(latest, inventory),
+      additional: entries.filter((entry) => latest.some((s) => s.name === entry.service && s.enabled !== false && s.additionalContext === true)) };
   }
   pi.on('before_agent_start', async (event, ctx) => {
-    // Replace our section each run, including resume/fork and preference/inventory changes.
     delete event.systemPromptOptions.sections.gateway_tools;
+    delete event.systemPromptOptions.sections.gateway_service_context;
+    const current = native.current();
+    const runSignal = lifetime.signal;
     try {
-      const text = await contextText(ctx.signal);
+      const snapshot = await contextSnapshot(ctx.signal, ctx);
+      if (!current() || runSignal.aborted || ctx.signal?.aborted) return;
+      const text = agentContextRaw(snapshot.catalog);
+      const extra = serviceContextRaw(snapshot.additional);
       if (text) event.systemPromptOptions.sections.gateway_tools = text;
+      if (extra) event.systemPromptOptions.sections.gateway_service_context = extra;
     } catch (error) {
-      ctx.ui.notify(clean(`Gateway agent context unavailable: ${String(error)}`), 'warning');
+      if (!ctx.signal?.aborted) ctx.ui.notify(clean(`Gateway agent context unavailable: ${String(error)}`), 'warning');
     }
   });
   const gatewayCommand = (initialAction?: 'services' | { service: string; status?: CallStatus }) => ({
@@ -542,20 +568,33 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                 let cost = 'Token estimate unavailable';
                 try {
                   inventory = services.every((service) => service.enabled === false || service.agentContext === 'off') ? [] : await tools(signal);
-                  cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tokens total (rough estimate)`;
+                  cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tool-only tokens (rough estimate)`;
                 } catch { /* Keep preferences/recovery accessible while disconnected. */ }
-                const selected = await menu.choose(['Gateway', 'Agent context'], `${cost} · next agent run`, [
-                  ...services.map((service) => ({
+                try { await additional.discover(signal, timeout); } catch { /* Keep saved support on transient discovery failure. */ }
+                const selected = await menu.settings(['Gateway', 'Agent context'], `${cost} · next agent run`, [
+                  ...services.flatMap((service) => [{
                     id: `service:${service.name}`,
-                    label: `${service.name}: ${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${agentContextLabels[service.agentContext ?? 'off']}`,
+                    label: `${service.name} · Tools:`,
+                    currentValue: `${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${agentContextLabels[service.agentContext ?? 'off']}`,
+                    values: ['full', 'summary', 'service', 'off'].map((mode) => agentContextLabels[mode as keyof typeof agentContextLabels]),
                     disabled: service.enabled === false,
                     description: service.enabled === false ? 'Disabled (locked) · 0 tokens. Saved preference retained; enable the service to change it.' : `${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens (with shared header). ` : ''}Enter cycles this service's mode; tools stay callable.`,
-                  })),
-                  { id: 'preview', label: 'Preview injected context', description: 'View the exact current catalog privately. Does not send it to the agent or change the injection setting.' },
+                  }, ...(additional.resources.has(service.name) ? [{
+                    id: `additional:${service.name}`,
+                    label: `${service.name} · Additional context:`,
+                    currentValue: `${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${service.additionalContext ? 'On' : 'Off'}`,
+                    values: ['Off', 'On'],
+                    disabled: service.enabled === false,
+                    description: `${additional.resources.get(service.name)?.description ?? 'Service-supplied reference context.'} Independent of Tools. Enter toggles; applies before the next agent run.`,
+                  }] : [])]),
+                  { id: 'preview', label: 'Preview injected context', description: 'View both exact current context sections privately. Reads additional context fresh; does not start an agent run.' },
                 ]);
                 if (!selected) break;
                 if (selected === 'preview') {
-                  await previewAgentContext(ctx, contextSnapshot, signal, connected ? lifetime.signal : undefined);
+                  await previewAgentContext(ctx, (operation) => contextSnapshot(operation, ctx), signal, connected ? lifetime.signal : undefined);
+                } else if (selected.startsWith('additional:')) {
+                  const service = services.find((s) => s.name === selected.slice('additional:'.length))!;
+                  if (service.enabled !== false) await saveAdditionalContext(configPath, service.name, service.additionalContext === true, signal);
                 } else if (selected.startsWith('service:')) {
                   const service = services.find((service) => service.name === selected.slice('service:'.length))!;
                   if (service.enabled === false) continue;

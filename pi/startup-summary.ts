@@ -28,7 +28,7 @@ export function startupSummary(data: StartupSummary, theme: Theme) {
         const icon = service.state === 'connected' ? '✓' : service.state === 'stopped' ? '○' : '!';
         const name = truncateToWidth(service.name, nameWidth, '…', true);
         const tokens = data.contextTokens?.[service.name];
-        const estimate = typeof tokens !== 'number' ? '' : ` · ≈${tokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase()} tokens`;
+        const estimate = typeof tokens !== 'number' ? '' : ` · ≈${tokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase()} tool-only tokens`;
         const detail = service.state === 'connected'
           ? `${service.tools} ${service.tools === 1 ? 'tool' : 'tools'}${estimate}`
           : 'connection closed';

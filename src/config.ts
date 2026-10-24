@@ -11,10 +11,17 @@ export function parseAgentContext(value: unknown): AgentContextMode {
   return value;
 }
 
+export function parseAdditionalContext(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw new Error('additionalContext must be a boolean');
+  return value;
+}
+
 export interface ServiceConfig {
   name: string;
   description?: string;
   agentContext?: AgentContextMode;
+  additionalContext?: boolean;
   enabled?: boolean;
   command: string;
   args: string[];
@@ -117,6 +124,7 @@ export async function loadConfig(path: string, options: { expandEnvironment?: bo
     return {
       name,
       agentContext: contextMode,
+      additionalContext: parseAdditionalContext(value.additionalContext),
       ...(value.description !== undefined ? { description: (value.description as string).trim() } : {}),
       ...(value.enabled !== undefined ? { enabled: value.enabled } : {}),
       ...(value.package ? { package: value.package as string } : {}),
