@@ -190,6 +190,9 @@ export class NativeUI {
       const result = await run(this.contextMeta(service));
       if (!current()) throw new Error('Gateway context changed during context read');
       return result;
+    }).finally(async () => {
+      const uri = this.resources.get(service);
+      if (current() && uri && this.dirty.has(uri)) await this.refresh(uri);
     });
   }
 

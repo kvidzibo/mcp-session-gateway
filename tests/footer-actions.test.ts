@@ -94,6 +94,21 @@ test('generic footer actions, tool state and /new retention stay scoped, seriali
     await host.callTool('alpha', async () => ({ isError: true, content: [], _meta: { 'native-ui/state': { count: 99 } } }));
     assert.equal(state('alpha').count, 10);
     await assert.rejects(host.callTool('alpha', async () => ({ content: [], _meta: { 'native-ui/state': { text: 'x'.repeat(9000) } } })));
+    let uiReads = 0;
+    const readResource = client.readResource;
+    client.readResource = (args: any) => { uiReads++; return readResource(args); };
+    for (const fail of [false, true]) {
+      const before = uiReads;
+      const reading = host.readContext('alpha', async () => {
+        await host.refresh(uri('alpha')); // A notification during the context read is deferred.
+        assert.equal(uiReads, before);
+        if (fail) throw new Error('Context read failed');
+        return 'task context';
+      });
+      if (fail) await assert.rejects(reading, /Context read failed/);
+      else assert.equal(await reading, 'task context');
+      assert.equal(uiReads, before + 1, 'Deferred native updates drain after successful and failed reads');
+    }
     const contextId = (host.meta('alpha')['native-ui/context'] as any).contextId;
     host.transfer('/tmp/footer-session-next');
     await host.stop();
