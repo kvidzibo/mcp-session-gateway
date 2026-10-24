@@ -487,7 +487,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                   await showText(ctx, 'Gateway › Agent context › Preview', async (operation) => {
                     const text = await contextText(operation);
                     return `≈${agentContextTokens(text).toLocaleString('en-US')} tokens · rough estimate (characters ÷ 4; actual tokenizer varies)\n\n${text || 'Injection is off; no gateway catalog will be added.'}`;
-                  }, signal, connected ? lifetime.signal : undefined, Infinity);
+                  }, signal, connected ? lifetime.signal : undefined, true);
                 } else {
                   const next = await menu.choose(['Gateway', 'Agent context', 'Injection'], `Current: ${agentContextLabels[mode]}`, [
                     { id: 'off', label: agentContextLabels.off, description: 'Do not inject a catalog. gateway_tools discovery remains available.' },
