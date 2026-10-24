@@ -1,9 +1,14 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
-import type { GatewayStatus } from '../src/status.js';
+import { z } from 'zod/v4';
+import { GatewayStatusSchema } from '../src/status.js';
 import { clean } from '../src/native-ui.js';
 
-export type StartupSummary = GatewayStatus & { unavailable?: true };
+export const StartupSummarySchema = GatewayStatusSchema.extend({
+  contextTokens: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  unavailable: z.literal(true).optional(),
+});
+export type StartupSummary = z.infer<typeof StartupSummarySchema>;
 
 /** Display-only startup snapshot. Rebuild colors on every render. */
 export function startupSummary(data: StartupSummary, theme: Theme) {
@@ -22,8 +27,10 @@ export function startupSummary(data: StartupSummary, theme: Theme) {
         const color = service.state === 'connected' ? 'success' : service.state === 'stopped' ? 'muted' : 'warning';
         const icon = service.state === 'connected' ? '✓' : service.state === 'stopped' ? '○' : '!';
         const name = truncateToWidth(service.name, nameWidth, '…', true);
+        const tokens = data.contextTokens?.[service.name];
+        const estimate = typeof tokens !== 'number' ? '' : ` · ≈${tokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase()} tokens`;
         const detail = service.state === 'connected'
-          ? `${service.tools} ${service.tools === 1 ? 'tool' : 'tools'}`
+          ? `${service.tools} ${service.tools === 1 ? 'tool' : 'tools'}${estimate}`
           : 'connection closed';
         const state = service.state === 'stopped' ? 'disabled' : service.state;
         const row = theme.fg(color, `${icon} ${name}  ${state}`)

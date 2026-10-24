@@ -189,8 +189,12 @@ apps, and panels above the editor; clears on success/failure/shutdown. Nonintera
 not animate. [Package progress/concurrency](packages.md#automatic-startup-updates).
 
 New TUI sessions print display-only **Startup snapshot** cards: observed connection state, exposed
-tool count, and names wrapping beneath each service. Call via `service__tool` through
-`gateway_call`. Disabled and unactivated managed services show `disabled`.
+tool count, approximate context tokens (`3 tools · ≈1.2k tokens`), and names wrapping beneath each
+service. Estimates reflect the configured Agent context mode, using characters ÷ 4 including the
+shared header/section wrapper; Off and services without model-visible tools cost zero. Per-service
+estimates include shared overhead and should not be added together. They exclude future tool calls
+and results; actual tokenizer counts vary. Older cards without estimates still render normally.
+Call via `service__tool` through `gateway_call`. Disabled and unactivated managed services show `disabled`.
 
 `experimental["gateway-status-v1"] = {}` advertises private read-only `gateway/status`: waits for
 successful startup, rejects while closing, returns:

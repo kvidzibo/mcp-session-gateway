@@ -20,7 +20,7 @@ import { updateManagedPackages } from '../src/package-manager.js';
 import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
-import { startupSummary, type StartupSummary } from './startup-summary.js';
+import { startupSummary, StartupSummarySchema, type StartupSummary } from './startup-summary.js';
 import { nativePreview } from './preview.js';
 import { ensureGatewayBuild } from './build.js';
 import { awaitTransportExit } from './transport.js';
@@ -208,8 +208,8 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     return new Text(theme.fg('success', clean(entry.data.text)), 0, 0);
   });
   pi.registerEntryRenderer<StartupSummary>('gateway-startup', (entry, _options, theme) => {
-    const parsed = GatewayStatusSchema.safeParse(entry.data);
-    if (parsed.success) return startupSummary({ ...parsed.data, ...(entry.data?.unavailable ? { unavailable: true } : {}) }, theme);
+    const parsed = StartupSummarySchema.safeParse(entry.data);
+    if (parsed.success) return startupSummary(parsed.data, theme);
   });
   let liveJobs: LiveJobs | undefined;
 
@@ -403,7 +403,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     launchedServices = Array.isArray(inventory?.names) && inventory.names.every((name) => typeof name === 'string' && /^[a-z][a-z0-9-]*$/.test(name)) ? inventory.names : undefined;
     connected = true;
     startupProgress(ctx, 'discovering tools');
-    await tools(lifetime.signal); // Wait for child startup before declaring success.
+    const discoveredTools = await tools(lifetime.signal); // Wait for child startup before declaring success.
     servicesReady = true;
     if (ctx.mode === 'tui' && ctx.hasUI && current.getServerCapabilities()?.experimental?.['gateway-status-v1']) {
       try {
@@ -413,6 +413,10 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
           if (service.state === 'disconnected') disconnectedServices.add(service.name);
         }
         footerCount = configuredServices.filter((name) => !disabledServices.has(name)).length;
+        const { services } = await loadConfig(configPath, { expandEnvironment: false });
+        startupStatus.contextTokens = Object.fromEntries(services.map((service) => [
+          service.name, agentContextTokens(agentContextText([service], discoveredTools)),
+        ]));
       } catch { /* Status is display-only; keep working connections on read failure. */ }
     }
     startupProgress(ctx, 'loading service apps');
