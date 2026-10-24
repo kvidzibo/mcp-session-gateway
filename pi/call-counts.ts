@@ -54,16 +54,15 @@ export class CallCounts {
 }
 
 /** Render each service as one horizontal cell; wrap whole cells before truncating. */
-export function callCountLines(width: number, theme: Pick<Theme, 'fg'>, header: string, names: readonly string[], counts: ReadonlyMap<string, Counts>, disconnected: ReadonlySet<string>, serviceLinks: ReadonlyMap<string, string> = new Map()): string[] {
+export function callCountLines(width: number, theme: Pick<Theme, 'fg'>, header: string, names: readonly string[], counts: ReadonlyMap<string, Counts>, disconnected: ReadonlySet<string>, serviceLinks: ReadonlyMap<string, string> = new Map(), countLinks: ReadonlyMap<string, string> = new Map()): string[] {
   if (width < 1) return [];
   const lines = wrapTextWithAnsi(header, width);
   let row = '';
   for (const name of [...new Set([...names, ...counts.keys()])]) {
     const c = counts.get(name) ?? empty();
     const historic = !names.includes(name) ? ' (previous)' : '';
-    const content = `${theme.fg('muted', name + historic)} ${theme.fg(c.success ? 'success' : 'muted', `✓${c.success}`)} ${theme.fg(c.failure ? 'error' : 'muted', `✗${c.failure}`)}${c.pending ? ` ${theme.fg('warning', `…${c.pending}`)}` : ''}${disconnected.has(name) ? theme.fg('warning', ' !') : ''}`;
-    const url = serviceLinks.get(name);
-    const cell = url ? `\x1b]8;;${url}\x07${content}\x1b]8;;\x07` : content;
+    const link = (text: string, url?: string) => url ? `\x1b]8;;${url}\x07${text}\x1b]8;;\x07` : text;
+    const cell = `${link(theme.fg('muted', name + historic + ' '), serviceLinks.get(name))}${link(theme.fg(c.success ? 'success' : 'muted', `✓${c.success}`), countLinks.get(`${name}:success`))} ${link(theme.fg(c.failure ? 'error' : 'muted', `✗${c.failure}`), countLinks.get(`${name}:failure`))}${c.pending ? ` ${link(theme.fg('warning', `…${c.pending}`), countLinks.get(`${name}:pending`))}` : ''}${disconnected.has(name) ? theme.fg('warning', ' !') : ''}`;
     const separator = theme.fg('muted', '  │  ');
     if (row && visibleWidth(row + separator + cell) > width) { lines.push(row); row = ''; }
     if (visibleWidth(cell) > width) {
