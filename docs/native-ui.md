@@ -141,8 +141,10 @@ Host refreshes/reports **Action not applied**, without possible-commit warning; 
 failures are also definite. Never mark after writes/receipt consumption. Ordinary errors/timeouts/
 disconnects retain possible-commit warnings; error text proves nothing.
 
-`preview` appends display-only transcript text, even during agent runs. `draft` requests separately
-confirmed editor insertion: never overwrite/submit existing drafts. **Exclude secrets:** submitted
+`preview` appends a display-only inline card, even during agent runs: first line as the title,
+Markdown body, and a trailing JSON object/array shown as an always-expanded syntax-highlighted
+code block. Content wraps to the terminal width; only HTTP(S) Markdown links become clickable.
+Previews never enter model context. `draft` requests separately confirmed editor insertion: never overwrite/submit existing drafts. **Exclude secrets:** submitted
 drafts enter model context. Shell commands, executable UI, session reset/reload effects are
 unsupported.
 
