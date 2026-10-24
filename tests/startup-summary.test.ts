@@ -9,7 +9,8 @@ import registerGateway from '../pi/runtime.js';
 // Service/UI tests must never fetch or install into the checkout hosting this test.
 const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
 import { GatewayStatusSchema } from '../src/status.js';
-import { startupSummary } from '../pi/startup-summary.js';
+import { startupSummary, StartupSummarySchema } from '../pi/startup-summary.js';
+import { agentContextTokens } from '../pi/agent-context.js';
 
 test('startup snapshot reports observed connections including zero-tool and stopped services, stays display-only and avoids duplicate cards', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'gateway-startup-'));
@@ -66,7 +67,7 @@ test('startup snapshot reports observed connections including zero-tool and stop
         validate: [{ command: process.execPath, args: ['--version'] }],
       } } },
       mcpServers: {
-        demo: { command: process.execPath, args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname] },
+        demo: { agentContext: 'full', command: process.execPath, args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname] },
         zero: { command: process.execPath, args: ['--input-type=module', '-e', zero], cwd: new URL('../', import.meta.url).pathname },
         pending: { package: 'pending', command: process.execPath, args: ['{{packageRoot}}/server.mjs'] },
         disabled: { enabled: false, command: '/not-launched' },
@@ -88,6 +89,13 @@ test('startup snapshot reports observed connections including zero-tool and stop
       { name: 'pending', state: 'stopped', tools: 0, toolNames: [] },
       { name: 'disabled', state: 'stopped', tools: 0, toolNames: [] },
     ]);
+    const contextEvent: any = { systemPromptOptions: { sections: {} } };
+    await handlers.get('before_agent_start')!(contextEvent, ctx);
+    const expectedTokens = agentContextTokens(contextEvent.systemPromptOptions.sections.gateway_tools);
+    assert.ok(expectedTokens > 0);
+    assert.deepEqual(StartupSummarySchema.parse(entry.data).contextTokens, {
+      demo: expectedTokens, zero: 0, pending: 0, disabled: 0,
+    });
     const renderer = renderers.get('gateway-startup')!(entry, {}, theme);
     for (const width of [8, 28, 48, 100]) {
       const lines: string[] = renderer.render(width);
@@ -95,13 +103,18 @@ test('startup snapshot reports observed connections including zero-tool and stop
     }
     const text = renderer.render(100).join('\n');
     assert.match(text, /Startup snapshot · 2\/4 connected · 1 service tool/);
-    assert.match(text, /zero\s+connected · 0 tools/);
+    assert.match(text, new RegExp(`demo\\s+connected · 1 tool · ≈${expectedTokens} tokens`));
+    assert.match(text, /zero\s+connected · 0 tools · ≈0 tokens/);
     assert.match(text, /pending\s+disabled\s*│/);
     assert.match(text, /disabled\s+disabled\s*│/);
     assert.doesNotMatch(text, /stopped|package not activated/);
     assert.match(text, /increment/);
     assert.doesNotMatch(text, /app_only|gateway__identity/);
-    assert.match(startupSummary({ services: [{ name: 'legacy', state: 'connected', tools: 2 }] }, theme).render(100).join('\n'), /legacy\s+connected · 2 tools/);
+    const legacy = renderers.get('gateway-startup')!({ data: { services: [{ name: 'legacy', state: 'connected', tools: 2 }] } }, {}, theme).render(100).join('\n');
+    assert.match(legacy, /legacy\s+connected · 2 tools/);
+    assert.doesNotMatch(legacy, /tokens/);
+    assert.match(startupSummary({ services: [{ name: 'large', state: 'connected', tools: 3 }],
+      contextTokens: { large: 1234 } }, theme).render(100).join('\n'), /3 tools · ≈1\.2k tokens/);
     const longNames = startupSummary({ services: [{ name: 'wide', state: 'connected', tools: 2,
       toolNames: ['界'.repeat(50), 'unsafe\x1b[31m\nname'] }] }, theme);
     for (const width of [1, 8, 28, 48, 100]) {
@@ -133,13 +146,25 @@ test('startup snapshot reports observed connections including zero-tool and stop
         assert.equal(entries[1].data.counts.pending.success, 1, 'Hiding a service must not erase saved usage');
       } else assert.equal(footer(), ' MCP 2 services', `Hidden services stay excluded on ${reason}`);
     }
-    await stop(); entries = [];
-    await start('new');
-    assert.equal(snapshots, 2, '/new gets its own snapshot');
+    for (const [index, mode] of ['off', 'service', 'summary', 'full'].entries()) {
+      await stop(); entries = [];
+      const saved = JSON.parse(await readFile(config, 'utf8'));
+      saved.mcpServers.demo.agentContext = mode;
+      await writeFile(config, JSON.stringify(saved));
+      await start('new');
+      assert.equal(snapshots, index + 2, '/new gets its own snapshot');
+      const event: any = { systemPromptOptions: { sections: {} } };
+      await handlers.get('before_agent_start')!(event, ctx);
+      const tokens = agentContextTokens(event.systemPromptOptions.sections.gateway_tools ?? '');
+      assert.equal(entries[0].data.contextTokens.demo, tokens, `${mode}: estimates the actual injected context`);
+      assert.equal(tokens === 0, mode === 'off');
+      assert.match(renderers.get('gateway-startup')!(entries[0], {}, theme).render(100).join('\n'),
+        new RegExp(`1 tool · ≈${tokens} tokens`));
+    }
     await stop(); entries = [];
     await rm(config);
     await assert.rejects(start('new'), /ENOENT/);
-    assert.equal(snapshots, 3);
+    assert.equal(snapshots, 6);
     assert.equal(widgets.size, 0, 'Startup loader is removed after failure');
     const afterFailure = renders;
     await new Promise((resolve) => setTimeout(resolve, 120));
