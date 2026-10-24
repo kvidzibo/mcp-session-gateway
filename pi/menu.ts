@@ -1,10 +1,14 @@
 import { DynamicBorder, keyText, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Container, getKeybindings, Input, Key, matchesKey, SettingsList, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi, type Component, type TUI, type KeyId } from '@earendil-works/pi-tui';
+import { Container, getKeybindings, Input, Key, matchesKey, SelectList, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type TUI, type KeyId } from '@earendil-works/pi-tui';
 import { clean } from '../src/native-ui.js';
 import { showText } from './text-panel.js';
 
 export interface MenuItem { id: string; label: string; description: string; disabled?: boolean }
-export interface SettingsMenuItem extends MenuItem { currentValue?: string; values?: string[] }
+export interface SettingsMenuItem extends MenuItem {
+  currentValue?: string;
+  compactValue?: string;
+  context?: { id: string; value: string; description: string };
+}
 interface MenuOptions {
   signal?: AbortSignal;
   searchable?: boolean;
@@ -25,6 +29,7 @@ export function inlineHeight(tui: TUI, width: number, component: Component): num
 export class GatewayMenu {
   private selected = new Map<string, string>();
   private searches = new Map<string, Input>();
+  private settingsColumn = 0;
 
   constructor(private ctx: ExtensionContext, private signal: AbortSignal) {}
 
@@ -130,36 +135,21 @@ export class GatewayMenu {
     }
   }
 
-  /** Native Pi SettingsList; activation is persisted by the caller, then reloaded. */
+  /** Native selection/scrolling, with two inline settings per service. Saves belong to the caller. */
   async settings(path: string[], summary: string, items: SettingsMenuItem[]): Promise<string | undefined> {
     if (this.signal.aborted) return;
     const key = path.join('/');
     return this.ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
-      let list: SettingsList, capacity = 0, descriptionWidth = 0, usable = false, geometry = '', selected = this.selected.get(key);
-      const cancel = () => done(undefined);
       const choices: SettingsMenuItem[] = [...items, { id: '__back', label: 'Back', description: 'Return to Gateway.' }];
-      const rebuild = (size: number, width: number) => {
-        capacity = size; descriptionWidth = width;
-        list = new SettingsList(choices.map((item) => {
-          return { id: item.id, label: oneLine(item.label),
-            currentValue: item.currentValue ?? '', description: wrapTextWithAnsi(oneLine(item.description), Math.max(1, width - 4)).slice(0, 2).join('\n'),
-            // No submenu: the caller cycles/toggles with concurrency-safe config persistence.
-            values: item.disabled ? undefined : item.values ?? [''] };
-        }), size, {
-          label: (text, active) => {
-            const item = choices.find((item) => oneLine(item.label) === text);
-            if (active) selected = item?.id;
-            const locked = item?.disabled;
-            return theme.fg(locked ? 'dim' : active ? 'accent' : 'muted', text);
-          },
-          value: (text, active) => theme.fg(active && choices.find((item) => item.id === selected)?.disabled ? 'dim' : active ? 'accent' : 'muted', text),
-          description: (text) => theme.fg('muted', text), cursor: '→ ', hint: (text) => theme.fg('dim', text),
-        }, (id) => {
-          if (this.signal.aborted) return;
-          this.selected.set(key, id);
-          done(id === '__back' ? undefined : id);
-        }, cancel);
-        if (selected) list.selectItem(selected);
+      let selected = choices.find((item) => item.id === this.selected.get(key))?.id ?? choices[0].id;
+      let list: SelectList, usable = false, geometry = '', layout = '', listTop = 0, contextStart = 0;
+      const cancel = () => done(undefined);
+      const activate = () => {
+        const item = choices.find((item) => item.id === selected)!;
+        if (this.signal.aborted || item.disabled) return;
+        if (item.currentValue !== undefined && this.settingsColumn === 1 && !item.context) return;
+        this.selected.set(key, item.id);
+        done(item.id === '__back' ? undefined : this.settingsColumn === 1 && item.context ? item.context.id : item.id);
       };
       this.signal.addEventListener('abort', cancel, { once: true });
       const component = {
@@ -168,19 +158,79 @@ export class GatewayMenu {
           geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
           usable = height >= 12 && width >= 28;
           if (!usable) return [truncateToWidth('Enlarge terminal · Esc back', width)];
-          const size = Math.max(1, Math.min(10, height - 11));
-          if (capacity !== size || descriptionWidth !== width) rebuild(size, width);
+          const compact = height < 18;
+          // SelectList reserves two columns on each side of its primary label.
+          const nameWidth = Math.min(24, Math.max(7, ...items.filter((item) => item.currentValue !== undefined).map((item) => visibleWidth(oneLine(item.label)))), Math.floor((width - 4) / 3));
+          const contextWidth = width < 50 ? 3 : 7;
+          const toolsWidth = Math.min(16, width - nameWidth - contextWidth - 8);
+          const cell = (text: string, size: number) => {
+            const clipped = truncateToWidth(oneLine(text), size);
+            return clipped + ' '.repeat(Math.max(0, size - visibleWidth(clipped)));
+          };
+          contextStart = 2 + nameWidth + 2 + toolsWidth + 2;
+          const row = (item: SettingsMenuItem, active: boolean) => {
+            const color = item.disabled ? 'dim' : active ? 'accent' : 'muted';
+            if (item.currentValue === undefined) return theme.fg(color, oneLine(item.label));
+            return theme.fg(color, cell(item.label, nameWidth)) + '  '
+              + theme.fg(item.disabled ? 'dim' : active && this.settingsColumn === 0 ? 'accent' : 'muted', cell(width < 50 ? item.compactValue ?? item.currentValue : item.currentValue, toolsWidth)) + '  '
+              + theme.fg(item.disabled || !item.context ? 'dim' : active && this.settingsColumn === 1 ? 'accent' : 'muted', item.context?.value ?? '—');
+          };
+          const item = choices.find((item) => item.id === selected) ?? choices[0];
+          const isContext = this.settingsColumn === 1 && item.currentValue !== undefined;
+          const detail = isContext ? item.context?.description ?? 'This service supplies no additional context.' : item.description;
+          const wrapped = wrapTextWithAnsi(oneLine(detail), width - 4);
+          const hint = (action: Parameters<typeof keyText>[0]) => {
+            const text = keyText(action).split('/')[0];
+            return ({ up: '↑', down: '↓', left: '←', right: '→', enter: 'Enter', escape: 'Esc' } as Record<string, string>)[text] ?? text;
+          };
+          const movement = `${hint('tui.select.up')}/${hint('tui.select.down')} move · ${hint('tui.editor.cursorLeft')}/${hint('tui.editor.cursorRight')} setting`;
+          const hints = wrapTextWithAnsi(`${movement} · ${hint('tui.select.confirm')}/Space change · ${hint('tui.select.cancel')} back`, width);
           const border = new DynamicBorder((text) => theme.fg('border', text)).render(width);
-          return [...border, truncateToWidth(theme.fg('accent', path.join(' › ')), width),
-            truncateToWidth(summary, width), '', ...list.render(width), ...border].map((line) => line.trimEnd());
+          const header = [...border, truncateToWidth(theme.fg('accent', path.join(' › ')), width),
+            ...compact ? [] : [truncateToWidth(theme.fg('dim', summary), width), ''],
+            '  ' + theme.fg('dim', cell('Service', nameWidth)) + '  '
+              + theme.fg(this.settingsColumn === 0 ? 'accent' : 'dim', cell('Tools', toolsWidth)) + '  '
+              + theme.fg(this.settingsColumn === 1 ? 'accent' : 'dim', width < 50 ? 'Ctx' : 'Context')];
+          const detailCapacity = Math.max(1, Math.min(compact ? 2 : 3, height - header.length - hints.length - (compact ? 4 : 6)));
+          const description = wrapped.slice(0, detailCapacity);
+          if (wrapped.length > description.length) description[description.length - 1] = truncateToWidth(description.at(-1)!, width - 5, '') + '…';
+          const footer = ['', ...compact ? [] : [theme.fg('accent', truncateToWidth(`${oneLine(item.label)}${item.currentValue === undefined ? '' : isContext ? ' · Context' : ' · Tools'}`, width))],
+            ...description.map((line) => theme.fg('muted', `  ${line}`)), ...compact ? [] : [''],
+            ...hints.map((line) => theme.fg('dim', line)), ...border];
+          // Reserve the full help budget so selection changes do not rebuild a pressed mouse row.
+          const capacity = Math.max(1, Math.min(10, height - header.length - footer.length - 1 - (detailCapacity - description.length)));
+          if (layout !== `${width}:${capacity}`) {
+            layout = `${width}:${capacity}`;
+            list = new SelectList(choices.map((item) => ({ value: item.id, label: row(item, false) })), capacity, {
+              selectedPrefix: (text) => theme.fg('accent', text),
+              selectedText: () => theme.fg('accent', '→ ') + row(choices.find((choice) => choice.id === selected)!, true),
+              description: (text) => text, scrollInfo: (text) => theme.fg('dim', text), noMatch: (text) => theme.fg('muted', text),
+            });
+            list.setSelectedIndex(Math.max(0, choices.findIndex((choice) => choice.id === selected)));
+            list.onSelectionChange = (choice) => { selected = choice.value; this.selected.set(key, selected); };
+            list.onSelect = activate;
+            list.onCancel = cancel;
+          }
+          listTop = header.length;
+          return [...header, ...list.render(width), ...footer].map((line) => truncateToWidth(line, width).trimEnd());
         },
         handleInput: (data: string) => {
-          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
-          else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) list.handleInput(data);
+          const keys = getKeybindings();
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c')) || keys.matches(data, 'tui.select.cancel')) cancel();
+          else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) {
+            if (keys.matches(data, 'tui.editor.cursorLeft')) this.settingsColumn = 0;
+            else if (keys.matches(data, 'tui.editor.cursorRight')) this.settingsColumn = 1;
+            else if (data === ' ') activate();
+            else list.handleInput(data);
+          }
           tui.requestRender();
         },
-        handleMouse: (event: import('@earendil-works/pi-tui').TuiMouseEvent) => usable && event.y >= 4 ? list.handleMouse({ ...event, y: event.y - 4 }) : undefined,
-        invalidate: () => list?.invalidate(),
+        handleMouse: (event: import('@earendil-works/pi-tui').TuiMouseEvent) => {
+          if (!usable || geometry !== `${tui.terminal.rows}:${tui.terminal.columns}` || event.y < listTop || event.y >= listTop + list.render(tui.terminal.columns).length) return;
+          if (event.button === 'left' && (event.type === 'press' || event.type === 'click')) this.settingsColumn = event.x >= contextStart ? 1 : 0;
+          return list.handleMouse({ ...event, y: event.y - listTop });
+        },
+        invalidate: () => { layout = ''; list?.invalidate(); },
         dispose: () => this.signal.removeEventListener('abort', cancel),
       };
       return component;

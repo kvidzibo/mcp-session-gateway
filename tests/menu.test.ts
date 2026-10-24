@@ -354,6 +354,68 @@ test('gateway navigation is compact and inline, with native selection bindings a
   } finally { keys.setUserBindings(original); }
 });
 
+test('agent context columns keep native navigation, lock disabled settings, and fit resized terminals', async () => {
+  const keys = getKeybindings(), original = keys.getUserBindings();
+  const terminal = { rows: 30, columns: 100 };
+  let visit = 0;
+  const items = [
+    { id: 'service:locked', label: 'locked', currentValue: 'Disabled', compactValue: 'Disabled', disabled: true,
+      description: 'Locked · saved preference: Full schemas. Enable the service to change it.',
+      context: { id: 'additional:locked', value: 'Off', description: 'Locked · no context injected.' } },
+    { id: 'service:web', label: 'web', currentValue: 'Full schemas', compactValue: 'Full', description: 'Full schemas. Tools stay callable.' },
+    { id: 'service:pinote', label: 'pinote', currentValue: 'Tool summaries', compactValue: 'Summary', description: 'Tool names and descriptions.',
+      context: { id: 'additional:pinote', value: 'On', description: 'Selected task and handoff notes; otherwise selection status and saved tags. Independent of Tools; applies next run.' } },
+    { id: 'preview', label: 'Preview injected context', description: 'Privately preview the exact content.' },
+  ];
+  try {
+    keys.setUserBindings({ ...original, 'tui.select.up': 'ctrl+p', 'tui.select.down': 'ctrl+n',
+      'tui.select.confirm': 'ctrl+y', 'tui.select.cancel': 'ctrl+x',
+      'tui.editor.cursorLeft': 'ctrl+b', 'tui.editor.cursorRight': 'ctrl+f' });
+    const menu = new GatewayMenu({ ui: { custom: async (factory: Function, options: unknown) => {
+      assert.equal(options, undefined, 'Use the native inline area');
+      let answer: unknown, finished = false;
+      const panel = factory({ terminal, requestRender() {} }, theme, {}, (value: unknown) => { answer = value; finished = true; });
+      const render = () => panel.render(terminal.columns - 2) as string[];
+      const fit = () => {
+        for (const rows of [18, 24, 40]) for (const columns of [30, 38, 80, 100]) {
+          terminal.rows = rows; terminal.columns = columns;
+          const lines = render();
+          assert.ok(lines.length <= rows - 6, `${columns}×${rows}: ${lines.join('\n')}`);
+          assert.ok(lines.every((line) => visibleWidth(line) <= columns - 2));
+        }
+      };
+      try {
+        fit();
+        if (visit++ === 0) {
+          panel.handleInput('\x19');
+          assert.equal(finished, false, 'Locked Tools cannot be changed');
+          panel.handleInput('\x06'); render(); panel.handleInput(' ');
+          assert.equal(finished, false, 'Locked Context cannot be changed');
+          panel.handleInput('\x0e'); render(); panel.handleInput('\x19');
+          assert.equal(finished, false, 'Unsupported Context cannot be changed');
+          panel.handleInput('\x0e'); fit();
+          assert.match(render().join('\n'), /pinote · Context/);
+          assert.match(render().join('\n'), /Independent of\s+Tools; applies next run/);
+          panel.handleInput(' ');
+        } else {
+          assert.match(render().join('\n'), /pinote · Context/, 'Keep row and column after saving');
+          terminal.columns = 80;
+          panel.handleInput('\x19');
+          assert.equal(finished, false, 'Ignore stale geometry until rendered');
+          render();
+          const y = render().findIndex((line) => /^  web\s/.test(line));
+          panel.handleMouse({ type: 'press', button: 'left', x: 15, y }); render();
+          panel.handleMouse({ type: 'click', button: 'left', x: 15, y });
+        }
+        assert.equal(finished, true);
+        return answer;
+      } finally { panel.dispose(); }
+    } } } as any, new AbortController().signal);
+    assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'additional:pinote');
+    assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'service:web');
+  } finally { keys.setUserBindings(original); }
+});
+
 test('one gateway menu preserves navigation, bounds rendering, and recovers after failed and successful restarts', async () => {
   const controller = new AbortController();
   const terminal = { rows: 24, columns: 80 };

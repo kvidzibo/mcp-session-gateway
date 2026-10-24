@@ -568,26 +568,24 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                 let cost = 'Token estimate unavailable';
                 try {
                   inventory = services.every((service) => service.enabled === false || service.agentContext === 'off') ? [] : await tools(signal);
-                  cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tool-only tokens (rough estimate)`;
+                  cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tool tokens`;
                 } catch { /* Keep preferences/recovery accessible while disconnected. */ }
                 try { await additional.discover(signal, timeout); } catch { /* Keep saved support on transient discovery failure. */ }
-                const selected = await menu.settings(['Gateway', 'Agent context'], `${cost} · next agent run`, [
-                  ...services.flatMap((service) => [{
+                const selected = await menu.settings(['Gateway', 'Agent context'], `${cost} · applies next run`, [
+                  ...services.map((service) => ({
                     id: `service:${service.name}`,
-                    label: `${service.name} · Tools:`,
-                    currentValue: `${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${agentContextLabels[service.agentContext ?? 'off']}`,
-                    values: ['full', 'summary', 'service', 'off'].map((mode) => agentContextLabels[mode as keyof typeof agentContextLabels]),
+                    label: service.name,
+                    currentValue: service.enabled === false ? 'Disabled' : ({ full: 'Full schemas', summary: 'Tool summaries', service: 'Service summary', off: 'Off' })[service.agentContext ?? 'off'],
+                    compactValue: service.enabled === false ? 'Disabled' : ({ full: 'Full', summary: 'Summary', service: 'Service', off: 'Off' })[service.agentContext ?? 'off'],
                     disabled: service.enabled === false,
-                    description: service.enabled === false ? 'Disabled (locked) · 0 tokens. Saved preference retained; enable the service to change it.' : `${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens (with shared header). ` : ''}Enter cycles this service's mode; tools stay callable.`,
-                  }, ...(additional.resources.has(service.name) ? [{
-                    id: `additional:${service.name}`,
-                    label: `${service.name} · Additional context:`,
-                    currentValue: `${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${service.additionalContext ? 'On' : 'Off'}`,
-                    values: ['Off', 'On'],
-                    disabled: service.enabled === false,
-                    description: `${additional.resources.get(service.name)?.description ?? 'Service-supplied reference context.'} Independent of Tools. Enter toggles; applies before the next agent run.`,
-                  }] : [])]),
-                  { id: 'preview', label: 'Preview injected context', description: 'View both exact current context sections privately. Reads additional context fresh; does not start an agent run.' },
+                    description: service.enabled === false ? `Locked · 0 tokens. Saved Tools: ${agentContextLabels[service.agentContext ?? 'off']}; Context: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change settings.` : `${agentContextLabels[service.agentContext ?? 'off']}. ${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens including shared header. ` : ''}Change cycles detail; tools stay callable.`,
+                    context: additional.resources.has(service.name) ? {
+                      id: `additional:${service.name}`,
+                      value: service.additionalContext ? 'On' : 'Off',
+                      description: service.enabled === false ? `Locked · no context injected. Saved preference: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change it.` : `${additional.resources.get(service.name)?.description ?? 'Service-supplied reference context.'} Independent of Tools.`,
+                    } : undefined,
+                  })),
+                  { id: 'preview', label: 'Preview injected context', description: 'Preview both exact context sections privately. Reads fresh data without starting an agent run.' },
                 ]);
                 if (!selected) break;
                 if (selected === 'preview') {

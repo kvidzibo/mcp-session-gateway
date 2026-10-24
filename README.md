@@ -157,12 +157,14 @@ snapshot](docs/reference.md#startup-snapshot).
 
 ### Agent context
 
-Open **`/gateway` → Agent context** for independent inline settings per service. **Enter** cycles **Tools**:
-**Full schemas → Tool names & descriptions → Service name & description → Off**, saving in place.
+Open **`/gateway` → Agent context** for one row per service, with **Tools** and **Context** columns.
+Use **↑/↓** to choose a service and **←/→** to choose a setting (Pi's configured bindings apply).
+**Enter/Space** changes the selected setting. **Tools** cycles:
+**Full schemas → Tool summaries → Service summary → Off**, saving in place.
 Services default to Off; an existing top-level `agentContext` remains the default for services
 without their own setting. New services inherit that default.
 
-Supporting services also show **Additional context: On/Off**, independent of Tools (default **Off**,
+Supporting services show **Context: On/Off**; **—** means unsupported. Context is independent of Tools (default **Off**,
 per-service `additionalContext: false`). Enabling it reads fresh service-supplied reference task data
 before **every agent run**, without model tool calls. Failures explicitly say context is unavailable,
 never reuse an old task snapshot, and warn. Disabled services contribute neither section.
@@ -173,7 +175,8 @@ Set an optional `description` in a service's config entry for a compact service 
 Without one, service-only mode lists its available tool names: `Tools: search, fetch.`
 Only currently available, model-visible tools contribute; unavailable/app-only services are omitted.
 Disabled services are greyed out and locked: their saved preference is retained, but they add
-zero tokens and are excluded immediately, even if stopping the service awaits a restart.
+zero tokens and are excluded immediately, even if stopping the service awaits a restart. Select a
+locked service to see its saved preferences. Narrow terminals use shorter mode labels.
 
 **Preview injected context** opens a private native inline tree, with services initially collapsed.
 Locked services appear last. Each service and tool row shows its approximate token size;
