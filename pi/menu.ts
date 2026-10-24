@@ -7,6 +7,7 @@ export interface MenuItem { id: string; label: string; description: string; disa
 export interface SettingsMenuItem extends MenuItem {
   currentValue?: string;
   compactValue?: string;
+  toolTokens?: number;
   context?: { id: string; value: string; description: string };
 }
 interface MenuOptions {
@@ -162,17 +163,20 @@ export class GatewayMenu {
           // SelectList reserves two columns on each side of its primary label.
           const nameWidth = Math.min(24, Math.max(7, ...items.filter((item) => item.currentValue !== undefined).map((item) => visibleWidth(oneLine(item.label)))), Math.floor((width - 4) / 3));
           const contextWidth = width < 50 ? 3 : 7;
-          const toolsWidth = Math.min(16, width - nameWidth - contextWidth - 8);
+          const showTokens = width >= 40;
+          const tokenSpace = showTokens ? 9 : 0;
+          const toolsWidth = Math.min(16, width - nameWidth - contextWidth - 8 - tokenSpace);
           const cell = (text: string, size: number) => {
             const clipped = truncateToWidth(oneLine(text), size);
             return clipped + ' '.repeat(Math.max(0, size - visibleWidth(clipped)));
           };
-          contextStart = 2 + nameWidth + 2 + toolsWidth + 2;
+          contextStart = 2 + nameWidth + 2 + toolsWidth + 2 + tokenSpace;
           const row = (item: SettingsMenuItem, active: boolean) => {
             const color = item.disabled ? 'dim' : active ? 'accent' : 'muted';
             if (item.currentValue === undefined) return theme.fg(color, oneLine(item.label));
             return theme.fg(color, cell(item.label, nameWidth)) + '  '
-              + theme.fg(item.disabled ? 'dim' : active && this.settingsColumn === 0 ? 'accent' : 'muted', cell(width < 50 ? item.compactValue ?? item.currentValue : item.currentValue, toolsWidth)) + '  '
+              + theme.fg(item.disabled ? 'dim' : active && this.settingsColumn === 0 ? 'accent' : 'muted', cell(width < 50 || toolsWidth < 15 ? item.compactValue ?? item.currentValue : item.currentValue, toolsWidth)) + '  '
+              + (showTokens ? theme.fg(item.disabled ? 'dim' : 'muted', (item.toolTokens === undefined ? '—' : item.toolTokens.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase()).padStart(7)) + '  ' : '')
               + theme.fg(item.disabled || !item.context ? 'dim' : active && this.settingsColumn === 1 ? 'accent' : 'muted', item.context?.value ?? '—');
           };
           const item = choices.find((item) => item.id === selected) ?? choices[0];
@@ -190,6 +194,7 @@ export class GatewayMenu {
             ...compact ? [] : [truncateToWidth(theme.fg('dim', summary), width), ''],
             '  ' + theme.fg('dim', cell('Service', nameWidth)) + '  '
               + theme.fg(this.settingsColumn === 0 ? 'accent' : 'dim', cell('Tools', toolsWidth)) + '  '
+              + (showTokens ? theme.fg('dim', '≈Tokens') + '  ' : '')
               + theme.fg(this.settingsColumn === 1 ? 'accent' : 'dim', width < 50 ? 'Ctx' : 'Context')];
           // Long configured shortcuts may need more space than the minimum terminal size.
           if (header.length + hints.length + (compact ? 5 : 7) > height) {

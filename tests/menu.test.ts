@@ -359,10 +359,10 @@ test('agent context columns keep native navigation, lock disabled settings, and 
   const terminal = { rows: 30, columns: 100 };
   let visit = 0;
   const items = [
-    { id: 'service:locked', label: 'locked', currentValue: 'Disabled', compactValue: 'Disabled', disabled: true,
+    { id: 'service:locked', label: 'locked', currentValue: 'Disabled', compactValue: 'Disabled', disabled: true, toolTokens: 0,
       description: 'Locked · saved preference: Full schemas. Enable the service to change it.',
       context: { id: 'additional:locked', value: 'Off', description: 'Locked · no context injected.' } },
-    { id: 'service:web', label: 'web', currentValue: 'Full schemas', compactValue: 'Full', description: 'Full schemas. Tools stay callable.' },
+    { id: 'service:web', label: 'web', currentValue: 'Full schemas', compactValue: 'Full', toolTokens: 1234, description: 'Full schemas. Tools stay callable.' },
     { id: 'service:pinote', label: 'pinote', currentValue: 'Tool summaries', compactValue: 'Summary', description: 'Tool names and descriptions.',
       context: { id: 'additional:pinote', value: 'On', description: 'Selected task and handoff notes; otherwise selection status and saved tags. Independent of Tools; applies next run.' } },
     { id: 'preview', label: 'Preview injected context', description: 'Privately preview the exact content.' },
@@ -382,10 +382,16 @@ test('agent context columns keep native navigation, lock disabled settings, and 
           const lines = render();
           assert.ok(lines.length <= rows - 6, `${columns}×${rows}: ${lines.join('\n')}`);
           assert.ok(lines.every((line) => visibleWidth(line) <= columns - 2));
+          if (columns < 42) assert.ok(!lines.some((line) => line.includes('≈Tokens')));
         }
       };
       try {
         fit();
+        const header = render().find((line) => line.includes('≈Tokens'))!;
+        const tokenColumn = header.indexOf('≈Tokens');
+        assert.match(render().join('\n'), /locked\s+Disabled\s+0\s+Off/);
+        assert.match(render().join('\n'), /pinote\s+Tool summaries\s+—\s+On/);
+        if (visit < 2) assert.equal(render().find((line) => /^(→ |  )web\s/.test(line))!.indexOf('1.2k'), tokenColumn + 3, 'Right-align compact token counts');
         const current = visit++;
         if (current === 0) {
           panel.handleInput('\x19');
@@ -405,8 +411,9 @@ test('agent context columns keep native navigation, lock disabled settings, and 
           assert.equal(finished, false, 'Ignore stale geometry until rendered');
           render();
           const y = render().findIndex((line) => /^  web\s/.test(line));
-          panel.handleMouse({ type: 'press', button: 'left', x: 15, y }); render();
-          panel.handleMouse({ type: 'click', button: 'left', x: 15, y });
+          const x = render().find((line) => line.includes('≈Tokens'))!.indexOf('≈Tokens') + 6;
+          panel.handleMouse({ type: 'press', button: 'left', x, y }); render();
+          panel.handleMouse({ type: 'click', button: 'left', x, y });
         } else {
           assert.match(render().join('\n'), /→ locked/, 'Recover if the remembered service was removed');
           terminal.rows = 18; terminal.columns = 30;

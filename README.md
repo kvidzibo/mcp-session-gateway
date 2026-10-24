@@ -157,7 +157,7 @@ snapshot](docs/reference.md#startup-snapshot).
 
 ### Agent context
 
-Open **`/gateway` → Agent context** for one row per service, with **Tools** and **Context** columns.
+Open **`/gateway` → Agent context** for one row per service, with **Tools**, **≈Tokens**, and **Context** columns.
 Use **↑/↓** to choose a service and **←/→** to choose a setting (Pi's configured bindings apply).
 **Enter/Space** changes the selected setting. **Tools** cycles:
 **Full schemas → Tool summaries → Service summary → Off**, saving in place.
@@ -176,7 +176,8 @@ Without one, service-only mode lists its available tool names: `Tools: search, f
 Only currently available, model-visible tools contribute; unavailable/app-only services are omitted.
 Disabled services are greyed out and locked: their saved preference is retained, but they add
 zero tokens and are excluded immediately, even if stopping the service awaits a restart. Select a
-locked service to see its saved preferences. Narrow terminals use shorter mode labels.
+locked service to see its saved preferences. Narrow terminals use shorter mode labels and hide
+**≈Tokens** when space is tight; the selected Tools detail still shows the full estimate.
 
 **Preview injected context** opens a private native inline tree, with services initially collapsed.
 Locked services appear last. Each service and tool row shows its approximate token size;
@@ -188,8 +189,11 @@ Use Pi's configured selection keys (normally **↑/↓**, **Enter**, **Esc**) to
 **PgUp/PgDn** scroll long descriptions/schemas without moving selection (**Home/End** jump).
 In raw view, **↑/↓** scroll. **r** refreshes; Back returns to settings. No task snapshot is sent to the
 model or persisted by previewing. Context-only services may persist their host identity for later reads.
-The menu shows a tool-only token estimate (preview includes additional context) and a per-service estimate in the selected row's detail;
-per-service estimates include the shared header and section wrapper and should not be added together.
+The menu's **≈Tokens** column shows each service's selected Tools-mode estimate, updating when the
+mode changes. Counts use compact notation (for example, `1.2k`): Off/disabled services show **0**;
+unavailable estimates show **—**. The selected Tools detail shows the unrounded count. Additional
+context is excluded from this column and the summary total; its size is shown separately in preview.
+Per-service estimates include the shared header and section wrapper and should not be added together.
 Tool estimates cover only their injected JSON (no schema in summary mode), excluding shared overhead.
 Estimates use characters ÷ 4, rounded up; actual tokenizer counts vary.
 

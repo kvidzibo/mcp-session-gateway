@@ -572,19 +572,24 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                 } catch { /* Keep preferences/recovery accessible while disconnected. */ }
                 try { await additional.discover(signal, timeout); } catch { /* Keep saved support on transient discovery failure. */ }
                 const selected = await menu.settings(['Gateway', 'Agent context'], `${cost} · applies next run`, [
-                  ...services.map((service) => ({
-                    id: `service:${service.name}`,
-                    label: service.name,
-                    currentValue: service.enabled === false ? 'Disabled' : ({ full: 'Full schemas', summary: 'Tool summaries', service: 'Service summary', off: 'Off' })[service.agentContext ?? 'off'],
-                    compactValue: service.enabled === false ? 'Disabled' : ({ full: 'Full', summary: 'Summary', service: 'Service', off: 'Off' })[service.agentContext ?? 'off'],
-                    disabled: service.enabled === false,
-                    description: service.enabled === false ? `Locked · 0 tokens. Saved Tools: ${agentContextLabels[service.agentContext ?? 'off']}; Context: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change settings.` : `${agentContextLabels[service.agentContext ?? 'off']}. ${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens including shared header. ` : ''}Change cycles detail; tools stay callable.`,
-                    context: additional.resources.has(service.name) ? {
-                      id: `additional:${service.name}`,
-                      value: service.additionalContext ? 'On' : 'Off',
-                      description: service.enabled === false ? `Locked · no context injected. Saved preference: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change it.` : `${additional.resources.get(service.name)?.description ?? 'Service-supplied reference context.'} Independent of Tools.`,
-                    } : undefined,
-                  })),
+                  ...services.map((service) => {
+                    const toolTokens = service.enabled === false || (service.agentContext ?? 'off') === 'off' ? 0
+                      : inventory ? agentContextTokens(agentContextText([service], inventory)) : undefined;
+                    return {
+                      id: `service:${service.name}`,
+                      label: service.name,
+                      currentValue: service.enabled === false ? 'Disabled' : ({ full: 'Full schemas', summary: 'Tool summaries', service: 'Service summary', off: 'Off' })[service.agentContext ?? 'off'],
+                      compactValue: service.enabled === false ? 'Disabled' : ({ full: 'Full', summary: 'Summary', service: 'Service', off: 'Off' })[service.agentContext ?? 'off'],
+                      disabled: service.enabled === false,
+                      toolTokens,
+                      description: service.enabled === false ? `Locked · 0 tokens. Saved Tools: ${agentContextLabels[service.agentContext ?? 'off']}; Context: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change settings.` : `${agentContextLabels[service.agentContext ?? 'off']}. ${toolTokens === undefined ? 'Token estimate unavailable. ' : `≈${toolTokens.toLocaleString('en-US')} tool tokens including shared header. `}Change cycles detail; tools stay callable.`,
+                      context: additional.resources.has(service.name) ? {
+                        id: `additional:${service.name}`,
+                        value: service.additionalContext ? 'On' : 'Off',
+                        description: service.enabled === false ? `Locked · no context injected. Saved preference: ${service.additionalContext ? 'On' : 'Off'}. Enable the service to change it.` : `${additional.resources.get(service.name)?.description ?? 'Service-supplied reference context.'} Independent of Tools.`,
+                      } : undefined,
+                    };
+                  }),
                   { id: 'preview', label: 'Preview injected context', description: 'Preview both exact context sections privately. Reads fresh data without starting an agent run.' },
                 ]);
                 if (!selected) break;

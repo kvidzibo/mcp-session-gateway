@@ -17,6 +17,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
   const config = join(dir, 'gateway.json');
   const handlers = new Map<string, Function>(), commands = new Map<string, any>(), tools = new Map<string, any>();
   const navigation: string[] = [], previews: string[] = [], notices: string[] = [];
+  let menuInventory: any[] = [];
   const original = { mcpServers: { demo: { command: process.execPath,
     args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname], env: { RAW: '${PATH}' } } } };
   registerGateway({
@@ -52,9 +53,18 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
               assert.ok(lines.length <= terminal.rows - 2);
               assert.ok(lines.every((line) => visibleWidth(line) <= width - 2));
             }
+            if (render().includes('Gateway › Agent context')) {
+              const { services } = await loadConfig(config, { expandEnvironment: false });
+              const count = agentContextTokens(agentContextText(services, menuInventory));
+              const formatted = count.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase();
+              const row = render().find((line) => /^(→ |  )demo\s/.test(line))!;
+              assert.equal(row.trim().split(/\s+/).at(-2), formatted, 'Token column follows the saved Tools mode, not additional context');
+            }
             const context = choice.startsWith('context:');
             const target = context ? choice.slice('context:'.length) : choice;
-            const menuLines = () => render().map((line) => line.replace(/ {2,}/g, ' ').trimEnd());
+            // Ignore the read-only estimate when navigating; formatting is covered by the menu test.
+            const menuLines = () => render().map((line) => line.replace(/ {2,}/g, ' ').trimEnd()
+              .replace(/^(→ demo .+) (?:\d+(?:\.\d+)?[kmbt]?|—) (—|On|Off)$/, '$1 $2'));
             for (let i = 0; i < 30 && !menuLines().includes(`→ ${target}`); i++) panel.handleInput('\x1b[B');
             assert.ok(menuLines().includes(`→ ${target}`), `Missing ${target}`);
             if (context) panel.handleInput('\x1b[C');
@@ -82,6 +92,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     assert.match(previews.pop()!, /injection is off/);
     assert.equal((await services())[0].agentContext, 'off', 'Preview never changes the preference');
     const inventory = JSON.parse((await tools.get('gateway_tools').execute('', {})).content[0].text);
+    menuInventory = inventory;
     inventory.push({ name: 'demo__long', description: 'x'.repeat(21_000) + '\u202etail', inputSchema: { type: 'object' } });
     t.mock.method(Client.prototype, 'listTools', async () => ({ tools: inventory }));
     let previous = 'Off';
