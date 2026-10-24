@@ -144,6 +144,19 @@ to keep controls visible. See [counter
 semantics](docs/reference.md#display-and-call-counts) and the historical [startup
 snapshot](docs/reference.md#startup-snapshot).
 
+### Agent context
+
+Open **`/gateway` → Agent context** to choose **Injection: Off** (default),
+**Names & descriptions**, or **Full schemas**. **Preview injected context** shows the exact
+current catalog privately, with scrolling and refresh; opening it never injects anything. The menu
+and preview show the approximate added token cost (characters ÷ 4, including the section wrapper;
+actual tokenizer counts vary).
+
+The choice saves immediately for all sessions sharing this configuration and applies before their
+next agent run, without restarting services. Only model-visible tools are included; calls still
+use `gateway_call`. Off stops adding the catalog but cannot erase earlier conversation history.
+This controls the Pi adapter's agent, not separately configured delegated agents.
+
 ### Approvals
 
 **Allow once**, **Decline** and **Cancel** differ. Allow once requires viewing every disclosure line

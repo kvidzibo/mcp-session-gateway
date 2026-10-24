@@ -9,8 +9,8 @@ import type { ExtensionAPI, ExtensionContext, ExtensionHandler, SessionStartEven
 import { Loader, Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
-import { loadConfig } from '../src/config.js';
-import { readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
+import { loadConfig, type AgentContextMode } from '../src/config.js';
+import { readAgentContext, saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
 import { CallEventSchema } from '../src/call-events.js';
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
 import { updateManagedPackages } from '../src/package-manager.js';
@@ -31,6 +31,7 @@ import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
+import { agentContextLabels, agentContextText, agentContextTokens } from './agent-context.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
 export interface GatewayLifecycle {
@@ -409,6 +410,22 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
+  async function contextText(signal?: AbortSignal): Promise<string> {
+    const path = pi.getFlag('gateway-config');
+    if (typeof path !== 'string' || !path) return '';
+    const mode = await readAgentContext(path);
+    return agentContextText(mode, mode === 'off' ? [] : await tools(signal));
+  }
+  pi.on('before_agent_start', async (event, ctx) => {
+    // Replace our section each run, including resume/fork and preference/inventory changes.
+    delete event.systemPromptOptions.sections.gateway_tools;
+    try {
+      const text = await contextText(ctx.signal);
+      if (text) event.systemPromptOptions.sections.gateway_tools = text;
+    } catch (error) {
+      ctx.ui.notify(clean(`Gateway agent context unavailable: ${String(error)}`), 'warning');
+    }
+  });
   const gatewayCommand = (initialAction?: 'services' | { service: string }) => ({
     description: gatewayCommands[initialAction ? 'pi-services' : 'gateway'],
     handler: async (_args: string, ctx: ExtensionContext) => {
@@ -443,6 +460,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
               description: autoUpdateError || 'Enter toggles and saves. On permits gateway + service updates and trusted builds at startup/reload, without prompts. Gateway updates need a Pi restart. Code runs with OS permissions.' },
             { id: 'display', label: `Display: ${menuDisplay === undefined ? 'Unavailable' : menuDisplay === 'full' ? 'Full' : 'Minimal'}`, disabled: menuDisplay === undefined,
               description: displayError || 'Enter toggles and saves immediately. Full shows per-service success (green), failure (red), and running (amber) tool calls.' },
+            { id: 'agent-context', label: 'Agent context', description: 'Choose whether to inject tool names/descriptions or full schemas, and preview the exact catalog.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;
@@ -454,6 +472,34 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
             } else if (action === 'auto-update' && autoUpdate !== undefined) {
               const enabled = await toggleAutoUpdate(configPath, autoUpdate, signal);
               ctx.ui.notify(`Auto update ${enabled ? 'on' : 'off'} · saved for next startup/reload`, 'info');
+            } else if (action === 'agent-context') {
+              while (!signal.aborted) {
+                const mode = await readAgentContext(configPath);
+                let cost = 'Token estimate unavailable';
+                try { cost = `≈${agentContextTokens(await contextText(signal)).toLocaleString('en-US')} tokens (rough estimate)`; }
+                catch { /* Keep preferences/recovery accessible while disconnected. */ }
+                const selected = await menu.choose(['Gateway', 'Agent context'], `${cost} · applies before the next agent run`, [
+                  { id: 'injection', label: `Injection: ${agentContextLabels[mode]}`, description: 'Off adds no catalog. Names & descriptions omits schemas. Full schemas includes input schemas. Existing conversation history is not erased.' },
+                  { id: 'preview', label: 'Preview injected context', description: 'View the exact current catalog privately. Does not send it to the agent or change the injection setting.' },
+                ]);
+                if (!selected) break;
+                if (selected === 'preview') {
+                  await showText(ctx, 'Gateway › Agent context › Preview', async (operation) => {
+                    const text = await contextText(operation);
+                    return `≈${agentContextTokens(text).toLocaleString('en-US')} tokens · rough estimate (characters ÷ 4; actual tokenizer varies)\n\n${text || 'Injection is off; no gateway catalog will be added.'}`;
+                  }, signal, connected ? lifetime.signal : undefined, Infinity);
+                } else {
+                  const next = await menu.choose(['Gateway', 'Agent context', 'Injection'], `Current: ${agentContextLabels[mode]}`, [
+                    { id: 'off', label: agentContextLabels.off, description: 'Do not inject a catalog. gateway_tools discovery remains available.' },
+                    { id: 'summary', label: agentContextLabels.summary, description: 'Inject tool names and descriptions; discover input schemas when needed.' },
+                    { id: 'full', label: agentContextLabels.full, description: 'Inject tool names, descriptions and complete input schemas.' },
+                  ]);
+                  if (next && next !== mode) {
+                    await saveAgentContext(configPath, mode, next as AgentContextMode, signal);
+                    ctx.ui.notify(`Agent context: ${agentContextLabels[next as AgentContextMode]} · saved for the next agent run`, 'info');
+                  }
+                }
+              }
             } else if (action === 'services') {
               while (!signal.aborted) {
                 const config = await loadConfig(configPath, { expandEnvironment: false });

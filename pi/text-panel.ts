@@ -4,7 +4,7 @@ import { clean } from '../src/native-ui.js';
 
 /** Read-only text, never an approval dialog. Async reads are replaced on refresh. */
 export async function showText(ctx: ExtensionContext, title: string,
-  source: string | ((signal: AbortSignal, publish: (text: string) => void) => Promise<string>), signal: AbortSignal, connection?: AbortSignal): Promise<void> {
+  source: string | ((signal: AbortSignal, publish: (text: string) => void) => Promise<string>), signal: AbortSignal, connection?: AbortSignal, lineLimit = 20_000): Promise<void> {
   if (signal.aborted) return;
   await ctx.ui.custom<void>((tui, theme, _keys, done) => {
     let controller = new AbortController();
@@ -34,7 +34,7 @@ export async function showText(ctx: ExtensionContext, title: string,
         width = Math.max(1, width);
         const height = Math.max(1, tui.terminal.rows - 2);
         if (height < 6 || width < 20) return [truncateToWidth('Enlarge terminal · Esc back', width)];
-        const body = text.split('\n').flatMap((line) => wrapTextWithAnsi(clean(line), width));
+        const body = text.split('\n').flatMap((line) => wrapTextWithAnsi(clean(line, lineLimit), width));
         page = height - 3;
         max = Math.max(0, body.length - page); offset = Math.min(offset, max);
         const refreshHint = typeof source === 'function' && !connection?.aborted ? 'r refresh · ' : '';

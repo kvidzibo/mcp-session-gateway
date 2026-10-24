@@ -16,6 +16,9 @@
 - `autoUpdateConcurrency`: integer **1–128**; `1` is sequential. Does not enable `autoUpdate`. See
   [defaults and resource limits](packages.md#automatic-startup-updates).
 - `display`: `"minimal"` (default) or `"full"`.
+- `agentContext`: `"off"` (default), `"summary"` (names/descriptions), or `"full"` (also input
+  schemas). Pi adapter only; configure through **`/gateway` → Agent context**, including a private
+  exact-content preview. Saves raw configuration without expanding credentials.
 
 ### Environment variables
 
@@ -61,6 +64,20 @@ subscriptions are forwarded.
 The adapter creates no process at extension load. On `session_start`, it checks builds and starts
 the gateway; repeated shutdown requests close it safely. The upstream handshake precedes child
 startup, advertising form elicitation only when supported by the harness.
+
+### Agent context injection
+
+Before each agent run, the adapter rereads `agentContext` and discovers the current model-visible
+tools when enabled. A dedicated `gateway_tools` prompt section is replaced, not repeatedly appended;
+Pi manages transcript deltas. The preview uses the same renderer and discovery path, without a
+model turn. Both views show a rough added-token estimate (characters ÷ 4, including the section
+wrapper; tokenizer-dependent). Tool metadata is marked as service-provided reference data, not instructions or
+permission. Menus, resources and app-only tools are not injected. Discovery/configuration failures
+omit the section and show a warning rather than reusing a stale catalog.
+
+Saved choices apply across sessions on their next run, including resume/fork; changing modes does
+not erase previous messages. Calls still go through `gateway_call`, with existing validation and
+approvals. Delegated agents have their own context configuration.
 
 ### Adapter builds
 
