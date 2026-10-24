@@ -21,6 +21,7 @@ import { NativeUI } from './native-ui.js';
 import { FooterActions } from './footer-actions.js';
 import { GATEWAY_STATUS, GatewayStatusSchema } from '../src/status.js';
 import { startupSummary, type StartupSummary } from './startup-summary.js';
+import { nativePreview } from './preview.js';
 import { ensureGatewayBuild } from './build.js';
 import { awaitTransportExit } from './transport.js';
 import { checkGatewayUpdate } from './self-update.js';
@@ -199,7 +200,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   });
   pi.registerEntryRenderer<{ title: string; text: string }>('gateway-native-preview', (entry, _options, theme) => {
     if (typeof entry.data?.title !== 'string' || typeof entry.data?.text !== 'string') return;
-    return new Text(`${theme.fg('muted', `${clean(entry.data.title)} · display only · not sent to model`)}\n${clean(entry.data.text)}`, 0, 0);
+    return nativePreview(entry.data, theme);
   });
   pi.registerEntryRenderer<{ text: string }>('gateway-package-updates', (entry, _options, theme) => {
     if (typeof entry.data?.text !== 'string') return;
