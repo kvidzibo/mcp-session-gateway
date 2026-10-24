@@ -6,7 +6,7 @@ import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import registerGateway from '../pi/runtime.js';
-import { agentContextCatalog, agentContextRaw, agentContextText, agentContextTokens, agentContextLabels } from '../pi/agent-context.js';
+import { agentContextCatalog, agentContextRaw, agentContextText, agentContextTokens } from '../pi/agent-context.js';
 import { previewAgentContext } from '../pi/agent-context-preview.js';
 import { ServiceContext, SERVICE_CONTEXT_MIME, parseServiceContext, serviceContextRaw } from '../pi/service-context.js';
 import { saveAgentContext } from '../pi/auto-update.js';
@@ -17,6 +17,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
   const config = join(dir, 'gateway.json');
   const handlers = new Map<string, Function>(), commands = new Map<string, any>(), tools = new Map<string, any>();
   const navigation: string[] = [], previews: string[] = [], notices: string[] = [];
+  let menuInventory: any[] = [];
   const original = { mcpServers: { demo: { command: process.execPath,
     args: [new URL('../dist/examples/demo-service.js', import.meta.url).pathname], env: { RAW: '${PATH}' } } } };
   registerGateway({
@@ -52,9 +53,21 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
               assert.ok(lines.length <= terminal.rows - 2);
               assert.ok(lines.every((line) => visibleWidth(line) <= width - 2));
             }
-            const menuLines = () => render().map((line) => line.replace(/ {2,}/g, ' ').trimEnd());
-            for (let i = 0; i < 30 && !menuLines().includes(`→ ${choice}`); i++) panel.handleInput('\x1b[B');
-            assert.ok(menuLines().includes(`→ ${choice}`), `Missing ${choice}`);
+            if (render().includes('Gateway › Agent context')) {
+              const { services } = await loadConfig(config, { expandEnvironment: false });
+              const count = agentContextTokens(agentContextText(services, menuInventory));
+              const formatted = count.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }).toLowerCase();
+              const row = render().find((line) => /^(→ |  )demo\s/.test(line))!;
+              assert.equal(row.trim().split(/\s+/).at(-2), formatted, 'Token column follows the saved Tools mode, not additional context');
+            }
+            const context = choice.startsWith('context:');
+            const target = context ? choice.slice('context:'.length) : choice;
+            // Ignore the read-only estimate when navigating; formatting is covered by the menu test.
+            const menuLines = () => render().map((line) => line.replace(/ {2,}/g, ' ').trimEnd()
+              .replace(/^(→ demo .+) (?:\d+(?:\.\d+)?[kmbt]?|—) (—|On|Off)$/, '$1 $2'));
+            for (let i = 0; i < 30 && !menuLines().includes(`→ ${target}`); i++) panel.handleInput('\x1b[B');
+            assert.ok(menuLines().includes(`→ ${target}`), `Missing ${target}`);
+            if (context) panel.handleInput('\x1b[C');
             panel.handleInput('\r');
           }
           return answer;
@@ -79,12 +92,13 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     assert.match(previews.pop()!, /injection is off/);
     assert.equal((await services())[0].agentContext, 'off', 'Preview never changes the preference');
     const inventory = JSON.parse((await tools.get('gateway_tools').execute('', {})).content[0].text);
+    menuInventory = inventory;
     inventory.push({ name: 'demo__long', description: 'x'.repeat(21_000) + '\u202etail', inputSchema: { type: 'object' } });
     t.mock.method(Client.prototype, 'listTools', async () => ({ tools: inventory }));
     let previous = 'Off';
     for (const mode of ['full', 'summary', 'service'] as const) {
-      await menu(`demo · Tools: ${previous}`, 'Preview injected context');
-      previous = agentContextLabels[mode];
+      await menu(`demo ${previous} —`, 'Preview injected context');
+      previous = ({ full: 'Full schemas', summary: 'Tool summaries', service: 'Service summary' })[mode];
       assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), {
         mcpServers: { demo: { ...original.mcpServers.demo, agentContext: mode } },
       }, 'Preserve raw env and unrelated configuration');
@@ -112,7 +126,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     });
     await before();
     assert.equal(reads, 0, 'Discovery when off never reads the resource body');
-    await menu('demo · Additional context: Off', 'Preview injected context');
+    await menu('context:demo Service summary Off', 'Preview injected context');
     await before();
     assert.equal(previews.pop(), `<gateway_tools>\n${sections.gateway_tools}\n</gateway_tools>\n\n<gateway_service_context>\n${sections.gateway_service_context}\n</gateway_service_context>`);
     assert.match(sections.gateway_service_context, /selected task/);
@@ -155,11 +169,11 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     await handlers.get('session_start')!({ reason: 'resume' }, ctx);
     await before();
     assert.match(sections.gateway_tools, /Tools: .*increment/);
-    await menu('demo · Tools: Service name & description');
+    await menu('demo Service summary On');
     await before();
     assert.equal(sections.gateway_tools, undefined);
     assert.match(sections.gateway_service_context, /"text": ""/, 'Context-only services work with Tools Off and no native view');
-    await menu('demo · Additional context: On');
+    await menu('context:demo Off On');
     await before();
     assert.deepEqual({ ...sections }, { other: 'preserved' });
     assert.equal(agentContextTokens(''), 0);

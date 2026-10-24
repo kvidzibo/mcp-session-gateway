@@ -22,7 +22,7 @@
   newly added services. Pi adapter only; **`/gateway` → Agent context** cycles each service inline
   and provides a private exact-content preview. Saves raw config without expanding credentials.
 - Per-service `additionalContext`: strict boolean, default `false`, independent of `agentContext`.
-  Supporting services expose an inline On/Off row. Read fresh before every agent run, even with Tools
+  Supporting services expose an inline Context On/Off column. Read fresh before every agent run, even with Tools
   Off; no resource body reads when Off or disabled. See [protocol and trust boundaries](agent-context.md).
 - Per-service `description`: optional non-empty string, trimmed for display/context. Service-only
   mode uses it, otherwise lists available model-visible tool names in sorted order. No LLM generation.

@@ -35,7 +35,8 @@ A read must not mutate task selection/state. Existing gateway run/service metada
 
 Per-service `additionalContext` is a strict boolean, **default false**, independent of existing
 `agentContext` Tools modes and their legacy top-level default. `/gateway` → Agent context uses
-inline Tools cycling and an Additional context On/Off toggle only when support is advertised.
+one service per row, with inline Tools cycling and a Context On/Off column when support is
+advertised (otherwise **—**). Left/right chooses the setting; Enter/Space changes it.
 Disabled services are locked, retain saved preferences, and inject nothing immediately on config
 reread (even before process restart). Off/disabled services' resource bodies are never read.
 
