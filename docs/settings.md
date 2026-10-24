@@ -10,9 +10,10 @@ With the [Pi adapter](../README.md#connect-pi), open **`/pi-services` → highli
 **Tab** in its app, or its settings action (named **Roles** for pi-delegate). Requires TUI, opt-in,
 connection and v1; other services work normally. See [delegate setup](integrations.md#live-delegate-panel).
 
-Pi-delegate lists roles first. Select one to edit model, thinking, tool checkboxes, extension access,
-enablement and its multiline prompt. **Add role** creates a draft with no tools or extension access;
-choose a model and enter a prompt to complete it; it saves automatically once valid. Extension access
+Pi-delegate lists each role with its configured model ID and reasoning level, without opening it.
+Type to filter by role, model/provider or reasoning. Select one to edit model, thinking, tool checkboxes,
+extension access, enablement and its multiline prompt. **Add role** creates a draft with no tools or
+extension access; choose a model and enter a prompt to complete it; it saves automatically once valid. Extension access
 enables configured extension and MCP discovery, not a sandbox or per-extension allowlist.
 
 1. Type case-insensitive words to filter fields/choices, including models/providers.

@@ -91,6 +91,10 @@ test('roles autosave nested fields, toggles and multiline prompts while incomple
       panel.focused = true;
       assert.equal(panel.focused, true);
       assert.ok(render().includes(step[0]), `Expected ${step[0]} in ${render()}`);
+      if (step[0] === 'Roles') {
+        assert.match(render(), saves ? /recon — test\/after · reasoning: high/ : /recon — test\/before · reasoning: off/);
+        if (saves >= 5) assert.match(render(), /writer — test\/after · reasoning: off/);
+      }
       if (step[0] === 'Roles › writer' && step[1][0] === '1. Model') {
         assert.match(render(), /Tools: \[\]/);
         assert.match(render(), /Extensions: false/);
@@ -128,6 +132,43 @@ test('roles autosave nested fields, toggles and multiline prompts while incomple
   assert.match(notices[0], /Edit not saved; previous value restored/);
   assert.deepEqual(notices.slice(1), ['Enter a valid, unused name', 'Enter a valid, unused name']);
   assert.deepEqual(document.values, { agents: { recon: original } }, 'No mutation of the source settings');
+});
+
+test('role summaries use configured values without a catalogue and filtering opens the matching role', async () => {
+  const role = { type: 'object', properties: {
+    model: { type: 'string' }, thinking: { type: 'string' },
+  } };
+  let dialogs = 0;
+  const ctx = { ui: { custom: async (factory: Function) => {
+    let answer: unknown;
+    const panel = factory({ terminal: { rows: 30, columns: 90 }, requestRender() {} },
+      { fg: (_: string, text: string) => text }, {}, (value: unknown) => { answer = value; });
+    try {
+      const render = () => panel.render(90).join('\n');
+      if (dialogs++ === 0) {
+        assert.match(render(), /recon — missing\/model · reasoning: off/);
+        assert.match(render(), /review — provider\/review · reasoning: high/);
+        assert.match(render(), /plain\n/, 'Unrelated collection entries retain their plain names');
+        panel.handleInput('PROVIDER/REVIEW HIGH');
+        assert.match(render(), /→ review — provider\/review · reasoning: high/);
+        assert.doesNotMatch(render(), /recon —/);
+        panel.handleInput('\r');
+      } else {
+        assert.match(render(), /Roles › review/);
+        assert.match(render(), /model: "provider\/review"/);
+        controller.abort();
+      }
+      return answer;
+    } finally { panel.dispose(); }
+  } } } as unknown as ExtensionContext;
+  const controller = new AbortController();
+  await editSettings(ctx, { schemaVersion: 1, title: 'Roles', revision: 'one', writable: false,
+    schema: { type: 'object', properties: { agents: { type: 'object', properties: {}, additionalProperties: role } } },
+    values: { agents: {
+      recon: { model: 'missing/model', thinking: 'off' },
+      review: { model: 'provider/review', thinking: 'high' }, plain: {},
+    } } }, async () => assert.fail('Browsing cannot write settings'), controller.signal);
+  assert.equal(dialogs, 2);
 });
 
 test('failed autosave stops editing without retrying an uncertain or conflicting write', async () => {
