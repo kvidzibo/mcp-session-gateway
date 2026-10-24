@@ -157,10 +157,17 @@ snapshot](docs/reference.md#startup-snapshot).
 
 ### Agent context
 
-Open **`/gateway` → Agent context** to see one row per configured service. **Enter** cycles
+Open **`/gateway` → Agent context** for independent inline settings per service. **Enter** cycles **Tools**:
 **Full schemas → Tool names & descriptions → Service name & description → Off**, saving in place.
 Services default to Off; an existing top-level `agentContext` remains the default for services
 without their own setting. New services inherit that default.
+
+Supporting services also show **Additional context: On/Off**, independent of Tools (default **Off**,
+per-service `additionalContext: false`). Enabling it reads fresh service-supplied reference task data
+before **every agent run**, without model tool calls. Failures explicitly say context is unavailable,
+never reuse an old task snapshot, and warn. Disabled services contribute neither section.
+Changes apply on the next run; prior conversation history is not erased. Supplied text is data,
+not authorization or trusted instructions. [Resource protocol](docs/agent-context.md).
 
 Set an optional `description` in a service's config entry for a compact service summary.
 Without one, service-only mode lists its available tool names: `Tools: search, fetch.`
@@ -172,12 +179,13 @@ zero tokens and are excluded immediately, even if stopping the service awaits a 
 Locked services appear last. Each service and tool row shows its approximate token size;
 service rows also show the mode and description. Expand a service for injected tool names/descriptions,
 then expand a tool for its full input schema (only in Full schemas mode). Service-only entries
-never invent tool details. **Tab** toggles the exact, untruncated raw injected context and back.
+never invent tool details. Additional content has its own collapsed row and token estimate; expand it
+to read the supplied text. **Tab** toggles the exact, untruncated raw injected sections and back.
 Use Pi's configured selection keys (normally **↑/↓**, **Enter**, **Esc**) to navigate/toggle/back;
 **PgUp/PgDn** scroll long descriptions/schemas without moving selection (**Home/End** jump).
-In raw view, **↑/↓** scroll. **r** refreshes; Back returns to settings. Nothing is sent to the
-model or persisted by previewing.
-The menu shows a total token estimate and a per-service estimate in the selected row's detail;
+In raw view, **↑/↓** scroll. **r** refreshes; Back returns to settings. No task snapshot is sent to the
+model or persisted by previewing. Context-only services may persist their host identity for later reads.
+The menu shows a tool-only token estimate (preview includes additional context) and a per-service estimate in the selected row's detail;
 per-service estimates include the shared header and section wrapper and should not be added together.
 Tool estimates cover only their injected JSON (no schema in summary mode), excluding shared overhead.
 Estimates use characters ÷ 4, rounded up; actual tokenizer counts vary.

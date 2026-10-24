@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 
-import { parseAgentContext, type AgentContextMode } from '../src/config.js';
+import { parseAdditionalContext, parseAgentContext, type AgentContextMode } from '../src/config.js';
 
 export type Display = 'minimal' | 'full';
 
@@ -23,6 +23,15 @@ export async function saveAgentContext(path: string, name: string, expected: Age
     const current = parseAgentContext(entry.agentContext === undefined ? config.agentContext : entry.agentContext);
     if (current !== expected) throw new Error('Agent context changed in another session; reopen the menu and retry');
     entry.agentContext = next;
+  });
+}
+
+export async function saveAdditionalContext(path: string, name: string, expected: boolean, signal: AbortSignal): Promise<void> {
+  await saveConfig(path, signal, (config) => {
+    const entry = serviceEntry(config, name);
+    if (entry.enabled === false) throw new Error('Service is disabled; saved preference retained');
+    if (parseAdditionalContext(entry.additionalContext) !== expected) throw new Error('Additional context changed in another session; reopen the menu');
+    entry.additionalContext = !expected;
   });
 }
 

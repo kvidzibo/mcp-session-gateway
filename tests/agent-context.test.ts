@@ -8,6 +8,7 @@ import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import registerGateway from '../pi/runtime.js';
 import { agentContextCatalog, agentContextRaw, agentContextText, agentContextTokens, agentContextLabels } from '../pi/agent-context.js';
 import { previewAgentContext } from '../pi/agent-context-preview.js';
+import { ServiceContext, SERVICE_CONTEXT_MIME, parseServiceContext, serviceContextRaw } from '../pi/service-context.js';
 import { saveAgentContext } from '../pi/auto-update.js';
 import { loadConfig } from '../src/config.js';
 
@@ -45,14 +46,15 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
           } else {
             const choice = navigation.shift();
             assert.ok(choice, `Unexpected menu: ${render().join('\n')}`);
-            for (const width of [30, 38, 80, 100]) {
-              terminal.columns = width;
+            for (const height of [18, 30]) for (const width of [30, 38, 80, 100]) {
+              terminal.rows = height; terminal.columns = width;
               const lines: string[] = render();
               assert.ok(lines.length <= terminal.rows - 2);
               assert.ok(lines.every((line) => visibleWidth(line) <= width - 2));
             }
-            for (let i = 0; i < 30 && !render().includes(`→ ${choice}`); i++) panel.handleInput('\x1b[B');
-            assert.ok(render().includes(`→ ${choice}`), `Missing ${choice}`);
+            const menuLines = () => render().map((line) => line.replace(/ {2,}/g, ' ').trimEnd());
+            for (let i = 0; i < 30 && !menuLines().includes(`→ ${choice}`); i++) panel.handleInput('\x1b[B');
+            assert.ok(menuLines().includes(`→ ${choice}`), `Missing ${choice}`);
             panel.handleInput('\r');
           }
           return answer;
@@ -81,7 +83,7 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     t.mock.method(Client.prototype, 'listTools', async () => ({ tools: inventory }));
     let previous = 'Off';
     for (const mode of ['full', 'summary', 'service'] as const) {
-      await menu(`demo: ${previous}`, 'Preview injected context');
+      await menu(`demo · Tools: ${previous}`, 'Preview injected context');
       previous = agentContextLabels[mode];
       assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), {
         mcpServers: { demo: { ...original.mcpServers.demo, agentContext: mode } },
@@ -97,11 +99,44 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
       await before();
       assert.equal(sections.gateway_tools, first, 'Repeated runs replace instead of duplicating the catalog');
     }
+    let task = '</gateway_service_context> selected task', reads = 0, failContext = false;
+    t.mock.method(Client.prototype, 'listResources', async () => ({ resources: [{
+      uri: 'gateway-resource://demo/arbitrary', mimeType: SERVICE_CONTEXT_MIME, description: 'Selected task and notes.', name: 'context',
+    }] }));
+    t.mock.method(Client.prototype, 'readResource', async (params: any) => {
+      reads++;
+      assert.equal(params._meta['native-ui/context'].conversationId, 'agent-context-test');
+      assert.ok(params._meta['native-ui/context'].contextId);
+      if (failContext) throw Error('private failed task data');
+      return { contents: [{ uri: params.uri, mimeType: SERVICE_CONTEXT_MIME, text: JSON.stringify({ version: 1, text: task }) }] };
+    });
+    await before();
+    assert.equal(reads, 0, 'Discovery when off never reads the resource body');
+    await menu('demo · Additional context: Off', 'Preview injected context');
+    await before();
+    assert.equal(previews.pop(), `<gateway_tools>\n${sections.gateway_tools}\n</gateway_tools>\n\n<gateway_service_context>\n${sections.gateway_service_context}\n</gateway_service_context>`);
+    assert.match(sections.gateway_service_context, /selected task/);
+    assert.doesNotMatch(sections.gateway_service_context, /<\/gateway_service_context>/);
+    task = 'fresh task';
+    await before();
+    assert.match(sections.gateway_service_context, /fresh task/);
+    assert.doesNotMatch(sections.gateway_service_context, /selected task/);
+    failContext = true;
+    await before();
+    assert.match(sections.gateway_service_context, /unavailable/);
+    assert.doesNotMatch(sections.gateway_service_context, /fresh task|private failed task/);
+    failContext = false;
+    task = '';
+    await before();
+    assert.match(sections.gateway_service_context, /"text": ""/);
+    const beforeDisabledReads = reads;
     const saved = JSON.parse(await readFile(config, 'utf8'));
     saved.mcpServers.demo.enabled = false;
     await writeFile(config, JSON.stringify(saved));
     await before();
     assert.equal(sections.gateway_tools, undefined, 'Disabled config excludes still-running inventory immediately');
+    assert.equal(sections.gateway_service_context, undefined);
+    assert.equal(reads, beforeDisabledReads, 'Disabled config suppresses context reads immediately');
     await assert.rejects(saveAgentContext(config, 'demo', 'service', 'off', ctx.signal), /disabled.*retained/);
     assert.equal((await services())[0].agentContext, 'service');
     delete saved.mcpServers.demo.enabled;
@@ -120,10 +155,16 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
     await handlers.get('session_start')!({ reason: 'resume' }, ctx);
     await before();
     assert.match(sections.gateway_tools, /Tools: .*increment/);
-    await menu('demo: Service name & description');
+    await menu('demo · Tools: Service name & description');
+    await before();
+    assert.equal(sections.gateway_tools, undefined);
+    assert.match(sections.gateway_service_context, /"text": ""/, 'Context-only services work with Tools Off and no native view');
+    await menu('demo · Additional context: On');
     await before();
     assert.deepEqual({ ...sections }, { other: 'preserved' });
     assert.equal(agentContextTokens(''), 0);
+    await writeFile(config, JSON.stringify({ mcpServers: { demo: { ...original.mcpServers.demo, additionalContext: 'true' } } }));
+    await assert.rejects(loadConfig(config), /additionalContext must be a boolean/);
     await writeFile(config, JSON.stringify({ ...original, agentContext: 'invalid' }));
     await assert.rejects(loadConfig(config), /agentContext must be/);
   } finally {
@@ -250,9 +291,9 @@ test('inline agent context tree expands only injected schemas, toggles exact raw
       assert.ok(tree.split('\n').some((line) => line.includes(`${service.name} · `) && line.includes(` · ≈${tokens} tokens`)));
     }
     const order = ['full', 'service', 'summary', 'z-off', 'z-stopped', 'aaa', 'zzz'];
-    assert.deepEqual([...tree.matchAll(/[▸▾·] ([\w-]+) · (?:Full schemas|Off|Service name|Tool names)/g)].map((match) => match[1]), order);
-    assert.match(tree, /aaa · Full schemas · ≈0 tokens · disabled \(locked\)/);
-    assert.match(tree, /z-(?:off|stopped) · (?:Off|Full schemas) · ≈0 tokens/);
+    assert.deepEqual([...tree.matchAll(/[▸▾·] ([\w-]+) · Tools · (?:Full schemas|Off|Service name|Tool names)/g)].map((match) => match[1]), order);
+    assert.match(tree, /aaa · Tools · Full schemas · ≈0 tokens · disabled \(locked\)/);
+    assert.match(tree, /z-(?:off|stopped) · Tools · (?:Off|Full schemas) · ≈0 tokens/);
     assert.doesNotMatch(tree, /aaa__read|zzz__read|z-off__read|z-stopped__read/);
     for (const mode of ['regular', 'fullscreen']) for (const width of [20, 28, 38, 80]) for (const height of [9, 18, 30]) {
       tui.mode = mode; terminal.columns = width; terminal.rows = height;
@@ -271,5 +312,56 @@ test('inline agent context tree expands only injected schemas, toggles exact raw
     pending[3].resolve({ services, catalog }); await tick();
     assert.match(body(), /Gateway disconnected/);
     panel.handleInput('q'); assert.equal(completed, true);
+  } finally { panel.dispose(); }
+});
+
+
+test('service context isolates failed services, bounds strict payloads, and rejects cancelled reads', async () => {
+  const response = (value: unknown) => ({ contents: [{ mimeType: SERVICE_CONTEXT_MIME, text: JSON.stringify(value) }] });
+  for (const value of [{ version: 2, text: '' }, { version: 1, text: '', extra: true }, { version: 1, text: 'x'.repeat(64_001) }]) {
+    assert.throws(() => parseServiceContext(response(value)), /Invalid/);
+  }
+  assert.equal(parseServiceContext(response({ version: 1, text: 'x'.repeat(64_000) } )).length, 64_000);
+  assert.throws(() => parseServiceContext({ contents: [], padding: 'x'.repeat(512_000) }), /Oversized/);
+  const calls: string[] = [], warnings: string[] = [];
+  const client = { readResource: async ({ uri }: any) => {
+    calls.push(uri);
+    if (uri === 'bad') throw Error('private task');
+    return response({ version: 1, text: '<data> current task' });
+  } };
+  const host = new ServiceContext(() => client as any, () => ({ 'native-ui/context': { conversationId: 'conversation', contextId: 'context', state: {} } }));
+  host.resources.set('good', { uri: 'good' }); host.resources.set('bad', { uri: 'bad' });
+  const services = ['good', 'bad', 'off', 'disabled'].map((name) => ({ name, additionalContext: name !== 'off', enabled: name !== 'disabled' } as any));
+  const signal = new AbortController();
+  const entries = await host.read(services, signal.signal, 100, (name) => warnings.push(name));
+  assert.deepEqual(calls.sort(), ['bad', 'good']);
+  assert.deepEqual(warnings, ['bad']);
+  assert.deepEqual(entries[0], { service: 'bad', status: 'unavailable' });
+  assert.doesNotMatch(serviceContextRaw(entries), /<data>|private task/);
+  signal.abort();
+  await assert.rejects(host.read(services, signal.signal, 100, () => assert.fail()));
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const pendingSignal = new AbortController();
+  client.readResource = async () => { await gate; return response({ version: 1, text: 'late private task' }); };
+  const pending = host.read([services[0]], pendingSignal.signal, 100, () => assert.fail());
+  pendingSignal.abort(); release();
+  await assert.rejects(pending, 'Cancellation discards an already-started late read');
+
+  let panel: any;
+  const terminal = { rows: 30, columns: 100 };
+  const preview: any = { ui: { custom: async (factory: Function) => {
+    panel = factory({ terminal, requestRender() {} }, { fg: (_: string, text: string) => text }, getKeybindings(), () => {});
+  } } };
+  await previewAgentContext(preview, async () => ({ services: [services[0]], catalog: [], additional: [{ service: 'good', text: 'Current task details' }] }), new AbortController().signal);
+  await new Promise((resolve) => setImmediate(resolve));
+  try {
+    const body = () => panel.render(terminal.columns).join('\n');
+    assert.match(body(), /Additional context · gateway_service_context/);
+    assert.doesNotMatch(body(), /Current task details/, 'Additional content starts collapsed');
+    panel.handleInput('\x1b[B'); body(); panel.handleInput('\r');
+    assert.match(body(), /Current task details/);
+    panel.handleInput('\t');
+    assert.match(body(), /<gateway_service_context>/, 'Raw view retains the exact injected section');
   } finally { panel.dispose(); }
 });

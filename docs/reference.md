@@ -21,6 +21,9 @@
   `agentContext` remains a backward-compatible default for entries without an override, including
   newly added services. Pi adapter only; **`/gateway` → Agent context** cycles each service inline
   and provides a private exact-content preview. Saves raw config without expanding credentials.
+- Per-service `additionalContext`: strict boolean, default `false`, independent of `agentContext`.
+  Supporting services expose an inline On/Off row. Read fresh before every agent run, even with Tools
+  Off; no resource body reads when Off or disabled. See [protocol and trust boundaries](agent-context.md).
 - Per-service `description`: optional non-empty string, trimmed for display/context. Service-only
   mode uses it, otherwise lists available model-visible tool names in sorted order. No LLM generation.
 
@@ -77,9 +80,16 @@ service and omits Off/disabled services (even with stale running inventory), ser
 tools (still discoverable on demand). Service-only mode omits tool descriptions/schemas; summary
 mode omits schemas. The catalog explains how to discover missing details through `gateway_tools`.
 
+Additional service reference data uses a separate `gateway_service_context` section, independent
+of the tool catalog. Both sections are replaced before each run; historical context already sent to
+the model is not erased. The private preview reads fresh too, labels sources separately, and its
+raw view shows both sections when additional context is enabled. Unavailable reads produce an
+explicit per-service unavailable status and warning, not an empty/no-task assertion or stale snapshot.
+Off/disabled services never contribute task data. See [resource protocol](agent-context.md).
+
 A dedicated `gateway_tools` prompt section is replaced, not repeatedly appended; Pi manages
 transcript deltas. The private native inline preview derives its tree and exact raw text from the
-same catalog snapshot used for injection, without a model turn or session persistence. Services
+same catalog snapshot used for injection, without a model turn or persisted task snapshot (durable host identity may be saved). Services
 start collapsed; expansion reveals only injected tools and, in Full schemas mode, full input
 schemas. Service-only entries have no tool/schema children. Tab toggles raw/tree; configured Pi
 selection keys navigate/toggle/back, page keys scroll long content independently of selection,
@@ -189,8 +199,8 @@ apps, and panels above the editor; clears on success/failure/shutdown. Nonintera
 not animate. [Package progress/concurrency](packages.md#automatic-startup-updates).
 
 New TUI sessions print display-only **Startup snapshot** cards: observed connection state, exposed
-tool count, approximate context tokens (`3 tools · ≈1.2k tokens`), and names wrapping beneath each
-service. Estimates reflect the configured Agent context mode, using characters ÷ 4 including the
+tool count, approximate context tokens (`3 tools · ≈1.2k tool-only tokens`), and names wrapping beneath each
+service. These tool-only estimates exclude additional service context and reflect the configured Tools mode, using characters ÷ 4 including the
 shared header/section wrapper; Off and services without model-visible tools cost zero. Per-service
 estimates include shared overhead and should not be added together. They exclude future tool calls
 and results; actual tokenizer counts vary. Older cards without estimates still render normally.

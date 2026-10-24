@@ -184,6 +184,25 @@ export class NativeUI {
     }) };
   }
 
+  async readContext<T>(service: string, run: (meta: Record<string, unknown>) => Promise<T>): Promise<T> {
+    const current = this.current();
+    return this.serial(service, async () => {
+      const result = await run(this.contextMeta(service));
+      if (!current()) throw new Error('Gateway context changed during context read');
+      return result;
+    }).finally(async () => {
+      const uri = this.resources.get(service);
+      if (current() && uri && this.dirty.has(uri)) await this.refresh(uri);
+    });
+  }
+
+  /** Persist identity for context-only services just as for native views. */
+  contextMeta(service: string): Record<string, unknown> {
+    const meta = this.meta(service);
+    if (this.ctx && !this.savedContexts.has(service)) this.save(service);
+    return meta;
+  }
+
   private apply(uri: string, view: NativeView): void {
     const service = serviceOf(uri);
     const changed = !this.savedContexts.has(service) || JSON.stringify(this.states.get(service)) !== JSON.stringify(view.state) || this.retained.has(service) !== Boolean(view.retainOnNew);

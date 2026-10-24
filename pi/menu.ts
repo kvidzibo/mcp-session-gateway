@@ -1,9 +1,10 @@
 import { DynamicBorder, keyText, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Container, getKeybindings, Input, Key, matchesKey, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi, type Component, type TUI, type KeyId } from '@earendil-works/pi-tui';
+import { Container, getKeybindings, Input, Key, matchesKey, SettingsList, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi, type Component, type TUI, type KeyId } from '@earendil-works/pi-tui';
 import { clean } from '../src/native-ui.js';
 import { showText } from './text-panel.js';
 
 export interface MenuItem { id: string; label: string; description: string; disabled?: boolean }
+export interface SettingsMenuItem extends MenuItem { currentValue?: string; values?: string[] }
 interface MenuOptions {
   signal?: AbortSignal;
   searchable?: boolean;
@@ -127,6 +128,63 @@ export class GatewayMenu {
         if (!signal.aborted) await tab!.action(picked.tab);
       } else return picked === '__back' ? undefined : picked;
     }
+  }
+
+  /** Native Pi SettingsList; activation is persisted by the caller, then reloaded. */
+  async settings(path: string[], summary: string, items: SettingsMenuItem[]): Promise<string | undefined> {
+    if (this.signal.aborted) return;
+    const key = path.join('/');
+    return this.ctx.ui.custom<string | undefined>((tui, theme, _keys, done) => {
+      let list: SettingsList, capacity = 0, descriptionWidth = 0, usable = false, geometry = '', selected = this.selected.get(key);
+      const cancel = () => done(undefined);
+      const choices: SettingsMenuItem[] = [...items, { id: '__back', label: 'Back', description: 'Return to Gateway.' }];
+      const rebuild = (size: number, width: number) => {
+        capacity = size; descriptionWidth = width;
+        list = new SettingsList(choices.map((item) => {
+          return { id: item.id, label: oneLine(item.label),
+            currentValue: item.currentValue ?? '', description: wrapTextWithAnsi(oneLine(item.description), Math.max(1, width - 4)).slice(0, 2).join('\n'),
+            // No submenu: the caller cycles/toggles with concurrency-safe config persistence.
+            values: item.disabled ? undefined : item.values ?? [''] };
+        }), size, {
+          label: (text, active) => {
+            const item = choices.find((item) => oneLine(item.label) === text);
+            if (active) selected = item?.id;
+            const locked = item?.disabled;
+            return theme.fg(locked ? 'dim' : active ? 'accent' : 'muted', text);
+          },
+          value: (text, active) => theme.fg(active && choices.find((item) => item.id === selected)?.disabled ? 'dim' : active ? 'accent' : 'muted', text),
+          description: (text) => theme.fg('muted', text), cursor: '→ ', hint: (text) => theme.fg('dim', text),
+        }, (id) => {
+          if (this.signal.aborted) return;
+          this.selected.set(key, id);
+          done(id === '__back' ? undefined : id);
+        }, cancel);
+        if (selected) list.selectItem(selected);
+      };
+      this.signal.addEventListener('abort', cancel, { once: true });
+      const component = {
+        render: (width: number): string[] => {
+          const height = inlineHeight(tui, width, component);
+          geometry = `${tui.terminal.rows}:${tui.terminal.columns}`;
+          usable = height >= 12 && width >= 28;
+          if (!usable) return [truncateToWidth('Enlarge terminal · Esc back', width)];
+          const size = Math.max(1, Math.min(10, height - 11));
+          if (capacity !== size || descriptionWidth !== width) rebuild(size, width);
+          const border = new DynamicBorder((text) => theme.fg('border', text)).render(width);
+          return [...border, truncateToWidth(theme.fg('accent', path.join(' › ')), width),
+            truncateToWidth(summary, width), '', ...list.render(width), ...border].map((line) => line.trimEnd());
+        },
+        handleInput: (data: string) => {
+          if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('c'))) cancel();
+          else if (usable && geometry === `${tui.terminal.rows}:${tui.terminal.columns}`) list.handleInput(data);
+          tui.requestRender();
+        },
+        handleMouse: (event: import('@earendil-works/pi-tui').TuiMouseEvent) => usable && event.y >= 4 ? list.handleMouse({ ...event, y: event.y - 4 }) : undefined,
+        invalidate: () => list?.invalidate(),
+        dispose: () => this.signal.removeEventListener('abort', cancel),
+      };
+      return component;
+    });
   }
 
   info(path: string[], text: string): Promise<void> {
