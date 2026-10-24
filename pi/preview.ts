@@ -8,9 +8,11 @@ function markdownSections(body: string): string[] {
   for (const start of separator < 0 ? [0] : [separator + 2, 0]) {
     const json = body.slice(start);
     if (!/^(?:\{|\[)/.test(json)) continue;
-    try { JSON.parse(json); }
+    let value: object;
+    try { value = JSON.parse(json); }
     catch { continue; }
-    return [body.slice(0, start).replace(/\n+$/g, ''), `\`\`\`json\n${json}\n\`\`\``];
+    return [body.slice(0, start).replace(/\n+$/g, ''),
+      Object.keys(value).length ? `\`\`\`json\n${json}\n\`\`\`` : ''];
   }
   return [body];
 }
@@ -32,7 +34,7 @@ export function nativePreview(data: { title: string; text: string }, theme: Them
   const [title, ...rest] = clean(data.text).split('\n');
   const body = rest.join('\n').replace(/^\n+|\n+$/g, '');
   const sections = markdownSections(body).filter(Boolean).map((text) => new Markdown(text, 0, 0, getMarkdownTheme()));
-  const label = `${clean(data.title).replace(/\s+/g, ' ')} · display only · not sent to model`;
+  const label = clean(data.title).replace(/\s+/g, ' ');
   return {
     invalidate() { for (const section of sections) section.invalidate(); },
     render(width: number): string[] {
