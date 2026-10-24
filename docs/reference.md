@@ -122,10 +122,32 @@ configuration disables are excluded. Full adds a wrapping panel below the editor
  delegate ✓12 ✗0  │  pinote ✓17 ✗2  │  browser ✓0 ✗0
 ```
 
-Click names/counters for apps or feature menus; closing returns to the editor. Settings remain
-separate, disabled when unavailable. Disconnected/`previous` services have no link. Keyboard:
-**`/pi-services` → service → Enter**. Nonzero successes `✓` are green, failures `✗` red, in-flight
-`…` amber; zeros/names muted.
+Click a **service name** for its controls (only connected services); keyboard:
+**`/pi-services` → service → Enter**. Click an individual `✓`, `✗`, or `…` count for that
+service's successful, failed, or pending child tool calls, including disconnected/`previous`
+services. Keyboard fallback, also in Minimal mode: **`/gateway` → Tool call history → service
+→ status**. Regular mode uses the terminal click handler; fullscreen uses native Pi clicks.
+Nonzero successes `✓` are green, failures `✗` red, in-flight `…` amber; zeros/names muted.
+
+History lists tool names and trimmed parameter/result previews. Enter opens a call with at most
+two visible lines per preview. Result previews show readable text when available; expansion shows
+the complete retained MCP response. **Tab** selects Parameters, Result/error, or Back; **Enter**
+expands/collapses each payload independently. In fullscreen, click a section heading to toggle it.
+Arrow keys or the mouse wheel scroll; regular mode also supports Page keys (fullscreen keeps Pi's
+transcript page shortcuts). Back/Escape returns to the list. Selection, confirmation and cancel
+follow Pi's configured selection keybindings. **r** refreshes the filtered list; an open call
+updates when its result arrives or the connection closes. These are inline native screens,
+not overlays, and do not send anything to the model.
+
+Payload retention is **memory-only**, across explicit gateway restarts in the same loaded Pi
+session: the newest **100 dispatches globally**, with at most **16,384 characters per parameter
+or result payload** (larger values show a retention-truncation marker). Reload, shutdown,
+new/resumed/forked sessions clear payload history; session-wide counters keep their existing
+semantics below. Each filter shows retained versus full-session totals and the number whose
+payloads are unavailable. Old payloads cannot be recovered or expanded past the retention limit.
+Tool arguments/results can contain sensitive data: they are not written to gateway logs, Pi
+session entries, or model context by the inspector. Terminal control sequences are sanitized
+for display. This is a diagnostic preview, not an audit log or a secret-redaction feature.
 
 - Count child tool dispatches, including background tool queries, even in Minimal mode. Exclude
   discovery, resources, settings, native actions, and pre-dispatch rejections.
@@ -138,8 +160,10 @@ separate, disabled when unavailable. Disconnected/`previous` services have no li
   unflushed notifications; counters are not an audit log.
 
 `notifications/gateway/tool-call` carries `{id, service, phase}`: UUID dispatch ID and `started`,
-`success`, or `failure` at dispatch/settlement. Pre-dispatch rejections and gateway-owned tools emit
-nothing. No arguments/results or polling.
+`success`, or `failure` at dispatch/settlement. Started events additionally carry the original
+child `tool` name and bounded serialized `parameters`; settlement carries bounded serialized
+`output` (service result or thrown error). These transient notifications are never persisted by
+the adapter. Pre-dispatch rejections and gateway-owned tools emit nothing. No polling.
 
 ### Startup snapshot
 

@@ -139,7 +139,12 @@ Resources, Connection / restart…, Enable/disable service, then Back.
 The footer's ` MCP 3 services` excludes disabled/unactivated services at the last startup,
 **not a health check**. Click it to open Services/recovery; Kitty needs the
 [click handler](docs/native-ui.md#terminal-clicks). **Display: Minimal / Full** saves immediately;
-Full adds clickable service counters, collapsed to one summary row while a gateway dialog is open
+Full adds clickable service counters: service names open controls; individual success/failure/pending
+counts open filtered tool-call history. Keyboard: **`/gateway` → Tool call history**. Parameters and
+results have trimmed previews, independent expansion, and scrolling in native inline screens.
+History keeps only the latest 100 calls in memory (16,384 characters per payload), never logs or
+persists payloads, and shows when historical totals have no retained payload. Reload/shutdown clears
+payloads, not saved totals. Counters collapse to one summary row while a gateway dialog is open
 to keep controls visible. See [counter
 semantics](docs/reference.md#display-and-call-counts) and the historical [startup
 snapshot](docs/reference.md#startup-snapshot).
