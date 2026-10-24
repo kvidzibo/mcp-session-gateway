@@ -502,15 +502,14 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
           try { autoUpdate = await readAutoUpdate(configPath); }
           catch (error) { autoUpdateError = clean(String(error)); }
           const action = nextAction ?? await menu.choose(['Gateway'], connected ? 'Connected · one gateway for this Pi session' : 'Disconnected · packages and recovery are still available', [
+            { id: 'agent-context', label: 'Agent context', description: 'Cycle context detail for each service: full schemas, tool summaries, service summary or off. Preview the exact catalog.' },
             { id: 'services', label: 'Services', description: 'Enable/disable services, open apps, edit settings or read resources.' },
             { id: 'calls', label: 'Tool call history', description: 'Inspect retained parameters and results privately. Session totals may include calls whose payloads are unavailable.' },
             { id: 'packages', label: 'Packages', description: 'Inspect versions, prepare updates, activate or roll back. Running services stay unchanged.' },
-            { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
             { id: 'auto-update', label: `Auto update: ${autoUpdate === undefined ? 'Unavailable' : autoUpdate ? 'On' : 'Off'}`, disabled: autoUpdate === undefined,
               description: autoUpdateError || 'Enter toggles and saves. On permits gateway + service updates and trusted builds at startup/reload, without prompts. Gateway updates need a Pi restart. Code runs with OS permissions.' },
             { id: 'display', label: `Display: ${menuDisplay === undefined ? 'Unavailable' : menuDisplay === 'full' ? 'Full' : 'Minimal'}`, disabled: menuDisplay === undefined,
               description: displayError || 'Enter toggles and saves immediately. Full shows per-service success (green), failure (red), and running (amber) tool calls.' },
-            { id: 'agent-context', label: 'Agent context', description: 'Cycle context detail for each service: full schemas, tool summaries, service summary or off. Preview the exact catalog.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;
@@ -626,22 +625,22 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                 // A counter opens one service, not the parent menus on close.
                 if (typeof initialAction === 'object') return;
               }
-            } else if (action === 'update-all') {
-              if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before updating packages', 'warning'); continue; }
-              const config = await loadConfig(configPath, { expandEnvironment: false });
-              const work = updateAllPackages(ctx, config, signal);
-              managerWork = work;
-              try { await work; } finally { if (managerWork === work) managerWork = undefined; }
             } else if (action === 'packages') {
               while (!signal.aborted) {
                 const config = await loadConfig(configPath, { expandEnvironment: false });
                 const selected = await menu.choose(['Gateway', 'Packages'], 'Preparation → activation → restart are separate decisions', [
                   { id: 'status', label: 'Installed versions', description: 'Read local package metadata only. Versions describe installations, not running processes.' },
                   { id: 'check', label: 'Check for updates', description: 'Contact public package sources to compare versions. Nothing is installed.', disabled: !config.packages.length },
+                  { id: 'update-all', label: 'Update all packages', description: 'Run a one-time update of managed releases and opted-in local checkouts. Review and confirm; no restart.' },
                   { id: 'manage', label: 'Manage releases', description: 'Choose a managed package to prepare, activate, roll back or view its build log.', disabled: !config.packages.some((pkg) => pkg.managed) },
                 ]);
                 if (!selected) break;
-                if (selected === 'manage') {
+                if (selected === 'update-all') {
+                  if (!ctx.isIdle()) { ctx.ui.notify('Wait for the current agent turn to finish before updating packages', 'warning'); continue; }
+                  const work = updateAllPackages(ctx, config, signal);
+                  managerWork = work;
+                  try { await work; } finally { if (managerWork === work) managerWork = undefined; }
+                } else if (selected === 'manage') {
                   const work = managePackages(ctx, config, signal, menu);
                   managerWork = work;
                   try { await work; } finally { if (managerWork === work) managerWork = undefined; }
