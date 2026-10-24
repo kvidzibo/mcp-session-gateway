@@ -16,9 +16,13 @@
 - `autoUpdateConcurrency`: integer **1–128**; `1` is sequential. Does not enable `autoUpdate`. See
   [defaults and resource limits](packages.md#automatic-startup-updates).
 - `display`: `"minimal"` (default) or `"full"`.
-- `agentContext`: `"off"` (default), `"summary"` (names/descriptions), or `"full"` (also input
-  schemas). Pi adapter only; configure through **`/gateway` → Agent context**, including a private
-  exact-content preview. Saves raw configuration without expanding credentials.
+- Per-service `agentContext`: `"off"` (default), `"service"` (service name/description),
+  `"summary"` (tool names/descriptions), or `"full"` (also input schemas). A top-level
+  `agentContext` remains a backward-compatible default for entries without an override, including
+  newly added services. Pi adapter only; **`/gateway` → Agent context** cycles each service inline
+  and provides a private exact-content preview. Saves raw config without expanding credentials.
+- Per-service `description`: optional non-empty string, trimmed for display/context. Service-only
+  mode uses it, otherwise lists available model-visible tool names in sorted order. No LLM generation.
 
 ### Environment variables
 
@@ -67,13 +71,19 @@ startup, advertising form elicitation only when supported by the harness.
 
 ### Agent context injection
 
-Before each agent run, the adapter rereads `agentContext` and discovers the current model-visible
-tools when enabled. A dedicated `gateway_tools` prompt section is replaced, not repeatedly appended;
-Pi manages transcript deltas. The preview uses the same renderer and discovery path, without a
-model turn. Both views show a rough added-token estimate (characters ÷ 4, including the section
-wrapper; tokenizer-dependent). Tool metadata is marked as service-provided reference data, not instructions or
-permission. Menus, resources and app-only tools are not injected. Discovery/configuration failures
-omit the section and show a warning rather than reusing a stale catalog.
+Before each agent run, the adapter rereads service descriptions and context modes, discovering
+current model-visible tools unless all services are Off. The catalog groups tools by configured
+service and omits Off services, services with no available model-visible tools, and gateway-owned
+tools (still discoverable on demand). Service-only mode omits tool descriptions/schemas; summary
+mode omits schemas. The catalog explains how to discover missing details through `gateway_tools`.
+
+A dedicated `gateway_tools` prompt section is replaced, not repeatedly appended; Pi manages
+transcript deltas. The private preview uses the same renderer/discovery path without a model turn.
+Menu and preview show rough added-token estimates (characters ÷ 4, including the section wrapper;
+tokenizer-dependent). Selected service details include a standalone estimate with the shared
+header, so per-service estimates are not additive. Metadata is reference data, not instructions
+or permission. Menus, resources and app-only tools are not injected. Discovery/configuration
+failures omit the section and warn rather than reusing a stale catalog.
 
 Saved choices apply across sessions on their next run, including resume/fork; changing modes does
 not erase previous messages. Calls still go through `gateway_call`, with existing validation and

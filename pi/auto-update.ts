@@ -15,13 +15,14 @@ function parse(text: string): Record<string, unknown> {
   return config;
 }
 
-export async function readAgentContext(path: string): Promise<AgentContextMode> {
-  return parseAgentContext(parse(await readFile(path, 'utf8')).agentContext);
-}
-
-export async function saveAgentContext(path: string, expected: AgentContextMode, next: AgentContextMode, signal: AbortSignal): Promise<void> {
+export async function saveAgentContext(path: string, name: string, expected: AgentContextMode, next: AgentContextMode, signal: AbortSignal): Promise<void> {
   parseAgentContext(next);
-  await savePreference(path, 'agentContext', expected, next, signal);
+  await saveConfig(path, signal, (config) => {
+    const entry = serviceEntry(config, name);
+    const current = parseAgentContext(entry.agentContext === undefined ? config.agentContext : entry.agentContext);
+    if (current !== expected) throw new Error('Agent context changed in another session; reopen the menu and retry');
+    entry.agentContext = next;
+  });
 }
 
 export async function readDisplay(path: string): Promise<Display> {
@@ -44,22 +45,26 @@ export async function toggleAutoUpdate(path: string, expected: boolean, signal: 
   return !expected;
 }
 
-async function savePreference(path: string, key: 'autoUpdate' | 'display' | 'agentContext', expected: boolean | Display | AgentContextMode, next: boolean | Display | AgentContextMode, signal: AbortSignal): Promise<void> {
+async function savePreference(path: string, key: 'autoUpdate' | 'display', expected: boolean | Display, next: boolean | Display, signal: AbortSignal): Promise<void> {
   await saveConfig(path, signal, (config) => {
-    const current = config[key] ?? (key === 'display' ? 'minimal' : key === 'agentContext' ? 'off' : false);
-    if (current !== expected) throw new Error(`${key === 'autoUpdate' ? 'Auto update' : key === 'display' ? 'Display' : 'Agent context'} changed in another session; reopen the menu and retry`);
+    const current = config[key] ?? (key === 'display' ? 'minimal' : false);
+    if (current !== expected) throw new Error(`${key === 'autoUpdate' ? 'Auto update' : 'Display'} changed in another session; reopen the menu and retry`);
     config[key] = next;
   });
 }
 
+function serviceEntry(config: Record<string, unknown>, name: string): Record<string, unknown> {
+  if ('mcpServers' in config && 'servers' in config) throw new Error('Use mcpServers or servers, not both');
+  const servers = config.mcpServers ?? config.servers;
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) throw new Error('Missing server configuration');
+  const service = Object.hasOwn(servers, name) ? (servers as Record<string, unknown>)[name] : undefined;
+  if (!service || typeof service !== 'object' || Array.isArray(service)) throw new Error('Service no longer configured');
+  return service as Record<string, unknown>;
+}
+
 export async function toggleServiceEnabled(path: string, name: string, expected: boolean, signal: AbortSignal): Promise<boolean> {
   await saveConfig(path, signal, (config) => {
-    if ('mcpServers' in config && 'servers' in config) throw new Error('Use mcpServers or servers, not both');
-    const servers = config.mcpServers ?? config.servers;
-    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) throw new Error('Missing server configuration');
-    const service = (servers as Record<string, unknown>)[name];
-    if (!service || typeof service !== 'object' || Array.isArray(service)) throw new Error('Service no longer configured');
-    const entry = service as Record<string, unknown>;
+    const entry = serviceEntry(config, name);
     if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') throw new Error('enabled must be a boolean');
     if ((entry.enabled !== false) !== expected) throw new Error('Service changed in another session; reopen the menu and retry');
     entry.enabled = !expected;
