@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { open, readFile, realpath, rename, stat, unlink } from 'node:fs/promises';
 
+import { parseAgentContext, type AgentContextMode } from '../src/config.js';
+
 export type Display = 'minimal' | 'full';
 
 function parse(text: string): Record<string, unknown> {
@@ -9,7 +11,17 @@ function parse(text: string): Record<string, unknown> {
   const config = data as Record<string, unknown>;
   if (config.autoUpdate !== undefined && typeof config.autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
   if (config.display !== undefined && config.display !== 'minimal' && config.display !== 'full') throw new Error('display must be minimal or full');
+  parseAgentContext(config.agentContext);
   return config;
+}
+
+export async function readAgentContext(path: string): Promise<AgentContextMode> {
+  return parseAgentContext(parse(await readFile(path, 'utf8')).agentContext);
+}
+
+export async function saveAgentContext(path: string, expected: AgentContextMode, next: AgentContextMode, signal: AbortSignal): Promise<void> {
+  parseAgentContext(next);
+  await savePreference(path, 'agentContext', expected, next, signal);
 }
 
 export async function readDisplay(path: string): Promise<Display> {
@@ -32,10 +44,10 @@ export async function toggleAutoUpdate(path: string, expected: boolean, signal: 
   return !expected;
 }
 
-async function savePreference(path: string, key: 'autoUpdate' | 'display', expected: boolean | Display, next: boolean | Display, signal: AbortSignal): Promise<void> {
+async function savePreference(path: string, key: 'autoUpdate' | 'display' | 'agentContext', expected: boolean | Display | AgentContextMode, next: boolean | Display | AgentContextMode, signal: AbortSignal): Promise<void> {
   await saveConfig(path, signal, (config) => {
-    const current = config[key] ?? (key === 'display' ? 'minimal' : false);
-    if (current !== expected) throw new Error(`${key === 'autoUpdate' ? 'Auto update' : 'Display'} changed in another session; select again to toggle the current value`);
+    const current = config[key] ?? (key === 'display' ? 'minimal' : key === 'agentContext' ? 'off' : false);
+    if (current !== expected) throw new Error(`${key === 'autoUpdate' ? 'Auto update' : key === 'display' ? 'Display' : 'Agent context'} changed in another session; reopen the menu and retry`);
     config[key] = next;
   });
 }

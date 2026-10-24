@@ -3,6 +3,14 @@ import { availableParallelism } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parsePackages, type PackageConfig } from './packages.js';
 
+export type AgentContextMode = 'off' | 'summary' | 'full';
+
+export function parseAgentContext(value: unknown): AgentContextMode {
+  if (value === undefined) return 'off';
+  if (value !== 'off' && value !== 'summary' && value !== 'full') throw new Error('agentContext must be off, summary or full');
+  return value;
+}
+
 export interface ServiceConfig {
   name: string;
   enabled?: boolean;
@@ -56,6 +64,7 @@ export async function loadConfig(path: string, options: { expandEnvironment?: bo
     throw new Error('logFile must be a non-empty path string');
   }
   if (data.display !== undefined && data.display !== 'minimal' && data.display !== 'full') throw new Error('display must be minimal or full');
+  parseAgentContext(data.agentContext);
   const autoUpdate = data.autoUpdate === undefined ? false : data.autoUpdate;
   if (typeof autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
   const autoUpdateConcurrency = data.autoUpdateConcurrency === undefined
