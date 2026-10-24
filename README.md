@@ -146,8 +146,9 @@ snapshot](docs/reference.md#startup-snapshot).
 
 ### Agent context
 
-Open **`/gateway` → Agent context** to choose **Injection: Off** (default),
-**Names & descriptions**, or **Full schemas**. **Preview injected context** shows the exact
+Open **`/gateway` → Agent context** and select **Injection** to cycle in place through
+**Off** (default) → **Names & descriptions** → **Full schemas** → **Off**, without opening a submenu.
+**Preview injected context** shows the exact
 current catalog privately, with scrolling and refresh; opening it never injects anything. The menu
 and preview show the approximate added token cost (characters ÷ 4, including the section wrapper;
 actual tokenizer counts vary).
