@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 import registerGateway from '../pi/runtime.js';
-import { agentContextText, agentContextTokens, agentContextLabels } from '../pi/agent-context.js';
+import { agentContextCatalog, agentContextRaw, agentContextText, agentContextTokens, agentContextLabels } from '../pi/agent-context.js';
+import { previewAgentContext } from '../pi/agent-context-preview.js';
 import { saveAgentContext } from '../pi/auto-update.js';
 import { loadConfig } from '../src/config.js';
 
@@ -30,15 +31,16 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
       custom: async (factory: Function) => {
         let answer: unknown;
         const terminal = { rows: 30, columns: 100 };
-        const panel = factory({ terminal, requestRender() {} }, ctx.ui.theme, {}, (value: unknown) => { answer = value; });
+        const panel = factory({ terminal, requestRender() {} }, ctx.ui.theme, getKeybindings(), (value: unknown) => { answer = value; });
         const render = () => panel.render(terminal.columns - 2) as string[];
         try {
-          if (render()[0].includes('Agent context › Preview')) {
+          if (render().some((line) => line.includes('Agent context › Preview'))) {
             for (let i = 0; i < 100 && render().join('\n').includes('Loading…'); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+            panel.handleInput('\t');
             terminal.rows = 10_000; terminal.columns = 30_000;
-            const body = render().slice(1, -2).join('\n');
-            assert.match(body, /≈[\d,]+ tokens · rough estimate/);
-            previews.push(body.split('\n').slice(2).join('\n'));
+            const lines = render();
+            assert.match(lines[2], /≈[\d,]+ tokens · rough estimate/);
+            previews.push(lines.slice(3, -4).map((line) => line.trimEnd()).join('\n'));
             panel.handleInput('\x1b');
           } else {
             const choice = navigation.shift();
@@ -95,6 +97,15 @@ test('Agent context modes persist, preview the injected catalog, and replace sta
       await before();
       assert.equal(sections.gateway_tools, first, 'Repeated runs replace instead of duplicating the catalog');
     }
+    const saved = JSON.parse(await readFile(config, 'utf8'));
+    saved.mcpServers.demo.enabled = false;
+    await writeFile(config, JSON.stringify(saved));
+    await before();
+    assert.equal(sections.gateway_tools, undefined, 'Disabled config excludes still-running inventory immediately');
+    await assert.rejects(saveAgentContext(config, 'demo', 'service', 'off', ctx.signal), /disabled.*retained/);
+    assert.equal((await services())[0].agentContext, 'service');
+    delete saved.mcpServers.demo.enabled;
+    await writeFile(config, JSON.stringify(saved));
     const appOnly: any = { name: 'demo__private', inputSchema: { type: 'object' }, _meta: { ui: { visibility: ['app'] } } };
     assert.doesNotMatch(agentContextText([{ name: 'demo', agentContext: 'full' }], [appOnly]), /private/);
     await assert.rejects(saveAgentContext(config, 'demo', 'off', 'summary', ctx.signal), /changed in another session/);
@@ -131,12 +142,13 @@ test('mixed service modes inherit legacy defaults, isolate saves, and summarize 
     service: { command: 'unused', agentContext: 'service', description: ' Search and fetch content. ' },
     fallback: { command: 'unused', agentContext: 'service' },
     hidden: { command: 'unused', agentContext: 'off' },
+    disabled: { command: 'unused', enabled: false, agentContext: 'full' },
     stopped: { command: 'unused', agentContext: 'service', description: 'Unavailable' },
   } };
   const tool = (name: string, appOnly = false): any => ({ name, description: 'Tool detail', inputSchema: { type: 'object' },
     ...(appOnly ? { _meta: { ui: { visibility: ['app'] } } } : {}) });
   const inventory = ['detailed__read', 'compact__find', 'service__search', 'fallback__z', 'fallback__a', 'hidden__secret',
-    'gateway__identity', 'removed__old'].map((name) => tool(name));
+    'gateway__identity', 'removed__old', 'disabled__stale'].map((name) => tool(name));
   inventory.push(tool('fallback__private', true), tool('stopped__private', true));
   try {
     await writeFile(config, JSON.stringify(original));
@@ -148,8 +160,10 @@ test('mixed service modes inherit legacy defaults, isolate saves, and summarize 
     assert.deepEqual(catalog.find((entry: any) => entry.name === 'fallback'), { name: 'fallback', description: 'Tools: a, z.' });
     assert.ok(catalog.find((entry: any) => entry.name === 'detailed').tools[0].inputSchema);
     assert.equal(catalog.find((entry: any) => entry.name === 'compact').tools[0].inputSchema, undefined);
-    assert.doesNotMatch(text, /secret|private|gateway__identity|removed__old|Unavailable/);
+    assert.doesNotMatch(text, /secret|private|gateway__identity|removed__old|Unavailable|disabled__stale/);
     assert.equal(agentContextText(services, []), '', 'Removed/disconnected tools leave no service advertisement');
+    assert.equal(agentContextTokens(agentContextText([services.find((service) => service.name === 'disabled')!], inventory)), 0);
+    await assert.rejects(saveAgentContext(config, 'disabled', 'full', 'off', signal), /disabled.*retained/);
     await saveAgentContext(config, 'compact', 'summary', 'off', signal);
     await saveAgentContext(config, 'detailed', 'full', 'service', signal);
     assert.deepEqual(JSON.parse(await readFile(config, 'utf8')), { ...original, servers: {
@@ -164,4 +178,79 @@ test('mixed service modes inherit legacy defaults, isolate saves, and summarize 
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test('inline agent context tree expands only injected schemas, toggles exact raw, and ignores cancelled refreshes', async () => {
+  const services: any[] = [
+    { name: 'full', agentContext: 'full', description: 'Full service' },
+    { name: 'service', agentContext: 'service', description: 'Service summary' },
+    { name: 'summary', agentContext: 'summary' },
+  ];
+  const inventory: any[] = services.map(({ name }) => ({ name: `${name}__read`, description: `${name} tool description`,
+    inputSchema: { type: 'object', description: 'schema tail ' + 'detail '.repeat(1000) } }));
+  const catalog = agentContextCatalog(services, inventory);
+  let panel: any, completed = false;
+  const pending: { signal: AbortSignal; resolve: (value: any) => void }[] = [];
+  const abort = new AbortController(), connection = new AbortController();
+  const terminal = { rows: 24, columns: 80 };
+  const tui: any = { terminal, requestRender() {}, mode: 'regular' };
+  const theme = { fg: (_: string, text: string) => text };
+  // Non-default selection bindings must work, too.
+  const bindings = { matches: (data: string, action: string) => data === ({
+    'tui.select.up': 'k', 'tui.select.down': 'j', 'tui.select.confirm': 'x',
+    'tui.select.cancel': 'q', 'tui.select.pageDown': 'd', 'tui.select.pageUp': 'u',
+  } as Record<string, string>)[action] };
+  const ctx: any = { ui: { custom: async (factory: Function, options: unknown) => {
+    assert.equal(options, undefined, 'Native inline screen, not overlay');
+    panel = factory(tui, theme, bindings, () => { completed = true; });
+  } } };
+  await previewAgentContext(ctx, (signal) => new Promise((resolve) => pending.push({ signal, resolve })), abort.signal, connection.signal);
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  const render = () => panel.render(terminal.columns) as string[];
+  const body = () => render().join('\n');
+  try {
+    assert.match(body(), /Loading…/);
+    await tick(); pending[0].resolve({ services, catalog }); await tick();
+    assert.match(body(), /› ▸ full/, 'First service is selected after a slow initial read');
+    assert.match(body(), /Full service/);
+    assert.doesNotMatch(body(), /full tool description|schema tail/, 'Services start collapsed');
+    panel.handleInput('x');
+    assert.match(body(), /full__read/);
+    panel.handleInput('j'); panel.handleInput('x');
+    assert.match(body(), /schema tail/);
+    const top = body(); panel.handleInput('d');
+    assert.notEqual(body(), top, 'Page keys scroll long expanded schemas without changing selection');
+    panel.handleInput('k'); render(); panel.handleInput('x'); render();
+    panel.handleInput('j');
+    assert.match(body(), /Service-only entry/);
+    panel.handleInput('x');
+    assert.doesNotMatch(body(), /service__read/, 'Service-only entries never invent tools');
+    panel.handleInput('j'); render(); panel.handleInput('x'); render();
+    panel.handleInput('j'); render(); panel.handleInput('x');
+    assert.match(body(), /schema not injected/);
+    assert.doesNotMatch(body(), /schema tail/, 'Summary tools never reveal an omitted schema');
+    panel.handleInput('\t');
+    terminal.rows = 10_000; terminal.columns = 30_000;
+    assert.equal(render().slice(3, -4).map((line) => line.trimEnd()).join('\n'), agentContextRaw(catalog));
+    panel.handleInput('\t');
+    assert.match(body(), /Service-only entry/);
+    for (const mode of ['regular', 'fullscreen']) for (const width of [20, 28, 38, 80]) for (const height of [9, 18, 30]) {
+      tui.mode = mode; terminal.columns = width; terminal.rows = height;
+      const lines = render();
+      assert.ok(lines.length <= height - 2, `${mode} ${width}x${height}`);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    }
+    terminal.rows = 24; terminal.columns = 80; render();
+    panel.handleInput('r'); await tick();
+    panel.handleInput('r'); await tick();
+    assert.equal(pending[1].signal.aborted, true);
+    pending[2].resolve({ services: [], catalog: [] }); await tick();
+    pending[1].resolve({ services, catalog }); await tick();
+    assert.doesNotMatch(body(), /Full service/, 'Stale refresh cannot overwrite the newest snapshot');
+    panel.handleInput('r'); await tick(); connection.abort();
+    pending[3].resolve({ services, catalog }); await tick();
+    assert.match(body(), /Gateway disconnected/);
+    panel.handleInput('q'); assert.equal(completed, true);
+  } finally { panel.dispose(); }
 });

@@ -35,7 +35,8 @@ import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
-import { agentContextLabels, agentContextText, agentContextTokens, nextAgentContextMode } from './agent-context.js';
+import { previewAgentContext } from './agent-context-preview.js';
+import { agentContextCatalog, agentContextRaw, agentContextLabels, agentContextText, agentContextTokens, nextAgentContextMode } from './agent-context.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
 export interface GatewayLifecycle {
@@ -449,11 +450,16 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (footerContext) { footerContext = ctx; renderFooter(); }
     if (connected) await native.start(ctx, resolve(String(pi.getFlag('gateway-config'))));
   });
-  async function contextText(signal?: AbortSignal): Promise<string> {
+  async function contextSnapshot(signal?: AbortSignal) {
     const path = pi.getFlag('gateway-config');
-    if (typeof path !== 'string' || !path) return '';
+    if (typeof path !== 'string' || !path) return { services: [], catalog: [] };
     const { services } = await loadConfig(path, { expandEnvironment: false });
-    return agentContextText(services, services.every((service) => service.agentContext === 'off') ? [] : await tools(signal));
+    const inventory = services.every((service) => service.enabled === false || service.agentContext === 'off') ? [] : await tools(signal);
+    signal?.throwIfAborted();
+    return { services, catalog: agentContextCatalog(services, inventory) };
+  }
+  async function contextText(signal?: AbortSignal): Promise<string> {
+    return agentContextRaw((await contextSnapshot(signal)).catalog);
   }
   pi.on('before_agent_start', async (event, ctx) => {
     // Replace our section each run, including resume/fork and preference/inventory changes.
@@ -531,25 +537,24 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
                 let inventory: Tool[] | undefined;
                 let cost = 'Token estimate unavailable';
                 try {
-                  inventory = services.every((service) => service.agentContext === 'off') ? [] : await tools(signal);
+                  inventory = services.every((service) => service.enabled === false || service.agentContext === 'off') ? [] : await tools(signal);
                   cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tokens total (rough estimate)`;
                 } catch { /* Keep preferences/recovery accessible while disconnected. */ }
                 const selected = await menu.choose(['Gateway', 'Agent context'], `${cost} · next agent run`, [
                   ...services.map((service) => ({
                     id: `service:${service.name}`,
-                    label: `${service.name}: ${agentContextLabels[service.agentContext ?? 'off']}`,
-                    description: `${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens (with shared header). ` : ''}Enter cycles this service's mode; tools stay callable.`,
+                    label: `${service.name}: ${service.enabled === false ? 'Disabled (locked) · saved: ' : ''}${agentContextLabels[service.agentContext ?? 'off']}`,
+                    disabled: service.enabled === false,
+                    description: service.enabled === false ? 'Disabled (locked) · 0 tokens. Saved preference retained; enable the service to change it.' : `${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens (with shared header). ` : ''}Enter cycles this service's mode; tools stay callable.`,
                   })),
                   { id: 'preview', label: 'Preview injected context', description: 'View the exact current catalog privately. Does not send it to the agent or change the injection setting.' },
                 ]);
                 if (!selected) break;
                 if (selected === 'preview') {
-                  await showText(ctx, 'Gateway › Agent context › Preview', async (operation) => {
-                    const text = await contextText(operation);
-                    return `≈${agentContextTokens(text).toLocaleString('en-US')} tokens · rough estimate (characters ÷ 4; actual tokenizer varies)\n\n${text || 'No gateway catalog will be added: injection is off or selected services have no available model-visible tools.'}`;
-                  }, signal, connected ? lifetime.signal : undefined, true);
+                  await previewAgentContext(ctx, contextSnapshot, signal, connected ? lifetime.signal : undefined);
                 } else if (selected.startsWith('service:')) {
                   const service = services.find((service) => service.name === selected.slice('service:'.length))!;
+                  if (service.enabled === false) continue;
                   const mode = service.agentContext ?? 'off';
                   const next = nextAgentContextMode(mode);
                   await saveAgentContext(configPath, service.name, mode, next, signal);

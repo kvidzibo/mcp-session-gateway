@@ -165,8 +165,17 @@ without their own setting. New services inherit that default.
 Set an optional `description` in a service's config entry for a compact service summary.
 Without one, service-only mode lists its available tool names: `Tools: search, fetch.`
 Only currently available, model-visible tools contribute; unavailable/app-only services are omitted.
+Disabled services are greyed out and locked: their saved preference is retained, but they add
+zero tokens and are excluded immediately, even if stopping the service awaits a restart.
 
-**Preview injected context** shows the exact catalog privately, with scrolling and refresh.
+**Preview injected context** opens a private native inline tree, with services initially collapsed.
+Service rows show the mode and description; expand a service for injected tool names/descriptions,
+then expand a tool for its full input schema (only in Full schemas mode). Service-only entries
+never invent tool details. **Tab** toggles the exact, untruncated raw injected context and back.
+Use Pi's configured selection keys (normally **↑/↓**, **Enter**, **Esc**) to navigate/toggle/back;
+**PgUp/PgDn** scroll long descriptions/schemas without moving selection (**Home/End** jump).
+In raw view, **↑/↓** scroll. **r** refreshes; Back returns to settings. Nothing is sent to the
+model or persisted by previewing.
 The menu shows a total token estimate and a per-service estimate in the selected row's detail;
 per-service estimates include the shared header and should not be added together. Estimates use
 characters ÷ 4, including the section wrapper; actual tokenizer counts vary.

@@ -1,6 +1,6 @@
 {
   "name": "local-stdio-mcp-gateway",
-  "version": "0.34.1",
+  "version": "0.35.0",
   "private": true,
   "description": "A small stdio MCP gateway with per-run service identity",
   "type": "module",
