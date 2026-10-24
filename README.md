@@ -174,8 +174,11 @@ jobs for **all** services in this session. Services controls also work while dis
 
 ### Child-server settings
 
-Highlight a service and press **Tab**; edit, choose **Save changes**, review and confirm. Declining
-keeps the draft; Escape/Back discards it. Type to filter. Settings require TUI mode and [service
+Highlight a service and press **Tab**; completed valid edits **save automatically**, keeping the
+selected role open. Enter saves multiline text; checkbox Done commits; Escape cancels incomplete
+field edits. New roles remain labeled drafts until valid; Back cancels them. Invalid existing edits
+report an error and revert. Prompt summaries show lines and approximate tokens (characters/4 rounded
+up; model tokenizer varies). Type to filter. Settings require TUI mode and [service
 opt-in](docs/settings.md). For pi-delegate, add `"settings": { "tokenEnv":
 "PI_DELEGATE_SETTINGS_TOKEN" }` inside its existing entry. This names a variable, not a token value;
 never configure the token. Its settings action is **Roles**: select or add a role, then edit its
