@@ -1,7 +1,7 @@
 import { DynamicBorder, keyText, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Key, matchesKey, ScrollView, Text, truncateToWidth, wrapTextWithAnsi, sliceByColumn } from '@earendil-works/pi-tui';
+import { Key, matchesKey, ScrollView, Text, truncateToWidth, wrapTextWithAnsi, sliceByColumn, type TuiMouseEvent } from '@earendil-works/pi-tui';
 import { cleanUnbounded } from '../src/native-ui.js';
-import { GatewayMenu } from './menu.js';
+import { GatewayMenu, inlineHeight } from './menu.js';
 import { CallHistory, type CallStatus, type RetainedCall } from './call-history.js';
 import type { Counts } from './call-counts.js';
 
@@ -50,9 +50,9 @@ async function showCall(ctx: ExtensionContext, history: CallHistory, call: Retai
     };
     const unsubscribe = history.subscribe(() => tui.requestRender());
     signal.addEventListener('abort', close, { once: true });
-    return {
-      render(width: number) {
-        const height = Math.max(1, tui.terminal.rows - 6);
+    const component = {
+      render(width: number): string[] {
+        const height = inlineHeight(tui, width, component);
         usable = height >= 10 && width >= 28;
         if (!usable) return [truncateToWidth('Enlarge terminal · Esc back', width)];
         const confirm = keyText('tui.select.confirm'), cancel = keyText('tui.select.cancel');
@@ -90,7 +90,7 @@ async function showCall(ctx: ExtensionContext, history: CallHistory, call: Retai
         else if (keys.matches(data, 'tui.select.pageUp')) scroll.scrollBy(-scroll.viewportHeight);
         tui.requestRender();
       },
-      handleMouse(event) {
+      handleMouse(event: TuiMouseEvent) {
         if (!usable) return;
         if (event.type === 'wheel') { scroll.scrollBy(event.wheelDelta ?? 0); return { handled: true, render: true }; }
         if (event.type !== 'click' || event.button !== 'left' || event.ctrl || event.alt || event.shift) return;
@@ -103,5 +103,6 @@ async function showCall(ctx: ExtensionContext, history: CallHistory, call: Retai
       invalidate() { text.invalidate(); },
       dispose() { unsubscribe(); signal.removeEventListener('abort', close); },
     };
+    return component;
   });
 }

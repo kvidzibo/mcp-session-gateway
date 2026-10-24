@@ -5,14 +5,16 @@ import { CallHistory, HISTORY_LIMIT } from '../pi/call-history.js';
 import { callPayload, CALL_PAYLOAD_LIMIT } from '../src/call-events.js';
 import { inspectCalls } from '../pi/call-inspector.js';
 import { GatewayMenu } from '../pi/menu.js';
-import { getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
+import { Container, Text, getKeybindings, visibleWidth } from '@earendil-works/pi-tui';
 
 test('filtered inspector trims and independently expands sanitized payloads, retaining bounded interrupted history', async () => {
+  const { createChatViewport } = await import(new URL('../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js', import.meta.url).href);
+  const { renderLayoutFrame } = await import(new URL('../node_modules/@earendil-works/pi-tui/dist/layout.js', import.meta.url).href);
   const history = new CallHistory();
   const id = randomUUID();
   const parameters = callPayload({ input: 'p'.repeat(400) });
   history.event({ id, service: 'alpha', phase: 'started', tool: 'child_echo', parameters });
-  history.event({ id, service: 'alpha', phase: 'success', output: callPayload({ content: [{ type: 'text', text: 'Readable result ' + '\x1b[31m' + 'r'.repeat(400) + '\x07' }] }) });
+  history.event({ id, service: 'alpha', phase: 'success', output: callPayload({ content: [{ type: 'text', text: 'Readable result ' + '\x1b[31m' + 'r'.repeat(400) + '\x07' }], marker: 'FINAL RETAINED LINE' }) });
   history.event({ id: randomUUID(), service: 'beta', phase: 'started', tool: 'other' });
   const controller = new AbortController();
   let screens = 0;
@@ -20,7 +22,12 @@ test('filtered inspector trims and independently expands sanitized payloads, ret
   const ctx: any = { ui: { custom: async (factory: Function, options: unknown) => {
     assert.equal(options, undefined, 'Inspector must use native screens, not overlays');
     let done = false;
-    const component = factory({ terminal: { rows: 40, columns: 100 }, requestRender() {} }, theme, getKeybindings(), () => { done = true; });
+    const terminal = { rows: 40, columns: 100 };
+    const document = new Text('Transcript', 0, 0), pendingMessages = new Container(), status = new Container();
+    const widgetsAbove = new Container(), editor = new Container(), widgetsBelow = new Container(), footer = new Text('Footer\nFooter', 0, 0);
+    const tui = { terminal, children: [document, pendingMessages, status, widgetsAbove, editor, widgetsBelow, footer], requestRender() {} };
+    const component = factory(tui, theme, getKeybindings(), () => { done = true; });
+    editor.addChild(component);
     try {
       const render = (): string => component.render(100).join('\n');
       if (screens++ === 0) {
@@ -53,6 +60,16 @@ test('filtered inspector trims and independently expands sanitized payloads, ret
         const narrow = component.render(32);
         assert.ok(narrow.every((line: string) => visibleWidth(line) <= 32));
         assert.match(narrow.join('\n'), /escape back/);
+        terminal.rows = 32; terminal.columns = 40;
+        widgetsAbove.addChild(new Text(Array(9).fill('Running delegate job').join('\n'), 0, 0));
+        const viewport = createChatViewport({ document, pendingMessages, status, widgetsAbove, editor, widgetsBelow, footer });
+        const frame = () => renderLayoutFrame(viewport.root, terminal.columns, terminal.rows, () => {}).lines.join('\n');
+        component.handleInput('\r');
+        frame();
+        for (let n = 0; n < 3; n++) { component.handleInput('\x1b[6~'); frame(); }
+        assert.match(frame(), /FINAL RETAINED LINE/, 'Native fullscreen allocation keeps the final payload line reachable beside live jobs');
+        assert.match(frame(), /Back/);
+        assert.match(frame(), /escape back/);
         component.handleInput('\x1b');
       } else component.handleInput('\x1b');
       assert.ok(done);

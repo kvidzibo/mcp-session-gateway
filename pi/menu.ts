@@ -1,5 +1,5 @@
 import { DynamicBorder, keyText, type ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Container, getKeybindings, Input, Key, matchesKey, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi, type KeyId } from '@earendil-works/pi-tui';
+import { Container, getKeybindings, Input, Key, matchesKey, SelectList, Spacer, Text, truncateToWidth, wrapTextWithAnsi, type Component, type TUI, type KeyId } from '@earendil-works/pi-tui';
 import { clean } from '../src/native-ui.js';
 import { showText } from './text-panel.js';
 
@@ -10,6 +10,15 @@ interface MenuOptions {
   shortcuts?: { key: KeyId; label: string; id: string }[];
 }
 const oneLine = (text: string) => clean(text).replace(/\n/g, ' ');
+
+/** Pi mounts the transcript first, then the dock. Keep native sibling widgets visible. */
+export function inlineHeight(tui: TUI, width: number, component: Component): number {
+  const children = tui.children ?? [];
+  const owner = children.find((child) => (child as Partial<Container>).children?.includes(component));
+  const reserved = owner ? children.slice(1).filter((child) => child !== owner)
+    .reduce((height, child) => height + child.render(width).length, 0) : 0;
+  return Math.max(1, Math.min(tui.terminal.rows - 6, tui.terminal.rows - 1 - reserved));
+}
 
 /** One navigation session: selection survives Back, never persisted as model context. */
 export class GatewayMenu {
@@ -47,11 +56,11 @@ export class GatewayMenu {
       };
       rebuild(this.selected.get(key));
       signal.addEventListener('abort', cancel, { once: true });
-      return {
+      const component = {
         get focused() { return input?.focused ?? false; },
         set focused(value: boolean) { if (input) input.focused = value; },
-        render(width: number) {
-          const height = Math.max(1, tui.terminal.rows - 6); // Leave room for Pi's footer and service widgets.
+        render(width: number): string[] {
+          const height = inlineHeight(tui, width, component);
           geometry = `${width}:${tui.terminal.rows}:${tui.terminal.columns}`;
           usable = height >= 10 && width >= 28;
           if (!usable) return [truncateToWidth('Enlarge terminal · Esc back', width)];
@@ -110,6 +119,7 @@ export class GatewayMenu {
         invalidate() { input?.invalidate(); list.invalidate(); },
         dispose: () => signal.removeEventListener('abort', cancel),
       };
+      return component;
     });
     while (!signal.aborted) {
       const picked = await choose();
