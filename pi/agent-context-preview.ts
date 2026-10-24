@@ -66,18 +66,21 @@ export async function previewAgentContext(ctx: ExtensionContext, source: (signal
         if (status) add(status);
         else if (raw) add(injected || 'No gateway catalog will be added: injection is off or selected services have no available model-visible tools.');
         else if (snapshot) {
-          for (const service of [...snapshot.services].sort((a, b) => a.name.localeCompare(b.name))) {
+          for (const service of [...snapshot.services].sort((a, b) =>
+            Number(a.enabled === false) - Number(b.enabled === false) || a.name.localeCompare(b.name))) {
             const entry = snapshot.catalog.find((entry) => entry.name === service.name);
             const id = `service:${service.name}`;
             if (!selected) selected = id;
-            row(id, `${service.name} · ${agentContextLabels[service.agentContext ?? 'off']}${service.enabled === false ? ' · disabled (locked)' : ''}`, !!entry?.tools?.length, 0, service.enabled === false);
+            const tokens = agentContextTokens(agentContextRaw(entry ? [entry] : []));
+            row(id, `${service.name} · ${agentContextLabels[service.agentContext ?? 'off']} · ≈${tokens.toLocaleString('en-US')} tokens${service.enabled === false ? ' · disabled (locked)' : ''}`, !!entry?.tools?.length, 0, service.enabled === false);
             if (entry?.description) add(entry.description, 4);
             else if (service.description) add(service.description, 4);
-            if (!entry) add(service.enabled === false ? '0 tokens · Saved preference retained; enable the service to change it.' : 'Not injected: off or no available model-visible tools.', 4);
+            if (!entry) add(service.enabled === false ? 'Saved preference retained; enable the service to change it.' : 'Not injected: off or no available model-visible tools.', 4);
             else if (!entry.tools) add('Service-only entry · no tool details or schemas injected.', 4);
             if (expanded.has(id)) for (const tool of entry?.tools ?? []) {
               const toolId = `tool:${tool.name}`;
-              row(toolId, `${tool.name}${tool.inputSchema ? '' : ' · schema not injected'}`, !!tool.inputSchema, 2);
+              const tokens = Math.ceil(JSON.stringify(tool, null, 2).length / 4);
+              row(toolId, `${tool.name} · ≈${tokens.toLocaleString('en-US')} tokens${tool.inputSchema ? '' : ' · schema not injected'}`, !!tool.inputSchema, 2);
               if (tool.description) add(tool.description, 6);
               if (expanded.has(toolId) && tool.inputSchema) {
                 add('Input schema', 6);
