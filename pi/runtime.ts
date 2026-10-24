@@ -10,7 +10,7 @@ import { Loader, Text, truncateToWidth, getOsc8LinkAtColumn, type TuiMouseEvent 
 import { gatewayIdentity } from '../src/identity.js';
 import { modelVisible } from '../src/tools.js';
 import { loadConfig } from '../src/config.js';
-import { readAgentContext, saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
+import { saveAgentContext, readAutoUpdate, toggleAutoUpdate, readDisplay, toggleDisplay, toggleServiceEnabled, type Display } from './auto-update.js';
 import { CallEventSchema } from '../src/call-events.js';
 import { CALL_COUNTS_ENTRY, CallCounts, callCountLines } from './call-counts.js';
 import { CallHistory, type CallStatus } from './call-history.js';
@@ -33,7 +33,7 @@ import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
 import { showText } from './text-panel.js';
-import { agentContextLabels, agentContextText, agentContextTokens } from './agent-context.js';
+import { agentContextLabels, agentContextText, agentContextTokens, nextAgentContextMode } from './agent-context.js';
 const gatewayRoot = fileURLToPath(new URL('../', import.meta.url));
 
 export interface GatewayLifecycle {
@@ -450,8 +450,8 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
   async function contextText(signal?: AbortSignal): Promise<string> {
     const path = pi.getFlag('gateway-config');
     if (typeof path !== 'string' || !path) return '';
-    const mode = await readAgentContext(path);
-    return agentContextText(mode, mode === 'off' ? [] : await tools(signal));
+    const { services } = await loadConfig(path, { expandEnvironment: false });
+    return agentContextText(services, services.every((service) => service.agentContext === 'off') ? [] : await tools(signal));
   }
   pi.on('before_agent_start', async (event, ctx) => {
     // Replace our section each run, including resume/fork and preference/inventory changes.
@@ -502,7 +502,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
               description: autoUpdateError || 'Enter toggles and saves. On permits gateway + service updates and trusted builds at startup/reload, without prompts. Gateway updates need a Pi restart. Code runs with OS permissions.' },
             { id: 'display', label: `Display: ${menuDisplay === undefined ? 'Unavailable' : menuDisplay === 'full' ? 'Full' : 'Minimal'}`, disabled: menuDisplay === undefined,
               description: displayError || 'Enter toggles and saves immediately. Full shows per-service success (green), failure (red), and running (amber) tool calls.' },
-            { id: 'agent-context', label: 'Agent context', description: 'Choose whether to inject tool names/descriptions or full schemas, and preview the exact catalog.' },
+            { id: 'agent-context', label: 'Agent context', description: 'Cycle context detail for each service: full schemas, tool summaries, service summary or off. Preview the exact catalog.' },
             { id: 'connection', label: 'Connection', description: 'Inspect connection details and explicitly restart all services in this session.' },
           ]);
           nextAction = undefined;
@@ -526,24 +526,33 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
               ctx.ui.notify(`Auto update ${enabled ? 'on' : 'off'} · saved for next startup/reload`, 'info');
             } else if (action === 'agent-context') {
               while (!signal.aborted) {
-                const mode = await readAgentContext(configPath);
+                const { services } = await loadConfig(configPath, { expandEnvironment: false });
+                let inventory: Tool[] | undefined;
                 let cost = 'Token estimate unavailable';
-                try { cost = `≈${agentContextTokens(await contextText(signal)).toLocaleString('en-US')} tokens (rough estimate)`; }
-                catch { /* Keep preferences/recovery accessible while disconnected. */ }
-                const selected = await menu.choose(['Gateway', 'Agent context'], `${cost} · applies before the next agent run`, [
-                  { id: 'injection', label: `Injection: ${agentContextLabels[mode]}`, description: 'Enter cycles Off → Names & descriptions → Full schemas and saves. Names & descriptions omits schemas. Existing conversation history is not erased.' },
+                try {
+                  inventory = services.every((service) => service.agentContext === 'off') ? [] : await tools(signal);
+                  cost = `≈${agentContextTokens(agentContextText(services, inventory)).toLocaleString('en-US')} tokens total (rough estimate)`;
+                } catch { /* Keep preferences/recovery accessible while disconnected. */ }
+                const selected = await menu.choose(['Gateway', 'Agent context'], `${cost} · next agent run`, [
+                  ...services.map((service) => ({
+                    id: `service:${service.name}`,
+                    label: `${service.name}: ${agentContextLabels[service.agentContext ?? 'off']}`,
+                    description: `${inventory ? `≈${agentContextTokens(agentContextText([service], inventory)).toLocaleString('en-US')} tokens (with shared header). ` : ''}Enter cycles this service's mode; tools stay callable.`,
+                  })),
                   { id: 'preview', label: 'Preview injected context', description: 'View the exact current catalog privately. Does not send it to the agent or change the injection setting.' },
                 ]);
                 if (!selected) break;
                 if (selected === 'preview') {
                   await showText(ctx, 'Gateway › Agent context › Preview', async (operation) => {
                     const text = await contextText(operation);
-                    return `≈${agentContextTokens(text).toLocaleString('en-US')} tokens · rough estimate (characters ÷ 4; actual tokenizer varies)\n\n${text || 'Injection is off; no gateway catalog will be added.'}`;
+                    return `≈${agentContextTokens(text).toLocaleString('en-US')} tokens · rough estimate (characters ÷ 4; actual tokenizer varies)\n\n${text || 'No gateway catalog will be added: injection is off or selected services have no available model-visible tools.'}`;
                   }, signal, connected ? lifetime.signal : undefined, true);
-                } else if (selected === 'injection') {
-                  const next = ({ off: 'summary', summary: 'full', full: 'off' } as const)[mode];
-                  await saveAgentContext(configPath, mode, next, signal);
-                  ctx.ui.notify(`Agent context: ${agentContextLabels[next]} · saved for the next agent run`, 'info');
+                } else if (selected.startsWith('service:')) {
+                  const service = services.find((service) => service.name === selected.slice('service:'.length))!;
+                  const mode = service.agentContext ?? 'off';
+                  const next = nextAgentContextMode(mode);
+                  await saveAgentContext(configPath, service.name, mode, next, signal);
+                  ctx.ui.notify(`${service.name} context: ${agentContextLabels[next]} · saved for the next agent run`, 'info');
                 }
               }
             } else if (action === 'services') {

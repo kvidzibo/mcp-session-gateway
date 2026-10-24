@@ -3,16 +3,18 @@ import { availableParallelism } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { parsePackages, type PackageConfig } from './packages.js';
 
-export type AgentContextMode = 'off' | 'summary' | 'full';
+export type AgentContextMode = 'off' | 'service' | 'summary' | 'full';
 
 export function parseAgentContext(value: unknown): AgentContextMode {
   if (value === undefined) return 'off';
-  if (value !== 'off' && value !== 'summary' && value !== 'full') throw new Error('agentContext must be off, summary or full');
+  if (value !== 'off' && value !== 'service' && value !== 'summary' && value !== 'full') throw new Error('agentContext must be off, service, summary or full');
   return value;
 }
 
 export interface ServiceConfig {
   name: string;
+  description?: string;
+  agentContext?: AgentContextMode;
   enabled?: boolean;
   command: string;
   args: string[];
@@ -64,7 +66,7 @@ export async function loadConfig(path: string, options: { expandEnvironment?: bo
     throw new Error('logFile must be a non-empty path string');
   }
   if (data.display !== undefined && data.display !== 'minimal' && data.display !== 'full') throw new Error('display must be minimal or full');
-  parseAgentContext(data.agentContext);
+  const agentContext = parseAgentContext(data.agentContext);
   const autoUpdate = data.autoUpdate === undefined ? false : data.autoUpdate;
   if (typeof autoUpdate !== 'boolean') throw new Error('autoUpdate must be a boolean');
   const autoUpdateConcurrency = data.autoUpdateConcurrency === undefined
@@ -85,6 +87,10 @@ export async function loadConfig(path: string, options: { expandEnvironment?: bo
     if (value.package !== undefined && (typeof value.package !== 'string' || !packages.some((pkg) => pkg.name === value.package))) {
       throw new Error(`Server ${name}: package must reference a configured package`);
     }
+    if (value.description !== undefined && (typeof value.description !== 'string' || !value.description.trim())) {
+      throw new Error(`Server ${name}: description must be a non-empty string`);
+    }
+    const contextMode = value.agentContext === undefined ? agentContext : parseAgentContext(value.agentContext);
     if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw new Error(`Server ${name}: enabled must be a boolean`);
     const args = value.args ?? [];
     const env = value.env ?? {};
@@ -110,6 +116,8 @@ export async function loadConfig(path: string, options: { expandEnvironment?: bo
     }
     return {
       name,
+      agentContext: contextMode,
+      ...(value.description !== undefined ? { description: (value.description as string).trim() } : {}),
       ...(value.enabled !== undefined ? { enabled: value.enabled } : {}),
       ...(value.package ? { package: value.package as string } : {}),
       ...(settings ? { settings: settings as { tokenEnv: string } } : {}),

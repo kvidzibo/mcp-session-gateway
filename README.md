@@ -151,17 +151,24 @@ snapshot](docs/reference.md#startup-snapshot).
 
 ### Agent context
 
-Open **`/gateway` → Agent context** and select **Injection** to cycle in place through
-**Off** (default) → **Names & descriptions** → **Full schemas** → **Off**, without opening a submenu.
-**Preview injected context** shows the exact
-current catalog privately, with scrolling and refresh; opening it never injects anything. The menu
-and preview show the approximate added token cost (characters ÷ 4, including the section wrapper;
-actual tokenizer counts vary).
+Open **`/gateway` → Agent context** to see one row per configured service. **Enter** cycles
+**Full schemas → Tool names & descriptions → Service name & description → Off**, saving in place.
+Services default to Off; an existing top-level `agentContext` remains the default for services
+without their own setting. New services inherit that default.
 
-The choice saves immediately for all sessions sharing this configuration and applies before their
-next agent run, without restarting services. Only model-visible tools are included; calls still
-use `gateway_call`. Off stops adding the catalog but cannot erase earlier conversation history.
-This controls the Pi adapter's agent, not separately configured delegated agents.
+Set an optional `description` in a service's config entry for a compact service summary.
+Without one, service-only mode lists its available tool names: `Tools: search, fetch.`
+Only currently available, model-visible tools contribute; unavailable/app-only services are omitted.
+
+**Preview injected context** shows the exact catalog privately, with scrolling and refresh.
+The menu shows a total token estimate and a per-service estimate in the selected row's detail;
+per-service estimates include the shared header and should not be added together. Estimates use
+characters ÷ 4, including the section wrapper; actual tokenizer counts vary.
+
+Choices apply before the next agent run in all sessions sharing the config, without restarting
+services. Off only stops context injection: tools remain discoverable through `gateway_tools`
+and callable through `gateway_call`, with unchanged approvals. Earlier conversation context
+is not erased. Delegated agents retain their own context configuration.
 
 ### Approvals
 
