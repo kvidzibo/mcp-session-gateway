@@ -19,6 +19,7 @@ export async function saveAgentContext(path: string, name: string, expected: Age
   parseAgentContext(next);
   await saveConfig(path, signal, (config) => {
     const entry = serviceEntry(config, name);
+    if (entry.enabled === false) throw new Error('Service is disabled; saved agent context preference retained');
     const current = parseAgentContext(entry.agentContext === undefined ? config.agentContext : entry.agentContext);
     if (current !== expected) throw new Error('Agent context changed in another session; reopen the menu and retry');
     entry.agentContext = next;

@@ -72,13 +72,20 @@ startup, advertising form elicitation only when supported by the harness.
 ### Agent context injection
 
 Before each agent run, the adapter rereads service descriptions and context modes, discovering
-current model-visible tools unless all services are Off. The catalog groups tools by configured
-service and omits Off services, services with no available model-visible tools, and gateway-owned
+current model-visible tools unless all services are Off or disabled. The catalog groups tools by configured
+service and omits Off/disabled services (even with stale running inventory), services with no available model-visible tools, and gateway-owned
 tools (still discoverable on demand). Service-only mode omits tool descriptions/schemas; summary
 mode omits schemas. The catalog explains how to discover missing details through `gateway_tools`.
 
 A dedicated `gateway_tools` prompt section is replaced, not repeatedly appended; Pi manages
-transcript deltas. The private preview uses the same renderer/discovery path without a model turn.
+transcript deltas. The private native inline preview derives its tree and exact raw text from the
+same catalog snapshot used for injection, without a model turn or session persistence. Services
+start collapsed; expansion reveals only injected tools and, in Full schemas mode, full input
+schemas. Service-only entries have no tool/schema children. Tab toggles raw/tree; configured Pi
+selection keys navigate/toggle/back, page keys scroll long content independently of selection,
+Home/End jump, and r refreshes with cancellation of superseded reads. Disconnect/cancellation
+cannot publish stale results. Disabled settings rows are dimmed and locked with zero tokens;
+the saved mode survives disabling, and saving rejects a service disabled since opening the menu.
 Menu and preview show rough added-token estimates (characters ÷ 4, including the section wrapper;
 tokenizer-dependent). Selected service details include a standalone estimate with the shared
 header, so per-service estimates are not additive. Metadata is reference data, not instructions
