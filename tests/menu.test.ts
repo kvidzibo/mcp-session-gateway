@@ -386,7 +386,8 @@ test('agent context columns keep native navigation, lock disabled settings, and 
       };
       try {
         fit();
-        if (visit++ === 0) {
+        const current = visit++;
+        if (current === 0) {
           panel.handleInput('\x19');
           assert.equal(finished, false, 'Locked Tools cannot be changed');
           panel.handleInput('\x06'); render(); panel.handleInput(' ');
@@ -397,7 +398,7 @@ test('agent context columns keep native navigation, lock disabled settings, and 
           assert.match(render().join('\n'), /pinote · Context/);
           assert.match(render().join('\n'), /Independent of\s+Tools; applies next run/);
           panel.handleInput(' ');
-        } else {
+        } else if (current === 1) {
           assert.match(render().join('\n'), /pinote · Context/, 'Keep row and column after saving');
           terminal.columns = 80;
           panel.handleInput('\x19');
@@ -406,6 +407,13 @@ test('agent context columns keep native navigation, lock disabled settings, and 
           const y = render().findIndex((line) => /^  web\s/.test(line));
           panel.handleMouse({ type: 'press', button: 'left', x: 15, y }); render();
           panel.handleMouse({ type: 'click', button: 'left', x: 15, y });
+        } else {
+          assert.match(render().join('\n'), /→ locked/, 'Recover if the remembered service was removed');
+          terminal.rows = 18; terminal.columns = 30;
+          assert.match(render().join('\n'), /Enlarge terminal/);
+          panel.handleInput(' ');
+          assert.equal(finished, false);
+          panel.handleInput(escape);
         }
         assert.equal(finished, true);
         return answer;
@@ -413,6 +421,10 @@ test('agent context columns keep native navigation, lock disabled settings, and 
     } } } as any, new AbortController().signal);
     assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'additional:pinote');
     assert.equal(await menu.settings(['Gateway', 'Agent context'], '≈4,899 tool tokens · applies next run', items), 'service:web');
+    keys.setUserBindings({ ...original, 'tui.select.up': 'ctrl+alt+shift+up', 'tui.select.down': 'ctrl+alt+shift+down',
+      'tui.select.confirm': 'ctrl+alt+shift+enter', 'tui.select.cancel': 'ctrl+alt+shift+escape',
+      'tui.editor.cursorLeft': 'ctrl+alt+shift+left', 'tui.editor.cursorRight': 'ctrl+alt+shift+right' });
+    assert.equal(await menu.settings(['Gateway', 'Agent context'], '', items.filter((item) => item.id !== 'service:web')), undefined);
   } finally { keys.setUserBindings(original); }
 });
 

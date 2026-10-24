@@ -191,6 +191,11 @@ export class GatewayMenu {
             '  ' + theme.fg('dim', cell('Service', nameWidth)) + '  '
               + theme.fg(this.settingsColumn === 0 ? 'accent' : 'dim', cell('Tools', toolsWidth)) + '  '
               + theme.fg(this.settingsColumn === 1 ? 'accent' : 'dim', width < 50 ? 'Ctx' : 'Context')];
+          // Long configured shortcuts may need more space than the minimum terminal size.
+          if (header.length + hints.length + (compact ? 5 : 7) > height) {
+            usable = false;
+            return [truncateToWidth('Enlarge terminal · Esc back', width)];
+          }
           const detailCapacity = Math.max(1, Math.min(compact ? 2 : 3, height - header.length - hints.length - (compact ? 4 : 6)));
           const description = wrapped.slice(0, detailCapacity);
           if (wrapped.length > description.length) description[description.length - 1] = truncateToWidth(description.at(-1)!, width - 5, '') + '…';
