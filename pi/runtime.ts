@@ -30,7 +30,6 @@ import { resolve } from 'node:path';
 import { handleElicitation } from '../src/elicitation.js';
 import { OPERATOR_ENV, OPERATOR_LIST, OPERATOR_GET, OPERATOR_UPDATE, OperatorServicesSchema, SettingsDocumentSchema } from '../src/settings.js';
 import { confirmSettings, editSettings } from './settings.js';
-import { LiveJobs } from './live-jobs.js';
 import { openManager } from './manager.js';
 import { managePackages, updateAllPackages } from './package-actions.js';
 import { GatewayMenu } from './menu.js';
@@ -212,7 +211,6 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     const parsed = StartupSummarySchema.safeParse(entry.data);
     if (parsed.success) return startupSummary(parsed.data, theme);
   });
-  let liveJobs: LiveJobs | undefined;
 
   async function showStartup(ctx: ExtensionContext, reason?: string): Promise<void> {
     if (ctx.mode !== 'tui' || !ctx.hasUI || !pi.getFlag('gateway-config') || shuttingDown || ['reload', 'resume', 'fork'].includes(reason ?? '')) return;
@@ -241,8 +239,6 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     if (footerContext) startupProgress(footerContext);
     renderFooter('off');
     configurationLoaded = false;
-    liveJobs?.stop();
-    liveJobs = undefined;
     lifetime.abort();
     operatorToken = undefined;
     const stoppingConnection = closeConnection();
@@ -379,7 +375,7 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     client = current;
     const countsOwner = callCounts, callLifetime = lifetime;
     let servicesReady = false;
-    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); liveJobs?.disconnect(); callLifetime.abort(servicesReady ? connectionLost : undefined); void native.stop(); } };
+    current.onclose = () => { if (client === current) { connected = false; interruptCalls(); renderFooter('off'); callLifetime.abort(servicesReady ? connectionLost : undefined); void native.stop(); } };
     current.setNotificationHandler(CallEventSchema, ({ params }) => {
       if (client !== current || callLifetime.signal.aborted || callCounts !== countsOwner || shuttingDown || !configuredServices.includes(params.service)) return;
       if (callCounts?.event(params)) { callHistory.event(params); saveCounts(); renderFooter(); }
@@ -423,11 +419,6 @@ export default function gatewayExtension(pi: ExtensionAPI, checkUpdate = checkGa
     }
     startupProgress(ctx, 'loading service apps');
     await native.start(ctx, resolve(configPath), reason);
-    if (ctx.mode === 'tui' && ctx.hasUI) {
-      startupProgress(ctx, 'loading live panels');
-      liveJobs = new LiveJobs(current, ctx, timeout);
-      await liveJobs.start();
-    }
     if (client === current && connected && !lifetime.signal.aborted && !shuttingDown) renderFooter('up');
   }
   const onStart: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {

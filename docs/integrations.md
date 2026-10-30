@@ -35,36 +35,3 @@ Cookie access uses [form approval](reference.md#approvals); missing UI never gra
   approved, then remove it and reload; running both can contend for profiles.
 
 No browser-specific gateway code or private service socket is needed.
-
-## Live delegate panel
-
-[pi-delegate 0.20.0+](https://github.com/kvidzibo/pi-delegate#readme) supplies the live job
-resource:
-
-```json
-{
-  "mcpServers": {
-    "delegate": {
-      "command": "pi-delegate-mcp",
-      "args": ["--workspace", "/absolute/path/to/project"]
-    }
-  }
-}
-```
-
-Add [settings opt-in](../README.md#child-server-settings) to this same entry for role settings. The
-gateway generates the token; never configure its value.
-
-### Read the panel
-
-TUI cards appear **above the editor**, even while idle: role, model/reasoning, task, elapsed/queue
-time, job ID and tool activity. Small terminals show overflow counts. Completed cards remain **eight
-seconds** and mean **unverified**, not successful; disconnects show stale state and freeze clocks.
-Settings/approvals remain usable.
-
-For full JSON, open the service's **Ctrl+O → Resources**, or its feature menu if no app. One gateway
-connection handles tools/UI; reads follow discovery and coalesced change notifications, clocks tick
-locally. No polling, observer server, original extension, chat messages or model turns;
-widgets/subscriptions require TUI mode.
-
-**Reload closes workers, not detaches jobs.** See [resource limits](reference.md#resources).

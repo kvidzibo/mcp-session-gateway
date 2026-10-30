@@ -556,7 +556,7 @@ test('one gateway menu preserves navigation, bounds rendering, and recovers afte
       server.setRequestHandler(ListToolsRequestSchema,async()=>({tools:[]}));
       server.setRequestHandler(ListResourcesRequestSchema,async()=>{
         await new Promise(resolve=>setTimeout(resolve,600));
-        if(name==='beta' && ++listings>3) throw Error('Unrelated service discovery failed');
+        if(name==='beta' && ++listings>2) throw Error('Unrelated service discovery failed');
         return {resources:[{uri:'test://data',name:'Slow resource'},...(name==='alpha'?[{uri:'test://app',name:'App',mimeType:mime}]:[])]};
       });
       server.setRequestHandler(ReadResourceRequestSchema,async request=>({contents:[request.params.uri==='test://app' ?

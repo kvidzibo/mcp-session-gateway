@@ -146,7 +146,7 @@ configuration disables are excluded. Full adds a wrapping panel below the editor
 
 ```text
  MCP 3 services · 31 tool calls
- delegate ✓12 ✗0  │  sample ✓17 ✗2  │  browser ✓0 ✗0
+ example ✓12 ✗0  │  sample ✓17 ✗2  │  browser ✓0 ✗0
 ```
 
 Click a **service name** for its controls (only connected services); keyboard:
@@ -235,12 +235,8 @@ gateway-resource://<service>/<percent-encoded-original-uri>
 ```
 
 Observation requests with progress tokens receive standard heartbeats while queued/paginating; the
-live adapter resets its timeout per heartbeat. Actual child requests retain normal
+Pi adapter resets its timeout per heartbeat. Actual child requests retain normal
 timeout/retirement policy.
-
-The delegate adapter subscribes to validated `application/vnd.pi-delegate.jobs+json` version 1: **32
-sources, 256 jobs/source, 1 MB/snapshot** maximum. The gateway forwards generically. See [panel
-guide](integrations.md#live-delegate-panel).
 
 ## Approvals
 
