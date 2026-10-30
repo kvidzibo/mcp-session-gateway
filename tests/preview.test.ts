@@ -21,12 +21,12 @@ test('native previews render titled Markdown cards with expanded raw JSON, safe 
   const json = JSON.stringify({ PR: 'https://github.com/kvidzibo/mcp-session-gateway/pull/53',
     Worktree: '/tmp/mcp-settings-autosave · feat/settings-autosave-tokens' }, null, 2);
   try {
-    const card = render(`Autosave delegate settings and show estimated prompt tokens\n\nWorktree: /tmp/mcp-settings-autosave\nBranch: feat/settings-autosave-tokens\n\n${json}`);
+    const card = render(`Autosave service settings and show estimated prompt tokens\n\nWorktree: /tmp/mcp-settings-autosave\nBranch: feat/settings-autosave-tokens\n\n${json}`);
     const raw = card.render(140).join('\n');
     const plain = stripVTControlCharacters(raw);
     assert.match(plain, /Sample · Tasks/);
     assert.doesNotMatch(plain, /display only|not sent to model/);
-    assert.match(raw, /\x1b\[1mAutosave delegate settings and show estimated prompt tokens/);
+    assert.match(raw, /\x1b\[1mAutosave service settings and show estimated prompt tokens/);
     assert.match(plain, /Worktree: \/tmp\/mcp-settings-autosave/);
     assert.match(plain, /Branch: feat\/settings-autosave-tokens/);
     assert.match(plain, /```json/);

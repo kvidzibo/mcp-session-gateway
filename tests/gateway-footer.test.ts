@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import registerGateway from '../pi/runtime.js';
-import { LiveJobs } from '../pi/live-jobs.js';
+import { NativeUI } from '../pi/native-ui.js';
 
 // Service/UI tests must never fetch or install into the checkout hosting this test.
 const gatewayExtension = (pi: Parameters<typeof registerGateway>[0]) => registerGateway(pi, async () => {});
@@ -89,16 +89,14 @@ test('gateway footer counts configuration, opens Services repeatedly, and keeps 
     assert.deepEqual(screens.splice(0), ['Gateway'], 'Disconnected footer opens recovery instead');
     assert.equal(text(), ' MCP 2 services · off');
 
-    // The second resource discovery belongs to LiveJobs, which catches read
-    // failures. Its return must not overwrite the gateway's off state with up.
+    // Disconnect during service-app discovery must preserve the off state.
     const race = `
       import {Server} from '@modelcontextprotocol/sdk/server/index.js';
       import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
       import {ListResourcesRequestSchema} from '@modelcontextprotocol/sdk/types.js';
       const server = new Server({name:'race',version:'1'}, {capabilities:{resources:{}}});
-      let reads = 0;
       server.setRequestHandler(ListResourcesRequestSchema, async () => {
-        if (++reads === 2) process.kill(process.ppid, 'SIGTERM');
+        process.kill(process.ppid, 'SIGTERM');
         return {resources:[]};
       });
       await server.connect(new StdioServerTransport());
@@ -108,10 +106,10 @@ test('gateway footer counts configuration, opens Services repeatedly, and keeps 
     } } }));
     // Force disconnect before the launch callback returns, rather than letting
     // the build helper's post-launch cancellation check race the transport close.
-    const startJobs = LiveJobs.prototype.start;
-    const discovery = t.mock.method(LiveJobs.prototype, 'start', async function (this: LiveJobs) {
-      await startJobs.call(this);
-      await waitFor(/off$/);
+    const startNative = NativeUI.prototype.start;
+    const discovery = t.mock.method(NativeUI.prototype, 'start', async function (this: NativeUI, ...args: Parameters<NativeUI['start']>) {
+      try { await startNative.apply(this, args); }
+      finally { await waitFor(/off$/); }
     });
     try { await handlers.get('session_start')!({ reason: 'reload' }, ctx); }
     finally { discovery.mock.restore(); }

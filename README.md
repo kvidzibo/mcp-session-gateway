@@ -122,9 +122,8 @@ model.
 
 `gateway_call` transcripts show compact service/tool, arguments and result previews. Use Pi’s
 native tool expansion (the displayed configurable shortcut or click) for full arguments and
-results, including original pretty JSON/metadata for recognized delegate jobs. Delegate answers
-render as Markdown without summarization; a job status of `done` is unverified, not proof of task
-completion. Other text stays literal. Formatting does not change model-facing data or image handling.
+results. JSON is pretty-printed; other text stays literal. Formatting does not change model-facing
+data or image handling.
 
 | Command/action | Purpose |
 |---|---|
@@ -220,14 +219,13 @@ jobs for **all** services in this session. Services controls also work while dis
 ### Child-server settings
 
 Highlight a service and press **Tab**; completed valid edits **save automatically**, keeping the
-selected role open. Enter saves multiline text; checkbox Done commits; Escape cancels incomplete
-field edits. New roles remain labeled drafts until valid; Back cancels them. Invalid existing edits
-report an error and revert. Prompt summaries show lines and approximate tokens (characters/4 rounded
-up; model tokenizer varies). Type to filter. Settings require TUI mode and [service
-opt-in](docs/settings.md). For pi-delegate, add `"settings": { "tokenEnv":
-"PI_DELEGATE_SETTINGS_TOKEN" }` inside its existing entry. This names a variable, not a token value;
-never configure the token. Its settings action is **Roles**: select or add a role, then edit its
-model, thinking, tools, extension access, enablement and prompt. Changes apply only to future jobs.
+selected entry open. Enter saves multiline text; checkbox Done commits; Escape cancels incomplete
+field edits. New entries remain labeled drafts until valid; Back cancels them. Invalid existing edits
+report an error and revert. Multiline summaries show lines and approximate tokens (characters/4
+rounded up; model tokenizer varies). Type to filter. Settings require TUI mode and [service
+opt-in](docs/settings.md): add `"settings": { "tokenEnv": "SERVICE_SETTINGS_TOKEN" }` to its entry,
+using the service's documented variable name, not a token value. Never configure the token.
+Services define their fields and when changes apply.
 
 ### Package manager
 
@@ -250,11 +248,6 @@ in-place local-update effects.
 [pi-browser](docs/integrations.md#browser-service): isolated Chromium, profiles, manual login and
 cookie approvals. One process per saved profile; do not also load the old native extension.
 
-### Live delegate panel
-
-[pi-delegate](docs/integrations.md#live-delegate-panel): jobs above the editor, without
-polling/model turns. Finished means **unverified**; disconnect means stale.
-
 ### Server-driven UI
 
 Services can supply screens through the generic [native UI protocol](docs/native-ui.md). In
@@ -262,7 +255,9 @@ fullscreen mode, service footers use native click/double-click regions without a
 or pointer changes. Regular mode keeps the Kitty bridge.
 Try fullscreen for one launch with `--tui-mode fullscreen`; no saved settings change.
 
-Pinote uses a standalone HTTP service and dedicated Pi extension, not this gateway.
+Pi-delegate uses its standalone Pi extension for delegation, Roles settings and live jobs; remove
+its old service/package entries before loading it. Finish outstanding jobs first: they cannot be
+transferred. Pinote also connects independently, through its HTTP service and dedicated Pi extension.
 
 <a id="lifecycle-and-validation"></a>
 
@@ -300,7 +295,7 @@ See [logging](docs/reference.md#logs) and [lifecycle](docs/reference.md#lifecycl
 
 ## Documentation
 
-- [Integrations](docs/integrations.md): browser and delegate.
+- [Integrations](docs/integrations.md): browser setup.
 - [Reference](docs/reference.md): configuration, builds, counters, protocol and lifecycle.
 - [Packages](docs/packages.md): install/update/rollback and recovery.
 - [Settings](docs/settings.md): operator workflow and service contract.

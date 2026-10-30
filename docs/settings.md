@@ -1,30 +1,23 @@
 # Reusable operator settings (version 1)
 
-Custom MCP extension shared with
-[pi-delegate](https://github.com/kvidzibo/pi-delegate/blob/main/mcp/README.md#operator-settings-extension),
-not standard MCP. Settings stay outside tools/resources/agent context; services own fields/storage.
+Custom MCP extension, not standard MCP. Settings stay outside tools/resources/agent context;
+services own fields and storage.
 
 ## Operator guide
 
 With the [Pi adapter](../README.md#connect-pi), open **`/pi-services` → highlight service → Tab**,
-**Tab** in its app, or its settings action (named **Roles** for pi-delegate). Requires TUI, opt-in,
-connection and v1; other services work normally. See [delegate setup](integrations.md#live-delegate-panel).
-
-Pi-delegate lists each role with its configured model ID and reasoning level, without opening it.
-Type to filter by role, model/provider or reasoning. Select one to edit model, thinking, tool checkboxes,
-extension access, enablement and its multiline prompt. **Add role** creates a draft with no tools or
-extension access; choose a model and enter a prompt to complete it; it saves automatically once valid. Extension access
-enables configured extension and MCP discovery, not a sandbox or per-extension allowlist.
+**Tab** in its app, or its settings action. Requires TUI, opt-in, connection and v1; other services
+work normally. The service supplies editable fields, defaults, named collections and apply policy.
 
 1. Type case-insensitive words to filter fields/choices, including models/providers.
    Backspace edits search; Escape goes back.
 2. Completed valid edits **save automatically**, without a separate Save/review action, and keep
-   the selected role open. Enter submits multiline text; Shift+Enter inserts a newline. Checkbox
+   the selected entry open. Enter submits multiline text; Shift+Enter inserts a newline. Checkbox
    **Done** commits. Model and reasoning choices save together; Escape cancels an incomplete field
    edit without sending it. Invalid existing-role edits report an error and restore the previous value.
-3. New roles are labeled **new draft — not saved**, with validation errors until complete/valid.
-   Back/Escape from the new role cancels that draft. Valid drafts save automatically.
-   Service displays apply policy; pi-delegate changes affect future jobs, not running/queued jobs.
+3. New entries are labeled **new draft — not saved**, with validation errors until complete/valid.
+   Back/Escape from the new entry cancels that draft. Valid drafts save automatically.
+   The service displays when changes apply.
 
 Schema supplies fields, not hardcoded names/Pi's catalogue. Native inline controls preserve
 spacing and navigation beside widgets/footers; settings cannot overlap one-shot approvals.
@@ -52,7 +45,7 @@ clients:
   "updateMethod": "kvidzibo/settings/update",
   "authorization": "token",
   "audience": "operator",
-  "title": "Roles"
+  "title": "Preferences"
 }
 ```
 
@@ -85,8 +78,8 @@ the service's settings action; omitted/empty titles retain **Settings**.
 ```
 
 `writable: false`/`conflict: true` disables editing. `conflict`, `warning`, `applyTo`, `models` are
-optional; warnings/apply policy display privately. **Exclude credentials and secret fields.** Role
-prompts and permissions belong only in this trusted operator route, never tools/resources.
+optional; warnings/apply policy display privately. **Exclude credentials and secret fields.**
+Sensitive configuration belongs only in this trusted operator route, never tools/resources.
 
 | Schema/input | Behavior |
 |---|---|
@@ -110,7 +103,7 @@ Limits: **16 object levels, 500 leaves**. New entries explicitly use schema defa
 is silently selected. There is no field deletion/reset API. Tool arrays recognize `*` as all tools;
 deselecting one replaces it with an explicit list of the remaining offered tools.
 
-Optional `models` uses pi-delegate's hint contract:
+Services with model selection may supply an optional `models` catalogue:
 
 ```json
 [
@@ -121,7 +114,7 @@ Optional `models` uses pi-delegate's hint contract:
 String `model` fields use available entries; sibling `thinking` uses supported levels. Model changes
 save both atomically, offering reasoning choice when sibling editable. Unavailable current choices remain
 visible/unselectable; no fallback. Availability describes service configuration, not
-credential/endpoint health. Other services need no catalogue/delegate roles.
+credential/endpoint health. Other services need no catalogue.
 
 ### Update
 
@@ -137,7 +130,7 @@ credential/endpoint health. Other services need no catalogue/delegate roles.
 
 Patch only changed leaves, including all fields of completed new entries. Service must reject stale revisions, validate entire
 prospective state, preserve unrelated values, persist atomically and return envelope/new revision.
-Service owns accepted-work effects; pi-delegate's `future-jobs` retains acceptance-time policy.
+The service owns accepted-work effects and must document whether already accepted work changes.
 
 Suggested errors: `-33001` unauthorized; `-33002` revision/disk conflict; `-33003`
 persistence/catalogue unavailable; `-32602` invalid input. Hosts follow [operator

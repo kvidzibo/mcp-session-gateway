@@ -61,7 +61,7 @@ test('filtered inspector trims and independently expands sanitized payloads, ret
         assert.ok(narrow.every((line: string) => visibleWidth(line) <= 32));
         assert.match(narrow.join('\n'), /escape back/);
         terminal.rows = 32; terminal.columns = 40;
-        widgetsAbove.addChild(new Text(Array(9).fill('Running delegate job').join('\n'), 0, 0));
+        widgetsAbove.addChild(new Text(Array(9).fill('Running extension job').join('\n'), 0, 0));
         const viewport = createChatViewport({ document, pendingMessages, status, widgetsAbove, editor, widgetsBelow, footer });
         const frame = () => renderLayoutFrame(viewport.root, terminal.columns, terminal.rows, () => {}).lines.join('\n');
         component.handleInput('\r');
